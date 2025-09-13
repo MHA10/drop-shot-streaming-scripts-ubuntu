@@ -1,0 +1,65 @@
+Cross-Platform Compatibility Check - Sat Sep 13 14:07:44 PKT 2025
+[2025-09-13 14:07:44] [INFO] Checking shell compatibility...
+[2025-09-13 14:07:44] [PASS] ✅ bash_version: Bash 5.3 (>= 4.0 required)
+[2025-09-13 14:07:44] [PASS] ✅ associative_arrays: Associative arrays supported
+[2025-09-13 14:07:44] [PASS] ✅ process_substitution: Process substitution supported
+[2025-09-13 14:07:44] [PASS] ✅ parameter_expansion: Parameter expansion supported
+[2025-09-13 14:07:44] [INFO] Checking command availability...
+[2025-09-13 14:07:44] [FAIL] ❌ cmd_ffmpeg: Critical for video streaming - Not available
+[2025-09-13 14:07:44] [PASS] ✅ cmd_curl: Required for SSE communication - Available (curl 8.7.1 (x86_64-apple-darwin24.0) libcurl/8.7.1 (SecureTransport) LibreSSL/3.3.6 zlib/1.2.12 nghttp2/1.64.0)
+[2025-09-13 14:07:44] [PASS] ✅ cmd_jq: JSON parsing for SSE events - Available (jq-1.7.1)
+[2025-09-13 14:07:44] [PASS] ✅ cmd_ps: Process management - Available (Version unknown)
+[2025-09-13 14:07:44] [PASS] ✅ cmd_kill: Process termination - Available (Version unknown)
+[2025-09-13 14:07:44] [PASS] ✅ cmd_mkfifo: Named pipe creation - Available (Version unknown)
+[2025-09-13 14:07:44] [PASS] ✅ cmd_bc: Mathematical calculations - Available (bc 6.7.6)
+[2025-09-13 14:07:44] [PASS] ✅ cmd_grep: Text processing - Available (grep (BSD grep, GNU compatible) 2.6.0-FreeBSD)
+[2025-09-13 14:07:44] [PASS] ✅ cmd_sed: Text manipulation - Available (Version unknown)
+[2025-09-13 14:07:44] [PASS] ✅ cmd_awk: Text processing - Available (awk version 20200816)
+[2025-09-13 14:07:44] [PASS] ✅ cmd_sort: Data sorting - Available (2.3-Apple (195))
+[2025-09-13 14:07:44] [PASS] ✅ cmd_uniq: Duplicate removal - Available (Version unknown)
+[2025-09-13 14:07:44] [PASS] ✅ cmd_head: Text processing - Available (Version unknown)
+[2025-09-13 14:07:44] [PASS] ✅ cmd_tail: Log monitoring - Available (Version unknown)
+[2025-09-13 14:07:44] [PASS] ✅ cmd_date: Timestamp generation - Available (Version unknown)
+[2025-09-13 14:07:44] [PASS] ✅ cmd_sleep: Timing control - Available (Version unknown)
+[2025-09-13 14:07:44] [WARN] ⚠️  linux_cmd_systemctl: Service management - Not available (Linux-specific)
+[2025-09-13 14:07:44] [WARN] ⚠️  linux_cmd_journalctl: System logging - Not available (Linux-specific)
+[2025-09-13 14:07:44] [WARN] ⚠️  linux_cmd_lscpu: CPU information - Not available (Linux-specific)
+[2025-09-13 14:07:44] [WARN] ⚠️  linux_cmd_free: Memory information - Not available (Linux-specific)
+[2025-09-13 14:07:44] [PASS] ✅ linux_cmd_iostat: I/O statistics - Available on current platform
+[2025-09-13 14:07:44] [WARN] ⚠️  linux_cmd_vmstat: Virtual memory statistics - Not available (Linux-specific)
+[2025-09-13 14:07:44] [INFO] Checking filesystem compatibility...
+[2025-09-13 14:07:44] [PASS] ✅ named_pipes: Named pipes supported
+[2025-09-13 14:07:44] [FAIL] ❌ file_locking: File locking not supported
+[2025-09-13 14:07:44] [PASS] ✅ symbolic_links: Symbolic links supported
+[2025-09-13 14:07:44] [PASS] ✅ file_permissions: File permissions supported
+[2025-09-13 14:07:44] [INFO] Checking network compatibility...
+[2025-09-13 14:07:44] [PASS] ✅ net_netstat: Network tool netstat available
+[2025-09-13 14:07:44] [WARN] ⚠️  net_ss: Network tool ss not available
+[2025-09-13 14:07:44] [PASS] ✅ net_lsof: Network tool lsof available
+[2025-09-13 14:07:45] [PASS] ✅ network_connectivity: Network connectivity available
+[2025-09-13 14:07:47] [PASS] ✅ curl_https: HTTPS requests working
+[2025-09-13 14:07:47] [INFO] Checking process management compatibility...
+[2025-09-13 14:07:47] [PASS] ✅ process_detection: Process detection working
+[2025-09-13 14:07:47] [PASS] ✅ signal_handling: Signal handling working
+[2025-09-13 14:07:47] [INFO] Checking script syntax and structure...
+[2025-09-13 14:07:47] [PASS] ✅ script_exists: Target script found
+[2025-09-13 14:07:47] [PASS] ✅ script_syntax: Script syntax is valid
+[2025-09-13 14:07:47] [PASS] ✅ linux_pattern_/proc/: No Linux-specific: /proc
+[2025-09-13 14:07:47] [PASS] ✅ linux_pattern_filesystem: No Linux-specific: filesystem
+[2025-09-13 14:07:47] [WARN] ⚠️  linux_pattern_usage
+        /sys/: Uses Linux-specific: usage
+/sys filesystem usage
+[2025-09-13 14:07:47] [PASS] ✅ linux_pattern_systemctl: No Linux-specific: systemd service management
+[2025-09-13 14:07:47] [PASS] ✅ linux_pattern_journalctl: No Linux-specific: systemd logging
+[2025-09-13 14:07:47] [PASS] ✅ linux_pattern_/dev/video: No Linux-specific: Video device access
+[2025-09-13 14:07:47] [PASS] ✅ linux_pattern_/dev/dri: No Linux-specific: Hardware acceleration devices
+[2025-09-13 14:07:47] [PASS] ✅ portable_command -v: Uses portable: Portable command detection
+[2025-09-13 14:07:47] [WARN] ⚠️  portable_$\(.*\): Missing portable: Command substitution
+[2025-09-13 14:07:47] [PASS] ✅ portable_\[\[ .*\]\]: Uses portable: Bash conditional
+[2025-09-13 14:07:47] [INFO] Checking hardware acceleration compatibility...
+[2025-09-13 14:07:47] [FAIL] ❌ hw_accel_vaapi: Cannot test vaapi - ffmpeg not available
+[2025-09-13 14:07:47] [FAIL] ❌ hw_accel_nvenc: Cannot test nvenc - ffmpeg not available
+[2025-09-13 14:07:47] [FAIL] ❌ hw_accel_qsv: Cannot test qsv - ffmpeg not available
+[2025-09-13 14:07:47] [FAIL] ❌ hw_accel_videotoolbox: Cannot test videotoolbox - ffmpeg not available
+[2025-09-13 14:07:47] [WARN] ⚠️  gpu_devices: GPU device check skipped (not Linux)
+[2025-09-13 14:07:47] [INFO] Generating compatibility report...
