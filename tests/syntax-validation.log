@@ -1,5 +1,0 @@
-Syntax Validation Log - Sat Sep 13 14:06:56 PKT 2025
-[2025-09-13 14:06:56] [INFO] ✓ File Existence: Main script exists and is readable
-[2025-09-13 14:06:56] [INFO] Validating shell syntax for: rtsp-sse-stream.sh
-[2025-09-13 14:06:56] [INFO] ✓ Shell Syntax: No syntax errors found
-[2025-09-13 14:06:56] [INFO] Running shellcheck analysis...
