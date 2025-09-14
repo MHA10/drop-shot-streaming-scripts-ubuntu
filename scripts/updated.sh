@@ -15,6 +15,7 @@ CONFIG_FILE="/tmp/stream_config.json"
 SSE_PID_FILE="/tmp/sse_listener.pid"
 FFMPEG_PID_FILE="/tmp/ffmpeg_stream.pid"
 LOG_FILE="/tmp/stream.log"
+STREAM_STATE_FILE="/tmp/stream_state.json"
 
 # Default streaming parameters
 DEFAULT_RTSP="rtsp://admin:ubnt%40966@192.168.10.111:554/cam/realmonitor?channel=1&subtype=1"
@@ -24,6 +25,7 @@ FFMPEG_PARAMS="-rtsp_transport tcp -f lavfi -i anullsrc=channel_layout=stereo:sa
 # Initialize configuration file with defaults
 init_config() {
     echo "{\"rtsp_url\":\"$DEFAULT_RTSP\",\"rtmp_url\":\"$DEFAULT_RTMP\",\"restart_required\":false}" > "$CONFIG_FILE"
+    echo "{\"should_stream\":false,\"event_type\":\"stop\"}" > "$STREAM_STATE_FILE"
 }
 
 # Log function with timestamp
@@ -74,25 +76,45 @@ sse_listener() {
             if [[ "$line" =~ ^data:.*\{.*\} ]]; then
                 json_data="${line#data: }"
                 
-                # Extract URLs from JSON
-                rtsp_url=$(parse_json "$json_data" "rtsp_url")
-                rtmp_url=$(parse_json "$json_data" "rtmp_url")
-                restart_required=$(parse_json_bool "$json_data" "restart_required")
+                # Print SSE event data for debugging
+                log_message "SSE Event Received: $json_data"
                 
-                # Validate URLs
-                if validate_url "$rtsp_url" "rtsp" && validate_url "$rtmp_url" "rtmp"; then
-                    log_message "Received valid URLs - RTSP: $rtsp_url, RTMP: $rtmp_url"
+                # Extract new event format fields
+                event_type=$(parse_json "$json_data" "eventType")
+                camera_url=$(parse_json "$json_data" "cameraUrl")
+                stream_key=$(parse_json "$json_data" "streamKey")
+                
+                log_message "Parsed - EventType: $event_type, CameraUrl: $camera_url, StreamKey: $stream_key"
+                
+                # Validate required fields
+                if [[ -n "$event_type" && -n "$camera_url" && -n "$stream_key" ]]; then
+                    # Construct RTMP URL from stream key
+                    rtmp_url="rtmp://a.rtmp.youtube.com/live2/$stream_key"
                     
-                    # Update configuration
-                    echo "{\"rtsp_url\":\"$rtsp_url\",\"rtmp_url\":\"$rtmp_url\",\"restart_required\":true}" > "$CONFIG_FILE"
-                    
-                    # Signal main process if restart required
-                    if [[ "$restart_required" == "true" ]]; then
-                        log_message "Restart required - signaling main process"
-                        touch "/tmp/restart_stream"
+                    # Validate URLs
+                    if validate_url "$camera_url" "rtsp" && validate_url "$rtmp_url" "rtmp"; then
+                        log_message "Valid event - RTSP: $camera_url, RTMP: $rtmp_url, Action: $event_type"
+                        
+                        # Update configuration
+                        echo "{\"rtsp_url\":\"$camera_url\",\"rtmp_url\":\"$rtmp_url\",\"restart_required\":true}" > "$CONFIG_FILE"
+                        
+                        # Update stream state based on event type
+                        if [[ "$event_type" == "start" ]]; then
+                            log_message "START event received - enabling streaming"
+                            echo "{\"should_stream\":true,\"event_type\":\"start\"}" > "$STREAM_STATE_FILE"
+                            touch "/tmp/restart_stream"
+                        elif [[ "$event_type" == "stop" ]]; then
+                            log_message "STOP event received - disabling streaming"
+                            echo "{\"should_stream\":false,\"event_type\":\"stop\"}" > "$STREAM_STATE_FILE"
+                            touch "/tmp/stop_stream"
+                        else
+                            log_message "Unknown event type: $event_type - ignoring"
+                        fi
+                    else
+                        log_message "Invalid URLs - CameraUrl: $camera_url, StreamKey: $stream_key - ignoring update"
                     fi
                 else
-                    log_message "Invalid URLs received - ignoring update"
+                    log_message "Missing required fields in SSE event - ignoring update"
                 fi
             fi
         done
@@ -129,7 +151,7 @@ cleanup() {
     fi
     
     # Clean up temp files
-    rm -f "/tmp/restart_stream" "$CONFIG_FILE"
+    rm -f "/tmp/restart_stream" "/tmp/stop_stream" "$CONFIG_FILE" "$STREAM_STATE_FILE"
     
     exit 0
 }
@@ -148,41 +170,65 @@ log_message "SSE listener started with PID $(cat $SSE_PID_FILE)"
 
 # Main streaming loop
 while true; do
-    # Read current configuration
-    if [ -f "$CONFIG_FILE" ]; then
-        config=$(cat "$CONFIG_FILE")
-        current_rtsp=$(parse_json "$config" "rtsp_url")
-        current_rtmp=$(parse_json "$config" "rtmp_url")
-    else
-        current_rtsp="$DEFAULT_RTSP"
-        current_rtmp="$DEFAULT_RTMP"
+    # Check if streaming should be active
+    should_stream=false
+    if [ -f "$STREAM_STATE_FILE" ]; then
+        state_config=$(cat "$STREAM_STATE_FILE")
+        should_stream=$(parse_json_bool "$state_config" "should_stream")
+        current_event=$(parse_json "$state_config" "event_type")
     fi
     
-    log_message "Starting stream with RTSP: ${current_rtsp:0:50}... RTMP: ${current_rtmp:0:50}..."
-    
-    # Start FFmpeg with current URLs
-    ffmpeg $FFMPEG_PARAMS -i "$current_rtsp" "$current_rtmp" &
-    ffmpeg_pid=$!
-    echo $ffmpeg_pid > "$FFMPEG_PID_FILE"
-    
-    # Monitor for restart signal or FFmpeg exit
-    while kill -0 "$ffmpeg_pid" 2>/dev/null; do
-        if [ -f "/tmp/restart_stream" ]; then
-            log_message "Restart signal received - stopping current stream"
-            kill "$ffmpeg_pid" 2>/dev/null || true
-            wait "$ffmpeg_pid" 2>/dev/null || true
-            rm -f "/tmp/restart_stream"
-            break
+    if [[ "$should_stream" == "true" ]]; then
+        # Read current configuration
+        if [ -f "$CONFIG_FILE" ]; then
+            config=$(cat "$CONFIG_FILE")
+            current_rtsp=$(parse_json "$config" "rtsp_url")
+            current_rtmp=$(parse_json "$config" "rtmp_url")
+        else
+            current_rtsp="$DEFAULT_RTSP"
+            current_rtmp="$DEFAULT_RTMP"
         fi
-        sleep 1
-    done
-    
-    # Check if FFmpeg exited normally or was killed
-    if ! kill -0 "$ffmpeg_pid" 2>/dev/null; then
-        wait "$ffmpeg_pid" 2>/dev/null || true
-        log_message "FFmpeg process ended - restarting in 5 seconds..."
+        
+        log_message "Starting stream with RTSP: ${current_rtsp:0:50}... RTMP: ${current_rtmp:0:50}..."
+        
+        # Start FFmpeg with current URLs
+        ffmpeg $FFMPEG_PARAMS -i "$current_rtsp" "$current_rtmp" &
+        ffmpeg_pid=$!
+        echo $ffmpeg_pid > "$FFMPEG_PID_FILE"
+        
+        # Monitor for restart/stop signals or FFmpeg exit
+        while kill -0 "$ffmpeg_pid" 2>/dev/null; do
+            if [ -f "/tmp/restart_stream" ]; then
+                log_message "Restart signal received - stopping current stream"
+                kill "$ffmpeg_pid" 2>/dev/null || true
+                wait "$ffmpeg_pid" 2>/dev/null || true
+                rm -f "/tmp/restart_stream"
+                break
+            elif [ -f "/tmp/stop_stream" ]; then
+                log_message "Stop signal received - gracefully stopping stream"
+                kill "$ffmpeg_pid" 2>/dev/null || true
+                wait "$ffmpeg_pid" 2>/dev/null || true
+                rm -f "/tmp/stop_stream"
+                break
+            fi
+            sleep 1
+        done
+        
+        # Check if FFmpeg exited normally or was killed
+        if ! kill -0 "$ffmpeg_pid" 2>/dev/null; then
+            wait "$ffmpeg_pid" 2>/dev/null || true
+            # Only restart if we should still be streaming
+            if [[ "$should_stream" == "true" ]]; then
+                log_message "FFmpeg process ended - restarting in 5 seconds..."
+                sleep 5
+            else
+                log_message "FFmpeg process ended - streaming disabled"
+            fi
+        fi
+        
+        rm -f "$FFMPEG_PID_FILE"
+    else
+        log_message "Streaming disabled - waiting for start event..."
         sleep 5
     fi
-    
-    rm -f "$FFMPEG_PID_FILE"
 done
