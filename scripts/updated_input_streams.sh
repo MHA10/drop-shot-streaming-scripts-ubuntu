@@ -304,6 +304,33 @@ cleanup_orphaned_processes() {
     fi
 }
 
+# Clean up any orphaned processes from previous runs
+cleanup_orphaned_processes() {
+    log_message "Cleaning up orphaned processes from previous runs"
+    
+    # Check for orphaned FFmpeg processes
+    local orphaned_count=0
+    
+    if [[ -f "$STREAM_REGISTRY_DIR/active_streams.list" ]]; then
+        while IFS= read -r stream_id; do
+            if [[ -n "$stream_id" ]]; then
+                local state_file=$(get_stream_state_file "$stream_id")
+                if [[ -f "$state_file" ]]; then
+                    local pid=$(parse_json "$(cat "$state_file")" "pid")
+                    if [[ -n "$pid" ]] && ! kill -0 "$pid" 2>/dev/null; then
+                        log_message "Cleaning up orphaned stream: $stream_id (PID: $pid)"
+                        rm -f "$state_file"
+                        update_stream_registry "$stream_id" "remove"
+                        ((orphaned_count++))
+                    fi
+                fi
+            fi
+        done < "$STREAM_REGISTRY_DIR/active_streams.list"
+    fi
+    
+    log_message "Orphaned process cleanup complete: $orphaned_count processes cleaned"
+}
+
 # Start a new stream
 start_stream() {
     local rtsp_url="$1"
