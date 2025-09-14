@@ -27,7 +27,7 @@ FFMPEG_PARAMS="-rtsp_transport tcp -f lavfi -i anullsrc=channel_layout=stereo:sa
 
 # Boot detection functions
 detect_boot_scenario() {
-    local current_boot_time=$(sysctl -n kern.boottime | awk '{print $4}' | tr -d ',')
+    local current_boot_time=$(awk '/btime/ {print $2}' /proc/stat)
     local stored_boot_time=""
     
     if [[ -f "$LAST_BOOT_TIME_FILE" ]]; then
