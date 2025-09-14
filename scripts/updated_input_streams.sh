@@ -331,7 +331,7 @@ cleanup_orphaned_processes() {
     log_message "Orphaned process cleanup complete: $orphaned_count processes cleaned"
 }
 
-# Start a new stream
+# Start a new stream with retry logic and error handling
 start_stream() {
     local rtsp_url="$1"
     local rtmp_url="$2"
@@ -347,18 +347,56 @@ start_stream() {
     
     log_message "Starting stream $stream_id: RTSP=${rtsp_url:0:50}... RTMP=${rtmp_url:0:50}..."
     
-    # Start FFmpeg process
-    ffmpeg $FFMPEG_PARAMS -i "$rtsp_url" "$rtmp_url" &
-    local ffmpeg_pid=$!
+    # Retry configuration
+    local max_retries=3
+    local retry_count=0
+    local retry_delays=(2 4 8)  # Exponential backoff: 2s, 4s, 8s
     
-    # Create stream state file
-    create_stream_state "$stream_id" "$rtsp_url" "$rtmp_url" "$ffmpeg_pid" "running"
+    while [[ $retry_count -lt $max_retries ]]; do
+        log_message "Stream $stream_id: Attempt $((retry_count + 1))/$max_retries"
+        
+        # Start FFmpeg process
+        ffmpeg $FFMPEG_PARAMS -i "$rtsp_url" "$rtmp_url" &
+        local ffmpeg_pid=$!
+        
+        # Wait a moment for FFmpeg to initialize
+        sleep 1
+        
+        # Check if FFmpeg process is still running
+        if kill -0 "$ffmpeg_pid" 2>/dev/null; then
+            # Additional validation - wait a bit more and check again
+            sleep 2
+            if kill -0 "$ffmpeg_pid" 2>/dev/null; then
+                # Success - FFmpeg is running
+                create_stream_state "$stream_id" "$rtsp_url" "$rtmp_url" "$ffmpeg_pid" "running"
+                update_stream_registry "$stream_id" "add"
+                log_message "Stream $stream_id started successfully with PID $ffmpeg_pid"
+                return 0
+            else
+                log_message "Stream $stream_id: FFmpeg process $ffmpeg_pid died during startup validation"
+            fi
+        else
+            log_message "Stream $stream_id: FFmpeg process $ffmpeg_pid failed to start or died immediately"
+        fi
+        
+        # FFmpeg failed - increment retry count
+        retry_count=$((retry_count + 1))
+        
+        # If not the last attempt, wait before retrying
+        if [[ $retry_count -lt $max_retries ]]; then
+            local delay=${retry_delays[$((retry_count - 1))]}
+            log_message "Stream $stream_id: Retrying in ${delay}s (attempt $((retry_count + 1))/$max_retries)"
+            sleep "$delay"
+        fi
+    done
     
-    # Add to registry
-    update_stream_registry "$stream_id" "add"
+    # All retries failed
+    log_message "ERROR: Stream $stream_id failed to start after $max_retries attempts"
     
-    log_message "Stream $stream_id started with PID $ffmpeg_pid"
-    return 0
+    # Create failed state for tracking
+    create_stream_state "$stream_id" "$rtsp_url" "$rtmp_url" "0" "failed"
+    
+    return 1
 }
 
 # Stop a specific stream (remove both temporary and persistent state)
@@ -604,16 +642,18 @@ sse_listener() {
                         
                         # Handle stream lifecycle based on event type
                         if [[ "$event_type" == "start" ]]; then
-                            log_message "START event received - adding to expected streams"
+                            log_message "START event received"
                             
-                            # If this is a reconnection, add to expected streams for reconciliation
-                             if [[ "$sse_events_received" == "false" ]] && [[ "$first_connection" == "false" ]]; then
-                                 add_expected_stream "$camera_url" "$stream_key"
-                                 # Store stream details for later use
-                                 local stream_id=$(generate_stream_id "$camera_url" "$stream_key")
-                                 local temp_state_file="$PERSISTENT_STATE_DIR/states/$stream_id.json"
-                                 mkdir -p "$(dirname "$temp_state_file")"
-                                 cat > "$temp_state_file" << EOF
+                            # Only use reconciliation mode if we're reconnecting AND haven't received events yet
+                            # This means we're in the middle of processing a reconnection scenario
+                            if [[ "$sse_events_received" == "false" ]] && [[ "$first_connection" == "false" ]] && [[ "$connection_lost" == "true" ]]; then
+                                log_message "Reconnection scenario - adding to expected streams for reconciliation"
+                                add_expected_stream "$camera_url" "$stream_key"
+                                # Store stream details for later use
+                                local stream_id=$(generate_stream_id "$camera_url" "$stream_key")
+                                local temp_state_file="$PERSISTENT_STATE_DIR/states/$stream_id.json"
+                                mkdir -p "$(dirname "$temp_state_file")"
+                                cat > "$temp_state_file" << EOF
 {
     "stream_id": "$stream_id",
     "rtsp_url": "$camera_url",
@@ -622,10 +662,11 @@ sse_listener() {
     "status": "expected"
 }
 EOF
-                             else
-                                 # Normal operation - start stream directly
-                                 start_stream "$camera_url" "$rtmp_url" "$stream_key"
-                             fi
+                            else
+                                # Normal operation - start stream directly
+                                log_message "Starting stream immediately"
+                                start_stream "$camera_url" "$rtmp_url" "$stream_key"
+                            fi
                         elif [[ "$event_type" == "stop" ]]; then
                             log_message "STOP event received"
                             
