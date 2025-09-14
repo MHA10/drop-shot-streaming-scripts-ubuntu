@@ -7,7 +7,7 @@ set -e
 
 # Configuration
 # SSE endpoint - can be overridden via SSE_ENDPOINT environment variable
-SSE_ENDPOINT="${SSE_ENDPOINT:-http://localhost:3000/events}"
+SSE_ENDPOINT="${SSE_ENDPOINT:-https://029a7de6bd15.ngrok-free.app/events}"
 # Use /var/tmp for persistent storage that survives reboots
 PERSISTENT_STATE_DIR="/var/tmp/stream_registry"
 STREAM_REGISTRY_DIR="/tmp/stream_registry"
