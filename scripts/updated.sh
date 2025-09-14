@@ -6,7 +6,11 @@
 set -e
 
 # Configuration
-SSE_ENDPOINT="${SSE_ENDPOINT:-http://localhost:3000/events}"
+SSE_ENDPOINT="${SSE_ENDPOINT:-"https://sse.dev/test?interval=5&jsonobj={
+  "eventType": "start"/"stop",
+  "cameraUrl": "full rtsp camera url",
+  "streamKey": "youtube stream key"
+}"}"
 CONFIG_FILE="/tmp/stream_config.json"
 SSE_PID_FILE="/tmp/sse_listener.pid"
 FFMPEG_PID_FILE="/tmp/ffmpeg_stream.pid"
