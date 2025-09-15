@@ -27,7 +27,7 @@ FFMPEG_PARAMS="-rtsp_transport tcp -f lavfi -i anullsrc=channel_layout=stereo:sa
 
 # Boot detection functions
 detect_boot_scenario() {
-    local current_boot_time=$(awk '/btime/ {print $2}' /proc/stat)
+    local current_boot_time=$(awk '/btime/ {print $2}' /proc/stat 2>/dev/null || echo "")
     local stored_boot_time=""
     
     if [[ -f "$LAST_BOOT_TIME_FILE" ]]; then
@@ -66,8 +66,15 @@ validate_persistent_state() {
             if [[ -n "$stream_id" ]]; then
                 local persistent_state_file="$PERSISTENT_STATE_DIR/states/$stream_id.json"
                 if [[ -f "$persistent_state_file" ]]; then
-                    local pid=$(parse_json "$(cat "$persistent_state_file")" "pid")
-                    if validate_pid "$pid"; then
+                    local state_content=$(cat "$persistent_state_file")
+                    local status=$(parse_json "$state_content" "status")
+                    local pid=$(parse_json "$state_content" "pid")
+                    
+                    # Handle streams with "expected" status (no PID yet)
+                    if [[ "$status" == "expected" ]]; then
+                        ((invalid_count++))
+                        log_message "Stream $stream_id has expected status but no PID - will be cleaned"
+                    elif [[ -n "$pid" ]] && validate_pid "$pid"; then
                         ((valid_count++))
                         log_message "Stream $stream_id PID $pid is still valid"
                     else
@@ -80,7 +87,8 @@ validate_persistent_state() {
     fi
     
     log_message "PID validation complete: $valid_count valid, $invalid_count invalid"
-    return $invalid_count
+    # Don't return error code - let the script continue with restoration
+    return 0
 }
 
 # Initialize stream management system
@@ -281,27 +289,6 @@ restore_valid_streams() {
     fi
     
     log_message "Restored $restored_count valid streams from persistent state"
-}
-
-# Cleanup orphaned processes
-cleanup_orphaned_processes() {
-    log_message "Cleaning up orphaned processes..."
-    
-    if [[ -f "$STREAM_REGISTRY_DIR/active_streams.list" ]]; then
-        while IFS= read -r stream_id; do
-            if [[ -n "$stream_id" ]]; then
-                local state_file=$(get_stream_state_file "$stream_id")
-                if [[ -f "$state_file" ]]; then
-                    local pid=$(parse_json "$(cat "$state_file")" "pid")
-                    if [[ -n "$pid" ]] && ! kill -0 "$pid" 2>/dev/null; then
-                        log_message "Cleaning up orphaned stream: $stream_id (PID: $pid)"
-                        rm -f "$state_file"
-                        update_stream_registry "$stream_id" "remove"
-                    fi
-                fi
-            fi
-        done < "$STREAM_REGISTRY_DIR/active_streams.list"
-    fi
 }
 
 # Clean up any orphaned processes from previous runs
