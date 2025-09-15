@@ -1,15 +1,15 @@
-#!/bin/bash
+#!/usr/bin/env bash
 
-# Multi-Stream Management Script with SSE Support for Raspberry Pi
+# Multi-Stream Management Script with SSE Support for macOS
 # Handles multiple concurrent streams with robust PID management and state persistence
 
 set -e
 
 # Configuration
 # SSE endpoint - can be overridden via SSE_ENDPOINT environment variable
-SSE_ENDPOINT="${SSE_ENDPOINT:-https://029a7de6bd15.ngrok-free.app/events}"
-# Use /var/tmp for persistent storage that survives reboots
-PERSISTENT_STATE_DIR="/var/tmp/stream_registry"
+SSE_ENDPOINT="${SSE_ENDPOINT:-https://4b1d5b7d99db.ngrok-free.app/events}"
+# Use ~/Library/Caches for persistent storage on macOS
+PERSISTENT_STATE_DIR="$HOME/Library/Caches/stream_registry"
 STREAM_REGISTRY_DIR="/tmp/stream_registry"
 SSE_PID_FILE="/tmp/sse_listener.pid"
 FFMPEG_PID_FILE="/tmp/ffmpeg.pid"
@@ -19,15 +19,21 @@ STREAM_STATE_FILE="/tmp/stream_state.json"
 STREAM_REGISTRY_FILE="/tmp/stream_registry.json"
 HEALTH_CHECK_INTERVAL=30
 # Boot detection file
-BOOT_MARKER_FILE="/var/tmp/stream_script_boot_marker"
-LAST_BOOT_TIME_FILE="/var/tmp/last_boot_time"
+BOOT_MARKER_FILE="$HOME/Library/Caches/stream_script_boot_marker"
+LAST_BOOT_TIME_FILE="$HOME/Library/Caches/last_boot_time"
 
-# Default streaming parameters
-FFMPEG_PARAMS="-rtsp_transport tcp -f lavfi -i anullsrc=channel_layout=stereo:sample_rate=44100 -c:v libx264 -preset veryfast -b:v 4500k -maxrate 5000k -bufsize 10000k -vf scale=1920:1080 -c:a aac -b:a 128k -ar 44100 -f flv"
+# FFmpeg parameters for stream processing
+# Input options (before -i)
+FFMPEG_INPUT_OPTS="-rtsp_transport tcp"
+# Null audio source for when RTSP stream has no audio
+FFMPEG_NULL_AUDIO="-f lavfi -i anullsrc=channel_layout=stereo:sample_rate=44100"
+# Output options (after input URLs)
+FFMPEG_OUTPUT_OPTS="-c:v libx264 -preset veryfast -b:v 4500k -maxrate 5000k -bufsize 10000k -vf scale=1920:1080 -c:a aac -b:a 128k -ar 44100 -shortest -f flv"
 
-# Boot detection functions
+# Boot detection functions for macOS
 detect_boot_scenario() {
-    local current_boot_time=$(awk '/btime/ {print $2}' /proc/stat)
+    # On macOS, we can use system_profiler to get boot time
+    local current_boot_time=$(sysctl -n kern.boottime | awk '{print $4}' | tr -d ',')
     local stored_boot_time=""
     
     if [[ -f "$LAST_BOOT_TIME_FILE" ]]; then
@@ -66,17 +72,22 @@ validate_persistent_state() {
             if [[ -n "$stream_id" ]]; then
                 local persistent_state_file="$PERSISTENT_STATE_DIR/states/$stream_id.json"
                 if [[ -f "$persistent_state_file" ]]; then
-                    local pid=$(parse_json "$(cat "$persistent_state_file")" "pid")
+                    local pid=$(parse_json "$(cat "$persistent_state_file")" "pid") || {
+                        log_message "Warning: Failed to parse PID for stream $stream_id"
+                        continue
+                    }
                     if validate_pid "$pid"; then
                         ((valid_count++))
                         log_message "Stream $stream_id PID $pid is still valid"
                     else
-                        ((invalid_count++))
+                        ((invalid_count++)) || true
                         log_message "Stream $stream_id PID $pid is invalid - will be cleaned"
                     fi
                 fi
             fi
-        done < "$PERSISTENT_STATE_DIR/active_streams.list"
+        done < "$PERSISTENT_STATE_DIR/active_streams.list" || {
+            log_message "Warning: Failed to read persistent state file"
+        }
     fi
     
     log_message "PID validation complete: $valid_count valid, $invalid_count invalid"
@@ -86,28 +97,48 @@ validate_persistent_state() {
 # Initialize stream management system
 init_stream_system() {
     # Create both temporary and persistent registry directories
-    mkdir -p "$STREAM_REGISTRY_DIR"
-    mkdir -p "$PERSISTENT_STATE_DIR/states"
+    mkdir -p "$STREAM_REGISTRY_DIR" || {
+        log_message "Error: Failed to create stream registry directory"
+        return 1
+    }
+    mkdir -p "$PERSISTENT_STATE_DIR/states" || {
+        log_message "Error: Failed to create persistent state directory"
+        return 1
+    }
     
     # Initialize empty stream registry
-    echo '{}' > "$STREAM_REGISTRY_FILE"
+    echo '{}' > "$STREAM_REGISTRY_FILE" || {
+        log_message "Warning: Failed to initialize stream registry file"
+    }
     
     # Initialize active streams list
-    touch "$STREAM_REGISTRY_DIR/active_streams.list"
-    touch "$PERSISTENT_STATE_DIR/active_streams.list"
+    touch "$STREAM_REGISTRY_DIR/active_streams.list" || {
+        log_message "Warning: Failed to create temporary active streams list"
+    }
+    touch "$PERSISTENT_STATE_DIR/active_streams.list" || {
+        log_message "Warning: Failed to create persistent active streams list"
+    }
     
     # Detect boot vs internet loss scenario
     if detect_boot_scenario; then
         log_message "Boot detected - clearing all persistent state and starting fresh"
-        clear_persistent_state
+        clear_persistent_state || {
+            log_message "Warning: Failed to clear persistent state completely"
+        }
     else
         log_message "Internet loss detected - validating existing PIDs"
-        validate_persistent_state
-        restore_valid_streams
+        validate_persistent_state || {
+            log_message "Warning: PID validation encountered issues"
+        }
+        restore_valid_streams || {
+            log_message "Warning: Stream restoration encountered issues"
+        }
     fi
     
     # Clean up any orphaned processes from previous runs
-    cleanup_orphaned_processes
+    cleanup_orphaned_processes || {
+        log_message "Warning: Orphaned process cleanup encountered issues"
+    }
     
     log_message "Stream management system initialized"
 }
@@ -142,11 +173,11 @@ validate_url() {
     fi
 }
 
-# Generate unique stream ID from RTSP URL and stream key
+# Generate unique stream ID from RTSP URL and stream key (macOS version)
 generate_stream_id() {
     local rtsp_url="$1"
     local stream_key="$2"
-    echo "${rtsp_url}_${stream_key}" | md5sum | cut -d' ' -f1 | head -c 8
+    echo "${rtsp_url}_${stream_key}" | md5 | cut -d'=' -f2 | tr -d ' ' | head -c 8
 }
 
 # Get stream state file path
@@ -181,8 +212,12 @@ EOF
 )
     
     # Write to both temporary and persistent state
-    echo "$state_content" > "$state_file"
-    echo "$state_content" > "$persistent_state_file"
+    echo "$state_content" > "$state_file" || {
+        log_message "Warning: Failed to create temporary state file for stream $stream_id"
+    }
+    echo "$state_content" > "$persistent_state_file" || {
+        log_message "Warning: Failed to create persistent state file for stream $stream_id"
+    }
 }
 
 # Update stream registry (both temporary and persistent)
@@ -193,25 +228,37 @@ update_stream_registry() {
     # Update temporary registry
     if [[ "$action" == "add" ]]; then
         if ! grep -q "^$stream_id$" "$STREAM_REGISTRY_DIR/active_streams.list" 2>/dev/null; then
-            echo "$stream_id" >> "$STREAM_REGISTRY_DIR/active_streams.list"
+            echo "$stream_id" >> "$STREAM_REGISTRY_DIR/active_streams.list" || {
+                log_message "Warning: Failed to add stream $stream_id to temporary registry"
+            }
         fi
         # Also update persistent registry
         if ! grep -q "^$stream_id$" "$PERSISTENT_STATE_DIR/active_streams.list" 2>/dev/null; then
-            echo "$stream_id" >> "$PERSISTENT_STATE_DIR/active_streams.list"
+            echo "$stream_id" >> "$PERSISTENT_STATE_DIR/active_streams.list" || {
+                log_message "Warning: Failed to add stream $stream_id to persistent registry"
+            }
         fi
     elif [[ "$action" == "remove" ]]; then
         # Remove from temporary registry
         if [[ -f "$STREAM_REGISTRY_DIR/active_streams.list" ]]; then
             grep -v "^$stream_id$" "$STREAM_REGISTRY_DIR/active_streams.list" > "$STREAM_REGISTRY_DIR/active_streams.list.tmp" || true
-            mv "$STREAM_REGISTRY_DIR/active_streams.list.tmp" "$STREAM_REGISTRY_DIR/active_streams.list"
+            mv "$STREAM_REGISTRY_DIR/active_streams.list.tmp" "$STREAM_REGISTRY_DIR/active_streams.list" || {
+                log_message "Warning: Failed to update temporary registry when removing stream $stream_id"
+                rm -f "$STREAM_REGISTRY_DIR/active_streams.list.tmp" 2>/dev/null || true
+            }
         fi
         # Remove from persistent registry
         if [[ -f "$PERSISTENT_STATE_DIR/active_streams.list" ]]; then
             grep -v "^$stream_id$" "$PERSISTENT_STATE_DIR/active_streams.list" > "$PERSISTENT_STATE_DIR/active_streams.list.tmp" || true
-            mv "$PERSISTENT_STATE_DIR/active_streams.list.tmp" "$PERSISTENT_STATE_DIR/active_streams.list"
+            mv "$PERSISTENT_STATE_DIR/active_streams.list.tmp" "$PERSISTENT_STATE_DIR/active_streams.list" || {
+                log_message "Warning: Failed to update persistent registry when removing stream $stream_id"
+                rm -f "$PERSISTENT_STATE_DIR/active_streams.list.tmp" 2>/dev/null || true
+            }
         fi
         # Remove persistent state file
-        rm -f "$PERSISTENT_STATE_DIR/states/$stream_id.json"
+        rm -f "$PERSISTENT_STATE_DIR/states/$stream_id.json" || {
+            log_message "Warning: Failed to remove persistent state file for stream $stream_id"
+        }
     fi
 }
 
@@ -285,27 +332,6 @@ restore_valid_streams() {
 
 # Cleanup orphaned processes
 cleanup_orphaned_processes() {
-    log_message "Cleaning up orphaned processes..."
-    
-    if [[ -f "$STREAM_REGISTRY_DIR/active_streams.list" ]]; then
-        while IFS= read -r stream_id; do
-            if [[ -n "$stream_id" ]]; then
-                local state_file=$(get_stream_state_file "$stream_id")
-                if [[ -f "$state_file" ]]; then
-                    local pid=$(parse_json "$(cat "$state_file")" "pid")
-                    if [[ -n "$pid" ]] && ! kill -0 "$pid" 2>/dev/null; then
-                        log_message "Cleaning up orphaned stream: $stream_id (PID: $pid)"
-                        rm -f "$state_file"
-                        update_stream_registry "$stream_id" "remove"
-                    fi
-                fi
-            fi
-        done < "$STREAM_REGISTRY_DIR/active_streams.list"
-    fi
-}
-
-# Clean up any orphaned processes from previous runs
-cleanup_orphaned_processes() {
     log_message "Cleaning up orphaned processes from previous runs"
     
     # Check for orphaned FFmpeg processes
@@ -355,8 +381,12 @@ start_stream() {
     while [[ $retry_count -lt $max_retries ]]; do
         log_message "Stream $stream_id: Attempt $((retry_count + 1))/$max_retries"
         
+        # Build and log the final FFmpeg command
+        local ffmpeg_command="ffmpeg $FFMPEG_INPUT_OPTS -i \"$rtsp_url\" $FFMPEG_NULL_AUDIO $FFMPEG_OUTPUT_OPTS \"$rtmp_url\""
+        log_message "Stream $stream_id: Executing FFmpeg command: $ffmpeg_command"
+        
         # Start FFmpeg process
-        ffmpeg $FFMPEG_PARAMS -i "$rtsp_url" "$rtmp_url" &
+        ffmpeg $FFMPEG_INPUT_OPTS -i "$rtsp_url" $FFMPEG_NULL_AUDIO $FFMPEG_OUTPUT_OPTS "$rtmp_url" &
         local ffmpeg_pid=$!
         
         # Wait a moment for FFmpeg to initialize
@@ -463,7 +493,7 @@ health_check_streams() {
                     # Update last health check time
                     local current_time=$(date '+%Y-%m-%d %H:%M:%S')
                     local state_content=$(cat "$state_file")
-                    echo "$state_content" | sed "s/\"last_health_check\": \"[^\"]*\"/\"last_health_check\": \"$current_time\"/" > "$state_file"
+                    echo "$state_content" | sed "s/\"last_health_check\": \"[^\"]*\"/\"last_health_check\": \"$current_time\"/ " > "$state_file"
                 fi
             fi
         fi
@@ -471,30 +501,30 @@ health_check_streams() {
 }
 
 # State reconciliation - compare current streams with new SSE events
-declare -A expected_streams
-declare -A current_streams
-
-# Start state reconciliation process
+# Use files instead of associative arrays for macOS compatibility
 start_state_reconciliation() {
     log_message "Starting state reconciliation - preparing to compare current vs new state"
     
-    # Clear expected streams array
-    unset expected_streams
-    declare -gA expected_streams
+    # Clear expected streams directory
+    mkdir -p "$STREAM_REGISTRY_DIR/expected_streams"
+    rm -f "$STREAM_REGISTRY_DIR/expected_streams"/*
     
-    # Build current streams map
-    unset current_streams
-    declare -gA current_streams
+    # Create current streams directory
+    mkdir -p "$STREAM_REGISTRY_DIR/current_streams"
+    rm -f "$STREAM_REGISTRY_DIR/current_streams"/*
     
+    # Build current streams map using files
     if [[ -f "$STREAM_REGISTRY_DIR/active_streams.list" ]]; then
         while IFS= read -r stream_id; do
             if [[ -n "$stream_id" ]]; then
-                current_streams["$stream_id"]=1
+                touch "$STREAM_REGISTRY_DIR/current_streams/$stream_id"
             fi
         done < "$STREAM_REGISTRY_DIR/active_streams.list"
     fi
     
-    log_message "Current active streams: ${#current_streams[@]}"
+    # Count current streams
+    local current_count=$(ls -1 "$STREAM_REGISTRY_DIR/current_streams" 2>/dev/null | wc -l)
+    log_message "Current active streams: $current_count"
 }
 
 # Add expected stream to reconciliation
@@ -503,7 +533,8 @@ add_expected_stream() {
     local stream_key="$2"
     local stream_id=$(generate_stream_id "$rtsp_url" "$stream_key")
     
-    expected_streams["$stream_id"]=1
+    # Add to expected streams using file
+    touch "$STREAM_REGISTRY_DIR/expected_streams/$stream_id"
     log_message "Added expected stream: $stream_id"
 }
 
@@ -516,18 +547,24 @@ complete_state_reconciliation() {
     local streams_to_start=()
     
     # Find streams to stop (in current but not in expected)
-    for stream_id in "${!current_streams[@]}"; do
-        if [[ -z "${expected_streams[$stream_id]:-}" ]]; then
-            streams_to_stop+=("$stream_id")
-        else
-            streams_to_keep+=("$stream_id")
+    for stream_file in "$STREAM_REGISTRY_DIR/current_streams"/*; do
+        if [[ -f "$stream_file" ]]; then
+            local stream_id=$(basename "$stream_file")
+            if [[ ! -f "$STREAM_REGISTRY_DIR/expected_streams/$stream_id" ]]; then
+                streams_to_stop+=("$stream_id")
+            else
+                streams_to_keep+=("$stream_id")
+            fi
         fi
     done
     
     # Find streams to start (in expected but not in current)
-    for stream_id in "${!expected_streams[@]}"; do
-        if [[ -z "${current_streams[$stream_id]:-}" ]]; then
-            streams_to_start+=("$stream_id")
+    for stream_file in "$STREAM_REGISTRY_DIR/expected_streams"/*; do
+        if [[ -f "$stream_file" ]]; then
+            local stream_id=$(basename "$stream_file")
+            if [[ ! -f "$STREAM_REGISTRY_DIR/current_streams/$stream_id" ]]; then
+                streams_to_start+=("$stream_id")
+            fi
         fi
     done
     
@@ -696,19 +733,22 @@ EOF
             complete_state_reconciliation
             
             # Start new streams that were in expected but not current
-            for stream_id in "${!expected_streams[@]}"; do
-                if [[ -z "${current_streams[$stream_id]:-}" ]]; then
-                    # Extract stream details from stream_id to start the stream
-                    local state_file="$PERSISTENT_STATE_DIR/states/$stream_id.json"
-                    if [[ -f "$state_file" ]]; then
-                        local state_content=$(cat "$state_file")
-                        local rtsp_url=$(parse_json "$state_content" "rtsp_url")
-                        local rtmp_url=$(parse_json "$state_content" "rtmp_url")
-                        local stream_key=$(parse_json "$state_content" "stream_key")
-                        
-                        if [[ -n "$rtsp_url" && -n "$rtmp_url" && -n "$stream_key" ]]; then
-                            log_message "Starting new expected stream: $stream_id"
-                            start_stream "$rtsp_url" "$rtmp_url" "$stream_key"
+            for stream_file in "$STREAM_REGISTRY_DIR/expected_streams"/*; do
+                if [[ -f "$stream_file" ]]; then
+                    local stream_id=$(basename "$stream_file")
+                    if [[ ! -f "$STREAM_REGISTRY_DIR/current_streams/$stream_id" ]]; then
+                        # Extract stream details from stream_id to start the stream
+                        local state_file="$PERSISTENT_STATE_DIR/states/$stream_id.json"
+                        if [[ -f "$state_file" ]]; then
+                            local state_content=$(cat "$state_file")
+                            local rtsp_url=$(parse_json "$state_content" "rtsp_url")
+                            local rtmp_url=$(parse_json "$state_content" "rtmp_url")
+                            local stream_key=$(parse_json "$state_content" "stream_key")
+                            
+                            if [[ -n "$rtsp_url" && -n "$rtmp_url" && -n "$stream_key" ]]; then
+                                log_message "Starting new expected stream: $stream_id"
+                                start_stream "$rtsp_url" "$rtmp_url" "$stream_key"
+                            fi
                         fi
                     fi
                 fi
@@ -765,6 +805,8 @@ main() {
     echo $! > "$SSE_PID_FILE"
     log_message "SSE listener started with PID $(cat "$SSE_PID_FILE")"
     
+    log_message "Entering main health check loop..."
+    
     # Main monitoring loop
     while true; do
         # Perform health checks on all active streams
@@ -777,6 +819,8 @@ main() {
 
 # Set up signal handlers for graceful shutdown
 trap cleanup SIGTERM SIGINT
+
+log_message "Script initialization complete, starting main function..."
 
 # Run main function
 main
