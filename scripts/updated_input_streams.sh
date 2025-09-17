@@ -64,38 +64,129 @@ validate_persistent_state() {
     local valid_count=0
     local invalid_count=0
     
-    if [[ -f "$PERSISTENT_STATE_DIR/active_streams.list" ]]; then
-        while IFS= read -r stream_id; do
-            if [[ -n "$stream_id" ]]; then
-                local persistent_state_file="$PERSISTENT_STATE_DIR/states/$stream_id.json"
-                if [[ -f "$persistent_state_file" ]]; then
-                    local state_content=$(cat "$persistent_state_file")
+    log_message "Starting PID validation for persistent state"
+    
+    # Check if persistent state directory exists
+    if [[ ! -d "$PERSISTENT_STATE_DIR" ]]; then
+        log_message "Persistent state directory does not exist - creating it"
+        if ! mkdir -p "$PERSISTENT_STATE_DIR/states" 2>/dev/null; then
+            log_message "ERROR: Cannot create persistent state directory - using fallback"
+            PERSISTENT_STATE_DIR="/tmp/fallback_persistent_state"
+            mkdir -p "$PERSISTENT_STATE_DIR/states" 2>/dev/null || true
+        fi
+        touch "$PERSISTENT_STATE_DIR/active_streams.list" 2>/dev/null || true
+        log_message "PID validation complete: 0 valid, 0 invalid (no persistent state)"
+        return 0
+    fi
+    
+    # Check if directory is writable
+    if [[ ! -w "$PERSISTENT_STATE_DIR" ]]; then
+        log_message "WARNING: Persistent state directory not writable - using fallback"
+        PERSISTENT_STATE_DIR="/tmp/fallback_persistent_state"
+        mkdir -p "$PERSISTENT_STATE_DIR/states" 2>/dev/null || true
+        touch "$PERSISTENT_STATE_DIR/active_streams.list" 2>/dev/null || true
+        log_message "PID validation complete: 0 valid, 0 invalid (fallback directory)"
+        return 0
+    fi
+    
+    # Check if active streams list exists and is readable
+    if [[ ! -f "$PERSISTENT_STATE_DIR/active_streams.list" ]]; then
+        log_message "No persistent active streams list found - creating empty one"
+        touch "$PERSISTENT_STATE_DIR/active_streams.list"
+        log_message "PID validation complete: 0 valid, 0 invalid (no active streams)"
+        return 0
+    fi
+    
+    # Check if file is empty
+    if [[ ! -s "$PERSISTENT_STATE_DIR/active_streams.list" ]]; then
+        log_message "Persistent active streams list is empty"
+        log_message "PID validation complete: 0 valid, 0 invalid (empty list)"
+        return 0
+    fi
+    
+    log_message "Reading persistent active streams list..."
+    local line_count=0
+    
+    # Use a more robust approach to read the file
+    while IFS= read -r stream_id || [[ -n "$stream_id" ]]; do
+        ((line_count++))
+        log_message "Processing line $line_count: '$stream_id'"
+        
+        if [[ -n "$stream_id" ]] && [[ "$stream_id" != "" ]]; then
+            local persistent_state_file="$PERSISTENT_STATE_DIR/states/$stream_id.json"
+            if [[ -f "$persistent_state_file" ]]; then
+                local state_content=$(cat "$persistent_state_file" 2>/dev/null)
+                if [[ -n "$state_content" ]]; then
                     local status=$(parse_json "$state_content" "status")
                     local pid=$(parse_json "$state_content" "pid")
+                    
+                    log_message "Stream $stream_id: status='$status', pid='$pid'"
                     
                     # Handle streams with "expected" status (no PID yet)
                     if [[ "$status" == "expected" ]]; then
                         ((invalid_count++))
                         log_message "Stream $stream_id has expected status but no PID - will be cleaned"
-                    elif [[ -n "$pid" ]] && validate_pid "$pid"; then
+                    elif [[ -n "$pid" ]] && [[ "$pid" != "0" ]] && validate_pid "$pid"; then
                         ((valid_count++))
                         log_message "Stream $stream_id PID $pid is still valid"
                     else
                         ((invalid_count++))
                         log_message "Stream $stream_id PID $pid is invalid - will be cleaned"
                     fi
+                else
+                    ((invalid_count++))
+                    log_message "Stream $stream_id has empty state file - will be cleaned"
                 fi
+            else
+                ((invalid_count++))
+                log_message "Stream $stream_id state file missing - will be cleaned"
             fi
-        done < "$PERSISTENT_STATE_DIR/active_streams.list"
-    fi
+        else
+            log_message "Skipping empty line $line_count"
+        fi
+    done < "$PERSISTENT_STATE_DIR/active_streams.list"
     
+    log_message "Processed $line_count lines from persistent state"
     log_message "PID validation complete: $valid_count valid, $invalid_count invalid"
-    # Don't return error code - let the script continue with restoration
     return 0
+}
+
+# Timeout wrapper function
+run_with_timeout() {
+    local timeout_duration="$1"
+    local function_name="$2"
+    shift 2
+    
+    log_message "Running $function_name with ${timeout_duration}s timeout"
+    
+    # Run function in background
+    "$function_name" "$@" &
+    local func_pid=$!
+    
+    # Wait for completion or timeout
+    local count=0
+    while kill -0 "$func_pid" 2>/dev/null; do
+        if [[ $count -ge $timeout_duration ]]; then
+            log_message "TIMEOUT: $function_name exceeded ${timeout_duration}s - killing process"
+            kill "$func_pid" 2>/dev/null || true
+            wait "$func_pid" 2>/dev/null || true
+            return 1
+        fi
+        sleep 1
+        ((count++))
+    done
+    
+    # Get exit status
+    wait "$func_pid"
+    local exit_status=$?
+    log_message "$function_name completed in ${count}s (exit: $exit_status)"
+    return $exit_status
 }
 
 # Initialize stream management system
 init_stream_system() {
+    log_message "Initializing stream management system"
+    
     # Create both temporary and persistent registry directories
     mkdir -p "$STREAM_REGISTRY_DIR"
     mkdir -p "$PERSISTENT_STATE_DIR/states"
@@ -113,12 +204,29 @@ init_stream_system() {
         clear_persistent_state
     else
         log_message "Internet loss detected - validating existing PIDs"
-        validate_persistent_state
-        restore_valid_streams
+        
+        # Run validation with timeout to prevent hanging
+        if run_with_timeout 30 validate_persistent_state; then
+            log_message "PID validation completed successfully"
+        else
+            log_message "PID validation timed out - clearing persistent state as fallback"
+            clear_persistent_state
+        fi
+        
+        # Run restoration with timeout
+        if run_with_timeout 30 restore_valid_streams; then
+            log_message "Stream restoration completed successfully"
+        else
+            log_message "Stream restoration timed out - continuing with fresh state"
+        fi
     fi
     
     # Clean up any orphaned processes from previous runs
-    cleanup_orphaned_processes
+    if run_with_timeout 15 cleanup_orphaned_processes; then
+        log_message "Orphaned process cleanup completed successfully"
+    else
+        log_message "Orphaned process cleanup timed out - continuing anyway"
+    fi
     
     log_message "Stream management system initialized"
 }
@@ -261,34 +369,64 @@ restore_valid_streams() {
     
     local restored_count=0
     
-    if [[ -f "$PERSISTENT_STATE_DIR/active_streams.list" ]]; then
-        while IFS= read -r stream_id; do
-            if [[ -n "$stream_id" ]]; then
-                local persistent_state_file="$PERSISTENT_STATE_DIR/states/$stream_id.json"
-                if [[ -f "$persistent_state_file" ]]; then
-                    local state_content=$(cat "$persistent_state_file")
+    # Check if persistent state file exists and is not empty
+    if [[ ! -f "$PERSISTENT_STATE_DIR/active_streams.list" ]]; then
+        log_message "No persistent active streams list found - nothing to restore"
+        return 0
+    fi
+    
+    if [[ ! -s "$PERSISTENT_STATE_DIR/active_streams.list" ]]; then
+        log_message "Persistent active streams list is empty - nothing to restore"
+        return 0
+    fi
+    
+    log_message "Reading persistent streams for restoration..."
+    local line_count=0
+    
+    # Use robust file reading approach
+    while IFS= read -r stream_id || [[ -n "$stream_id" ]]; do
+        ((line_count++))
+        log_message "Restoring line $line_count: '$stream_id'"
+        
+        if [[ -n "$stream_id" ]] && [[ "$stream_id" != "" ]]; then
+            local persistent_state_file="$PERSISTENT_STATE_DIR/states/$stream_id.json"
+            if [[ -f "$persistent_state_file" ]]; then
+                local state_content=$(cat "$persistent_state_file" 2>/dev/null)
+                if [[ -n "$state_content" ]]; then
                     local pid=$(parse_json "$state_content" "pid")
                     
-                    if validate_pid "$pid"; then
+                    log_message "Checking stream $stream_id with PID $pid"
+                    
+                    if [[ -n "$pid" ]] && [[ "$pid" != "0" ]] && validate_pid "$pid"; then
                         # Copy to temporary state
                         local temp_state_file=$(get_stream_state_file "$stream_id")
-                        cp "$persistent_state_file" "$temp_state_file"
+                        cp "$persistent_state_file" "$temp_state_file" 2>/dev/null
                         update_stream_registry "$stream_id" "add"
                         ((restored_count++))
                         log_message "Restored stream $stream_id with valid PID $pid"
                     else
                         # Remove invalid persistent state
-                        rm -f "$persistent_state_file"
-                        log_message "Removed invalid persistent state for stream $stream_id"
+                        rm -f "$persistent_state_file" 2>/dev/null
+                        log_message "Removed invalid persistent state for stream $stream_id (PID: $pid)"
                     fi
+                else
+                    log_message "Empty state file for stream $stream_id - removing"
+                    rm -f "$persistent_state_file" 2>/dev/null
                 fi
+            else
+                log_message "State file missing for stream $stream_id"
             fi
-        done < "$PERSISTENT_STATE_DIR/active_streams.list"
-        
-        # Update persistent registry to remove invalid entries
-        if [[ -f "$STREAM_REGISTRY_DIR/active_streams.list" ]]; then
-            cp "$STREAM_REGISTRY_DIR/active_streams.list" "$PERSISTENT_STATE_DIR/active_streams.list"
+        else
+            log_message "Skipping empty restoration line $line_count"
         fi
+    done < "$PERSISTENT_STATE_DIR/active_streams.list"
+    
+    log_message "Processed $line_count lines for restoration"
+    
+    # Update persistent registry to remove invalid entries
+    if [[ -f "$STREAM_REGISTRY_DIR/active_streams.list" ]]; then
+        cp "$STREAM_REGISTRY_DIR/active_streams.list" "$PERSISTENT_STATE_DIR/active_streams.list" 2>/dev/null || true
+        log_message "Updated persistent registry with valid streams"
     fi
     
     log_message "Restored $restored_count valid streams from persistent state"
@@ -756,7 +894,9 @@ main() {
     log_message "Output encoding parameters: $OUTPUT_PARAMS"
     
     # Initialize stream system
+    log_message "About to call init_stream_system..."
     init_stream_system
+    log_message "init_stream_system completed successfully"
     
     # Start SSE listener in background
     sse_listener &
