@@ -25,8 +25,33 @@ LAST_BOOT_TIME_FILE="/var/tmp/last_boot_time"
 # Input options for RTSP
 RTSP_INPUT_PARAMS="-rtsp_transport tcp -fflags +genpts -avoid_negative_ts make_zero"
 
-# Output encoding parameters
-OUTPUT_PARAMS="-c:v libx264 -preset veryfast -b:v 4500k -maxrate 5000k -bufsize 10000k -vf scale=1920:1080 -c:a aac -b:a 128k -ar 44100 -ac 2 -f flv"
+# Base output encoding parameters (video only)
+OUTPUT_PARAMS_VIDEO="-c:v libx264 -preset veryfast -b:v 4500k -maxrate 5000k -bufsize 10000k -vf scale=1920:1080 -f flv"
+
+# Audio encoding parameters (when audio is present)
+OUTPUT_PARAMS_AUDIO="-c:a aac -b:a 128k -ar 44100 -ac 2"
+
+# Silent audio generation parameters (when no audio is detected)
+OUTPUT_PARAMS_SILENT_AUDIO="-f lavfi -i anullsrc=channel_layout=stereo:sample_rate=44100 -c:a aac -b:a 128k -ar 44100 -ac 2 -shortest"
+
+# Function to detect if RTSP stream has audio
+detect_audio_stream() {
+    local rtsp_url="$1"
+    local timeout_duration=10
+    
+    log_message "Detecting audio in stream: ${rtsp_url:0:50}..."
+    
+    # Use ffprobe to check for audio streams with timeout
+    local audio_check=$(timeout $timeout_duration ffprobe -v quiet -select_streams a -show_entries stream=codec_type -of csv=p=0 $RTSP_INPUT_PARAMS -i "$rtsp_url" 2>/dev/null | head -1)
+    
+    if [[ "$audio_check" == "audio" ]]; then
+        log_message "Audio stream detected"
+        return 0  # Audio present
+    else
+        log_message "No audio stream detected"
+        return 1  # No audio
+    fi
+}
 
 # Boot detection functions
 detect_boot_scenario() {
@@ -483,11 +508,23 @@ start_stream() {
     while [[ $retry_count -lt $max_retries ]]; do
         log_message "Stream $stream_id: Attempt $((retry_count + 1))/$max_retries"
         
-        # Execute FFmpeg command with proper parameter order
-        local ffmpeg_cmd="ffmpeg $RTSP_INPUT_PARAMS -i \"$rtsp_url\" $OUTPUT_PARAMS \"$rtmp_url\""
+        # Detect audio and build appropriate FFmpeg command
+        local ffmpeg_cmd=""
+        if detect_audio_stream "$rtsp_url"; then
+            # Stream has audio - use normal encoding
+            local output_params="$OUTPUT_PARAMS_VIDEO $OUTPUT_PARAMS_AUDIO"
+            ffmpeg_cmd="ffmpeg $RTSP_INPUT_PARAMS -i \"$rtsp_url\" $output_params \"$rtmp_url\""
+            log_message "Stream $stream_id: Using video + real audio encoding"
+        else
+            # No audio detected - add silent audio for compatibility
+            ffmpeg_cmd="ffmpeg $RTSP_INPUT_PARAMS -i \"$rtsp_url\" -f lavfi -i anullsrc=channel_layout=stereo:sample_rate=44100 $OUTPUT_PARAMS_VIDEO -c:a aac -b:a 128k -ar 44100 -ac 2 -shortest \"$rtmp_url\""
+            log_message "Stream $stream_id: No audio detected - adding silent audio for streaming compatibility"
+        fi
+        
+        # Execute FFmpeg command
         log_message "Stream $stream_id: Executing FFmpeg command"
         log_message "Stream $stream_id: CMD: $ffmpeg_cmd"
-        ffmpeg $RTSP_INPUT_PARAMS -i "$rtsp_url" $OUTPUT_PARAMS "$rtmp_url" &
+        eval "$ffmpeg_cmd" &
         local ffmpeg_pid=$!
         
         # Function to validate FFmpeg process
@@ -891,7 +928,9 @@ cleanup() {
 main() {
     log_message "Starting multi-stream script with SSE support"
     log_message "RTSP input parameters: $RTSP_INPUT_PARAMS"
-    log_message "Output encoding parameters: $OUTPUT_PARAMS"
+    log_message "Video encoding parameters: $OUTPUT_PARAMS_VIDEO"
+    log_message "Audio encoding parameters: $OUTPUT_PARAMS_AUDIO"
+    log_message "Silent audio parameters: $OUTPUT_PARAMS_SILENT_AUDIO"
     
     # Initialize stream system
     log_message "About to call init_stream_system..."
