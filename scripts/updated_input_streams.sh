@@ -22,8 +22,11 @@ HEALTH_CHECK_INTERVAL=30
 BOOT_MARKER_FILE="/var/tmp/stream_script_boot_marker"
 LAST_BOOT_TIME_FILE="/var/tmp/last_boot_time"
 
-# Default streaming parameters
-FFMPEG_PARAMS="-rtsp_transport tcp -fflags +genpts -avoid_negative_ts make_zero -c:v libx264 -preset veryfast -b:v 4500k -maxrate 5000k -bufsize 10000k -vf scale=1920:1080 -c:a aac -b:a 128k -ar 44100 -ac 2 -f flv"
+# Input options for RTSP
+RTSP_INPUT_PARAMS="-rtsp_transport tcp -fflags +genpts -avoid_negative_ts make_zero"
+
+# Output encoding parameters
+OUTPUT_PARAMS="-c:v libx264 -preset veryfast -b:v 4500k -maxrate 5000k -bufsize 10000k -vf scale=1920:1080 -c:a aac -b:a 128k -ar 44100 -ac 2 -f flv"
 
 # Boot detection functions
 detect_boot_scenario() {
@@ -342,54 +345,35 @@ start_stream() {
     while [[ $retry_count -lt $max_retries ]]; do
         log_message "Stream $stream_id: Attempt $((retry_count + 1))/$max_retries"
         
-        # Try primary FFmpeg command first
-        local primary_cmd="ffmpeg $FFMPEG_PARAMS -i \"$rtsp_url\" \"$rtmp_url\""
-        log_message "Stream $stream_id: Trying primary command"
-        log_message "Stream $stream_id: PRIMARY CMD: $primary_cmd"
-        ffmpeg $FFMPEG_PARAMS -i "$rtsp_url" "$rtmp_url" &
+        # Execute FFmpeg command with proper parameter order
+        local ffmpeg_cmd="ffmpeg $RTSP_INPUT_PARAMS -i \"$rtsp_url\" $OUTPUT_PARAMS \"$rtmp_url\""
+        log_message "Stream $stream_id: Executing FFmpeg command"
+        log_message "Stream $stream_id: CMD: $ffmpeg_cmd"
+        ffmpeg $RTSP_INPUT_PARAMS -i "$rtsp_url" $OUTPUT_PARAMS "$rtmp_url" &
         local ffmpeg_pid=$!
         
         # Function to validate FFmpeg process
         validate_ffmpeg_process() {
             local pid=$1
             # Wait a moment for FFmpeg to initialize
-            sleep 1
+            sleep 3
             
             # Check if FFmpeg process is still running
             if kill -0 "$pid" 2>/dev/null; then
-                # Additional validation - wait a bit more and check again
-                sleep 2
-                if kill -0 "$pid" 2>/dev/null; then
-                    return 0  # Success
-                fi
+                return 0  # Success
             fi
             return 1  # Failed
         }
         
-        # Validate primary command
+        # Validate command
         if validate_ffmpeg_process "$ffmpeg_pid"; then
             create_stream_state "$stream_id" "$rtsp_url" "$rtmp_url" "$ffmpeg_pid" "running"
             update_stream_registry "$stream_id" "add"
-            log_message "Stream $stream_id started successfully with PID $ffmpeg_pid (primary command)"
+            log_message "Stream $stream_id started successfully with PID $ffmpeg_pid"
             return 0
         fi
         
-        # Primary command failed, try with silent audio fallback
-        local fallback_cmd="ffmpeg -rtsp_transport tcp -fflags +genpts -avoid_negative_ts make_zero -i \"$rtsp_url\" -f lavfi -i anullsrc=channel_layout=stereo:sample_rate=44100 -c:v libx264 -preset veryfast -b:v 4500k -maxrate 5000k -bufsize 10000k -vf scale=1920:1080 -c:a aac -b:a 128k -ar 44100 -ac 2 -map 0:v:0 -map 1:a:0 -shortest -f flv \"$rtmp_url\""
-        log_message "Stream $stream_id: Primary command failed, trying with silent audio fallback"
-        log_message "Stream $stream_id: FALLBACK CMD: $fallback_cmd"
-        ffmpeg -rtsp_transport tcp -fflags +genpts -avoid_negative_ts make_zero -i "$rtsp_url" -f lavfi -i anullsrc=channel_layout=stereo:sample_rate=44100 -c:v libx264 -preset veryfast -b:v 4500k -maxrate 5000k -bufsize 10000k -vf scale=1920:1080 -c:a aac -b:a 128k -ar 44100 -ac 2 -map 0:v:0 -map 1:a:0 -shortest -f flv "$rtmp_url" &
-        ffmpeg_pid=$!
-        
-        # Validate fallback command
-        if validate_ffmpeg_process "$ffmpeg_pid"; then
-            create_stream_state "$stream_id" "$rtsp_url" "$rtmp_url" "$ffmpeg_pid" "running"
-            update_stream_registry "$stream_id" "add"
-            log_message "Stream $stream_id started successfully with PID $ffmpeg_pid (fallback command)"
-            return 0
-        fi
-        
-        log_message "Stream $stream_id: Both primary and fallback commands failed"
+        log_message "Stream $stream_id: FFmpeg command failed"
         
         # FFmpeg failed - increment retry count
         retry_count=$((retry_count + 1))
@@ -768,7 +752,8 @@ cleanup() {
 # Main function with multi-stream support
 main() {
     log_message "Starting multi-stream script with SSE support"
-    log_message "Base FFmpeg parameters: $FFMPEG_PARAMS"
+    log_message "RTSP input parameters: $RTSP_INPUT_PARAMS"
+    log_message "Output encoding parameters: $OUTPUT_PARAMS"
     
     # Initialize stream system
     init_stream_system
