@@ -3,27 +3,17 @@ declare class StreamManagerApp {
     private logger;
     private config;
     private streamManager;
-    private sseClient;
     private healthMonitor;
     private performanceOptimizer;
     private resourceMonitor;
+    private sseClient;
     private systemOptimizer;
     private isShuttingDown;
     constructor();
+    private setupEventHandlers;
     start(): Promise<void>;
-    private setupSSEClient;
-    private setupResourceMonitoring;
-    private handleCriticalMemory;
-    private handleCriticalCpu;
-    private handleCriticalTemperature;
-    private handleCriticalDisk;
-    private recoverStreams;
-    private detectBootRecovery;
-    private restartAllStreams;
-    private stopAllStreams;
-    private setupSignalHandlers;
-    private shutdown;
-    private sleep;
+    shutdown(): Promise<void>;
+    getStatus(): any;
 }
 export { StreamManagerApp };
 //# sourceMappingURL=index.d.ts.map

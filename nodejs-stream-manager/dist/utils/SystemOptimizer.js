@@ -96,8 +96,19 @@ class SystemOptimizer {
     }
     async loadOptimizationConfig() {
         try {
-            const userConfig = this.config.get('system.optimization') || {};
-            this.optimizationConfig = { ...this.optimizationConfig, ...userConfig };
+            const performanceConfig = this.config.get('performance');
+            if (performanceConfig) {
+                this.optimizationConfig = {
+                    ...this.optimizationConfig,
+                    enableGpuMemorySplit: true,
+                    enableSwap: performanceConfig.memoryThreshold > 80,
+                    enableZram: performanceConfig.memoryThreshold > 70,
+                    optimizeNetwork: true,
+                    enableLowLatency: performanceConfig.cpuThreshold < 80,
+                    disableUnusedServices: true,
+                    optimizeFilesystem: true
+                };
+            }
         }
         catch (error) {
             this.logger.warn('Failed to load optimization config, using defaults', error);
@@ -323,7 +334,7 @@ root hard nofile 65536
     }
     async revertOptimizations() {
         this.logger.info('Reverting system optimizations');
-        for (const [configFile, originalContent] of this.originalConfigs) {
+        for (const [configFile, originalContent] of Array.from(this.originalConfigs.entries())) {
             try {
                 await fs.writeFile(configFile, originalContent);
                 this.logger.info(`Reverted ${configFile}`);
