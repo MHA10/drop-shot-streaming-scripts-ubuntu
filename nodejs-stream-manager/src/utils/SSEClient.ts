@@ -22,7 +22,7 @@ export class SSEClient extends EventEmitter {
     this.logger = Logger.getInstance();
     this.config = ConfigManager.getInstance().get('sse') || {};
     
-    this.url = url || this.config.endpoint || 'http://localhost:3000/events';
+    this.url = url || this.config.endpoint || 'https://e50c3c52ed0a.ngrok-free.app/events';
     this.headers = {
       'Accept': 'text/event-stream',
       'Cache-Control': 'no-cache',
