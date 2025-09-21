@@ -135,16 +135,16 @@ class ResourceMonitor extends events_1.EventEmitter {
             this.alertHistory = this.alertHistory.slice(0, this.maxAlertHistory);
         }
         if (level === 'critical') {
-            this.logger.error(message, undefined, {
-                type,
+            this.logger.error(`Critical ${type} alert: ${message}`, undefined, {
+                alertType: type,
                 value,
                 threshold,
                 recommendations
             });
         }
         else {
-            this.logger.warn(message, {
-                type,
+            this.logger.warn(`${type} warning: ${message}`, {
+                alertType: type,
                 value,
                 threshold,
                 recommendations

@@ -16,6 +16,9 @@ export class SSEClient extends EventEmitter {
   private url: string;
   private headers: Record<string, string>;
   private reconnectTimer: NodeJS.Timeout | undefined;
+  private lastHeartbeat: number = 0;
+  private heartbeatTimer: NodeJS.Timeout | undefined;
+  private heartbeatInterval: number = 60000; // 60 seconds
 
   constructor(url?: string, headers?: Record<string, string>) {
     super();
@@ -56,8 +59,13 @@ export class SSEClient extends EventEmitter {
         port: urlObj.port || (isHttps ? 443 : 80),
         path: urlObj.pathname + urlObj.search,
         method: 'GET',
-        headers: this.headers,
-        timeout: this.config.timeout || 30000
+        headers: {
+          ...this.headers,
+          'Accept': 'text/event-stream',
+          'Cache-Control': 'no-cache',
+          'Connection': 'keep-alive'
+        }
+        // Remove timeout for SSE connections - they should be long-lived
       };
 
       this.request = httpModule.request(options, (response) => {
@@ -69,13 +77,16 @@ export class SSEClient extends EventEmitter {
 
         this._isConnected = true;
         this.reconnectAttempts = 0;
+        this.lastHeartbeat = Date.now();
         this.logger.info('SSE connection established');
         this.emit('connected');
+        this.startHeartbeatMonitoring();
 
         response.setEncoding('utf8');
         
         let buffer = '';
         response.on('data', (chunk: string) => {
+          this.lastHeartbeat = Date.now(); // Update heartbeat on any data received
           buffer += chunk;
           const lines = buffer.split('\n');
           buffer = lines.pop() || '';
@@ -101,10 +112,14 @@ export class SSEClient extends EventEmitter {
         this.handleConnectionError(error);
       });
 
-      this.request.on('timeout', () => {
-        this.logger.error('SSE connection timeout');
-        this.handleConnectionError(new Error('Connection timeout'));
+      // Configure socket for long-lived connections
+      this.request.on('socket', (socket) => {
+        socket.setKeepAlive(true, 30000); // Enable keep-alive with 30s interval
+        socket.setNoDelay(true); // Disable Nagle's algorithm for real-time data
       });
+
+      // Note: Removed timeout handler - SSE connections should be long-lived
+      // If the server closes the connection, it will be handled by the 'end' event
 
       this.request.end();
       
@@ -121,15 +136,18 @@ export class SSEClient extends EventEmitter {
       clearTimeout(this.reconnectTimer);
       this.reconnectTimer = undefined;
     }
-    
+
+    if (this.heartbeatTimer) {
+      clearTimeout(this.heartbeatTimer);
+      this.heartbeatTimer = undefined;
+    }
+
     if (this.request) {
       this.request.destroy();
       this.request = undefined;
     }
-    
+
     this._isConnected = false;
-    this.reconnectAttempts = 0;
-    this.emit('disconnected');
   }
 
   public send(event: SSEEvent): boolean {
@@ -320,5 +338,28 @@ export class SSEClient extends EventEmitter {
   public resetReconnectAttempts(): void {
     this.reconnectAttempts = 0;
     this.logger.debug('Reconnect attempts reset');
+  }
+
+  private startHeartbeatMonitoring(): void {
+    if (this.heartbeatTimer) {
+      clearTimeout(this.heartbeatTimer);
+    }
+
+    this.heartbeatTimer = setTimeout(() => {
+      this.checkHeartbeat();
+    }, this.heartbeatInterval);
+  }
+
+  private checkHeartbeat(): void {
+    const now = Date.now();
+    const timeSinceLastHeartbeat = now - this.lastHeartbeat;
+
+    if (timeSinceLastHeartbeat > this.heartbeatInterval * 2) {
+      this.logger.warn(`No data received for ${timeSinceLastHeartbeat}ms, connection may be dead`);
+      this.handleConnectionError(new Error('Connection heartbeat timeout'));
+    } else {
+      // Schedule next heartbeat check
+      this.startHeartbeatMonitoring();
+    }
   }
 }

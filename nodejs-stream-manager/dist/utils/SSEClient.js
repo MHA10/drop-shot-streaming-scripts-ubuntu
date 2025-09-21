@@ -46,9 +46,11 @@ class SSEClient extends events_1.EventEmitter {
         this.reconnectAttempts = 0;
         this.maxReconnectAttempts = 10;
         this.reconnectDelay = 1000;
+        this.lastHeartbeat = 0;
+        this.heartbeatInterval = 60000;
         this.logger = Logger_1.Logger.getInstance();
         this.config = ConfigManager_1.ConfigManager.getInstance().get('sse') || {};
-        this.url = url || this.config.endpoint || 'https://e50c3c52ed0a.ngrok-free.app/events';
+        this.url = url || this.config.endpoint || 'https://249a01d95654.ngrok-free.app/events';
         this.headers = {
             'Accept': 'text/event-stream',
             'Cache-Control': 'no-cache',
@@ -76,8 +78,12 @@ class SSEClient extends events_1.EventEmitter {
                 port: urlObj.port || (isHttps ? 443 : 80),
                 path: urlObj.pathname + urlObj.search,
                 method: 'GET',
-                headers: this.headers,
-                timeout: this.config.timeout || 30000
+                headers: {
+                    ...this.headers,
+                    'Accept': 'text/event-stream',
+                    'Cache-Control': 'no-cache',
+                    'Connection': 'keep-alive'
+                }
             };
             this.request = httpModule.request(options, (response) => {
                 if (response.statusCode !== 200) {
@@ -87,11 +93,14 @@ class SSEClient extends events_1.EventEmitter {
                 }
                 this._isConnected = true;
                 this.reconnectAttempts = 0;
+                this.lastHeartbeat = Date.now();
                 this.logger.info('SSE connection established');
                 this.emit('connected');
+                this.startHeartbeatMonitoring();
                 response.setEncoding('utf8');
                 let buffer = '';
                 response.on('data', (chunk) => {
+                    this.lastHeartbeat = Date.now();
                     buffer += chunk;
                     const lines = buffer.split('\n');
                     buffer = lines.pop() || '';
@@ -112,9 +121,9 @@ class SSEClient extends events_1.EventEmitter {
                 this.logger.error('SSE request error', error);
                 this.handleConnectionError(error);
             });
-            this.request.on('timeout', () => {
-                this.logger.error('SSE connection timeout');
-                this.handleConnectionError(new Error('Connection timeout'));
+            this.request.on('socket', (socket) => {
+                socket.setKeepAlive(true, 30000);
+                socket.setNoDelay(true);
             });
             this.request.end();
         }
@@ -129,13 +138,15 @@ class SSEClient extends events_1.EventEmitter {
             clearTimeout(this.reconnectTimer);
             this.reconnectTimer = undefined;
         }
+        if (this.heartbeatTimer) {
+            clearTimeout(this.heartbeatTimer);
+            this.heartbeatTimer = undefined;
+        }
         if (this.request) {
             this.request.destroy();
             this.request = undefined;
         }
         this._isConnected = false;
-        this.reconnectAttempts = 0;
-        this.emit('disconnected');
     }
     send(event) {
         this.logger.warn('SSE is typically unidirectional. Consider using a different protocol for client-to-server communication.');
@@ -285,6 +296,25 @@ class SSEClient extends events_1.EventEmitter {
     resetReconnectAttempts() {
         this.reconnectAttempts = 0;
         this.logger.debug('Reconnect attempts reset');
+    }
+    startHeartbeatMonitoring() {
+        if (this.heartbeatTimer) {
+            clearTimeout(this.heartbeatTimer);
+        }
+        this.heartbeatTimer = setTimeout(() => {
+            this.checkHeartbeat();
+        }, this.heartbeatInterval);
+    }
+    checkHeartbeat() {
+        const now = Date.now();
+        const timeSinceLastHeartbeat = now - this.lastHeartbeat;
+        if (timeSinceLastHeartbeat > this.heartbeatInterval * 2) {
+            this.logger.warn(`No data received for ${timeSinceLastHeartbeat}ms, connection may be dead`);
+            this.handleConnectionError(new Error('Connection heartbeat timeout'));
+        }
+        else {
+            this.startHeartbeatMonitoring();
+        }
     }
 }
 exports.SSEClient = SSEClient;

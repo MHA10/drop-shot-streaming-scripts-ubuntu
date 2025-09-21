@@ -242,18 +242,18 @@ export class ResourceMonitor extends EventEmitter {
 
     // Log the alert
     if (level === 'critical') {
-      this.logger.error(message, undefined, { 
-        type, 
-        value, 
-        threshold, 
-        recommendations 
+      this.logger.error(`Critical ${type} alert: ${message}`, undefined, {
+        alertType: type,
+        value,
+        threshold,
+        recommendations
       });
     } else {
-      this.logger.warn(message, { 
-        type, 
-        value, 
-        threshold, 
-        recommendations 
+      this.logger.warn(`${type} warning: ${message}`, {
+        alertType: type,
+        value,
+        threshold,
+        recommendations
       });
     }
 

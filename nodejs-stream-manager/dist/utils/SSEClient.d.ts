@@ -11,6 +11,9 @@ export declare class SSEClient extends EventEmitter {
     private url;
     private headers;
     private reconnectTimer;
+    private lastHeartbeat;
+    private heartbeatTimer;
+    private heartbeatInterval;
     constructor(url?: string, headers?: Record<string, string>);
     get isConnected(): boolean;
     connect(): void;
@@ -31,5 +34,7 @@ export declare class SSEClient extends EventEmitter {
     setMaxReconnectAttempts(attempts: number): void;
     setReconnectDelay(delay: number): void;
     resetReconnectAttempts(): void;
+    private startHeartbeatMonitoring;
+    private checkHeartbeat;
 }
 //# sourceMappingURL=SSEClient.d.ts.map
