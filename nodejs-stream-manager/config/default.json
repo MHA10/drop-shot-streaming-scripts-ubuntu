@@ -1,6 +1,6 @@
 {
   "server": {
-    "sseUrl": "http://localhost:3000/events",
+    "sseUrl": "https://e50c3c52ed0a.ngrok-free.app/events",
     "reconnectInterval": 5000,
     "healthCheckInterval": 30000
   },
