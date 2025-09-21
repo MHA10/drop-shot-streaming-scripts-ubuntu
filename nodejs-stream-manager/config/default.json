@@ -1,6 +1,6 @@
 {
   "server": {
-    "sseUrl": "https://e50c3c52ed0a.ngrok-free.app/events",
+    "sseUrl": "https://249a01d95654.ngrok-free.app/events",
     "reconnectInterval": 5000,
     "healthCheckInterval": 30000
   },
