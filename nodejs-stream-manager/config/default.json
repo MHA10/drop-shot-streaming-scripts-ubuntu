@@ -1,0 +1,47 @@
+{
+  "server": {
+    "sseUrl": "http://localhost:3000/events",
+    "reconnectInterval": 5000,
+    "healthCheckInterval": 30000
+  },
+  "streaming": {
+    "rtspTransport": "tcp",
+    "maxRetries": 5,
+    "retryBackoffMs": 2000,
+    "processTimeoutMs": 10000,
+    "videoParams": {
+      "codec": "libx264",
+      "bitrate": "2000k",
+      "resolution": "1920x1080",
+      "framerate": "30",
+      "keyframeInterval": "60",
+      "preset": "veryfast"
+    },
+    "audioParams": {
+      "codec": "aac",
+      "bitrate": "128k",
+      "sampleRate": "44100",
+      "channels": "2"
+    },
+    "silentAudioParams": {
+      "source": "anullsrc=channel_layout=stereo:sample_rate=44100",
+      "format": "lavfi"
+    }
+  },
+  "paths": {
+    "stateFile": "/var/tmp/stream_registry",
+    "logFile": "/tmp/stream_manager.log",
+    "pidDir": "/tmp/stream_pids"
+  },
+  "performance": {
+    "maxConcurrentStreams": 4,
+    "memoryLimitMB": 512,
+    "cpuThresholdPercent": 80
+  },
+  "logging": {
+    "level": "info",
+    "maxFiles": "7d",
+    "maxSize": "20m",
+    "datePattern": "YYYY-MM-DD"
+  }
+}
