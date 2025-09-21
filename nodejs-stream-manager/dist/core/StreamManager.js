@@ -115,7 +115,7 @@ class StreamManager {
                 if (!isValid) {
                     this.logger.warn('Stream process not found, attempting recovery', {
                         streamId: stream.id,
-                        pid: stream.pid
+                        pid: stream.pid ?? -1
                     });
                     const retryCount = this.stateManager.incrementRetryCount(stream.id);
                     const maxRetries = this.config.streaming.maxRetries;
@@ -219,7 +219,7 @@ class StreamManager {
     }
     cleanup() {
         this.logger.info('Cleaning up StreamManager');
-        this.processManager.cleanup();
+        this.processManager.cleanupAll();
         this.stateManager.cleanup();
     }
 }

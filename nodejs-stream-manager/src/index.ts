@@ -76,6 +76,9 @@ class StreamManagerApp {
         case "stop":
           this.streamManager.stopStream(event.data.streamId);
           break;
+        case "restart":
+          this.streamManager.restartStream(event.data.streamId);
+          break;
         default:
           this.logger.warn(`Unknown SSE event type: ${event.eventType}`);
       }

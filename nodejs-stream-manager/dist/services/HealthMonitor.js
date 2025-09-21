@@ -106,7 +106,7 @@ class HealthMonitor {
     async getCpuInfo() {
         const loadAverage = os.loadavg();
         const cpuCount = os.cpus().length;
-        const usage = Math.min((loadAverage[0] / cpuCount) * 100, 100);
+        const usage = Math.min(((loadAverage[0] ?? 0) / cpuCount) * 100, 100);
         let temperature;
         try {
             const tempData = await fs.readFile('/sys/class/thermal/thermal_zone0/temp', 'utf8');
@@ -114,11 +114,14 @@ class HealthMonitor {
         }
         catch (error) {
         }
-        return {
+        const result = {
             usage: Math.round(usage * 100) / 100,
-            temperature,
             loadAverage
         };
+        if (temperature !== undefined) {
+            result.temperature = temperature;
+        }
+        return result;
     }
     getMemoryInfo() {
         const total = os.totalmem();
@@ -136,7 +139,7 @@ class HealthMonitor {
         try {
             const { stdout } = await execAsync('df -h / | tail -1');
             const parts = stdout.trim().split(/\s+/);
-            if (parts.length >= 6) {
+            if (parts.length >= 6 && parts[1] && parts[2] && parts[3] && parts[4]) {
                 const total = this.parseSize(parts[1]);
                 const used = this.parseSize(parts[2]);
                 const free = this.parseSize(parts[3]);
@@ -157,7 +160,7 @@ class HealthMonitor {
             'T': 1024 * 1024 * 1024 * 1024
         };
         const match = sizeStr.match(/^(\d+(?:\.\d+)?)([KMGT]?)$/);
-        if (!match)
+        if (!match || !match[1])
             return 0;
         const value = parseFloat(match[1]);
         const unit = match[2] || '';
@@ -167,7 +170,7 @@ class HealthMonitor {
         const interfaces = os.networkInterfaces();
         const networkInterfaces = [];
         for (const [name, addresses] of Object.entries(interfaces)) {
-            if (addresses) {
+            if (addresses && Array.isArray(addresses)) {
                 for (const addr of addresses) {
                     networkInterfaces.push({
                         name,
@@ -202,10 +205,10 @@ class HealthMonitor {
                 threshold: thresholds.memoryThreshold
             });
         }
-        if (health.cpu.temperature && health.cpu.temperature > thresholds.cpuTempThreshold) {
+        if (health.cpu.temperature && health.cpu.temperature > thresholds.temperatureThreshold) {
             this.logger.warn('High CPU temperature detected', {
                 temperature: health.cpu.temperature,
-                threshold: thresholds.cpuTempThreshold
+                threshold: thresholds.temperatureThreshold
             });
         }
         if (health.disk.percentage > thresholds.diskThreshold) {

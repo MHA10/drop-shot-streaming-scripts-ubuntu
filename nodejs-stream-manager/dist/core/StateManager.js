@@ -159,7 +159,7 @@ class StateManager {
             const newRetryCount = (state.retryCount || 0) + 1;
             this.setStreamState(streamId, {
                 retryCount: newRetryCount,
-                lastHealthCheck: Date.now()
+                lastHealthCheck: new Date()
             });
             return newRetryCount;
         }
@@ -169,12 +169,12 @@ class StateManager {
         this.setStreamState(streamId, { retryCount: 0 });
     }
     updateHealthCheck(streamId) {
-        this.setStreamState(streamId, { lastHealthCheck: Date.now() });
+        this.setStreamState(streamId, { lastHealthCheck: new Date() });
     }
     getStreamsNeedingHealthCheck(intervalMs) {
         const now = Date.now();
         return this.getActiveStreams().filter(state => {
-            const lastCheck = state.lastHealthCheck || 0;
+            const lastCheck = state.lastHealthCheck ? state.lastHealthCheck.getTime() : 0;
             return (now - lastCheck) > intervalMs;
         });
     }
@@ -182,31 +182,27 @@ class StateManager {
         this.setStreamState(streamId, {
             status: 'active',
             pid,
-            startTime: Date.now(),
-            lastHealthCheck: Date.now(),
-            errorMessage: undefined
+            startTime: new Date(),
+            lastHealthCheck: new Date()
         });
     }
     markStreamAsFailed(streamId, errorMessage) {
         this.setStreamState(streamId, {
             status: 'failed',
-            pid: undefined,
             errorMessage,
-            lastHealthCheck: Date.now()
+            lastHealthCheck: new Date()
         });
     }
     markStreamAsRetrying(streamId) {
         this.setStreamState(streamId, {
             status: 'retrying',
-            lastHealthCheck: Date.now()
+            lastHealthCheck: new Date()
         });
     }
     markStreamAsInactive(streamId) {
         this.setStreamState(streamId, {
             status: 'inactive',
-            pid: undefined,
-            startTime: undefined,
-            lastHealthCheck: Date.now()
+            lastHealthCheck: new Date()
         });
     }
     getStreamStats() {

@@ -42,8 +42,8 @@ class SSEClient {
                 this.eventSource.onmessage = (event) => {
                     this.handleMessage(event);
                 };
-                this.eventSource.onerror = (error) => {
-                    this.logger.error('SSE connection error', error);
+                this.eventSource.onerror = (event) => {
+                    this.logger.error('SSE connection error', new Error('EventSource error occurred'));
                     this.isConnected = false;
                     if (this.reconnectAttempts === 0) {
                         reject(new Error('Failed to establish SSE connection'));
@@ -216,11 +216,14 @@ class SSEClient {
         });
     }
     getConnectionStatus() {
-        return {
+        const status = {
             connected: this.isConnected,
-            reconnectAttempts: this.reconnectAttempts,
-            readyState: this.eventSource?.readyState
+            reconnectAttempts: this.reconnectAttempts
         };
+        if (this.eventSource) {
+            status.readyState = this.eventSource.readyState;
+        }
+        return status;
     }
     disconnect() {
         if (this.eventSource) {

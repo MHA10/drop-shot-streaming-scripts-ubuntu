@@ -7,7 +7,7 @@ export class HealthMonitor {
   private logger: Logger;
   private isRunning: boolean = false;
   private checkInterval: number = 30000; // 30 seconds
-  private intervalId?: NodeJS.Timeout;
+  private intervalId?: NodeJS.Timeout | undefined;
   private lastHealthCheck: Date = new Date();
 
   constructor(logger: Logger) {
@@ -97,10 +97,12 @@ export class HealthMonitor {
     const diskInfo = this.getDiskInfo();
     const networkInfo = this.getNetworkInfo();
 
+    const temperature = this.getCpuTemperature();
+    
     return {
       cpu: {
         usage: cpuUsage,
-        temperature: this.getCpuTemperature()
+        ...(temperature !== undefined && { temperature })
       },
       memory: memoryInfo,
       disk: diskInfo,

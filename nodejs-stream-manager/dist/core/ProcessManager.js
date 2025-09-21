@@ -156,7 +156,10 @@ class ProcessManager {
             this.cleanup(streamId);
         });
         process.on('error', (error) => {
-            this.logger.error('Process error', error, { streamId, pid: process.pid });
+            this.logger.error('Process error', error, {
+                streamId,
+                ...(process.pid && { pid: process.pid })
+            });
             const info = this.processInfo.get(streamId);
             if (info) {
                 info.status = 'failed';
@@ -171,19 +174,27 @@ class ProcessManager {
             this.logger.warn('Stream not found for stopping', { streamId });
             return false;
         }
-        this.logger.stream(streamId, 'Stopping stream', { pid: process.pid });
+        this.logger.stream(streamId, 'Stopping stream', {
+            ...(process.pid && { pid: process.pid })
+        });
         try {
             process.kill('SIGTERM');
             setTimeout(() => {
                 if (!process.killed) {
-                    this.logger.warn('Force killing stream process', { streamId, pid: process.pid });
+                    this.logger.warn('Force killing stream process', {
+                        streamId,
+                        ...(process.pid && { pid: process.pid })
+                    });
                     process.kill('SIGKILL');
                 }
             }, this.config.streaming.processTimeoutMs);
             return true;
         }
         catch (error) {
-            this.logger.error('Failed to stop stream', error, { streamId, pid: process.pid });
+            this.logger.error('Failed to stop stream', error, {
+                streamId,
+                ...(process.pid && { pid: process.pid })
+            });
             return false;
         }
     }
@@ -239,7 +250,7 @@ class ProcessManager {
             this.logger.error('Failed to remove PID file', error, { streamId });
         }
     }
-    cleanup() {
+    cleanupAll() {
         this.logger.info('Cleaning up all processes');
         for (const [streamId, process] of this.processes) {
             if (!process.killed) {

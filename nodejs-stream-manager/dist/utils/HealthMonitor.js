@@ -109,10 +109,11 @@ class HealthMonitor {
         const memoryInfo = this.getMemoryInfo();
         const diskInfo = this.getDiskInfo();
         const networkInfo = this.getNetworkInfo();
+        const temperature = this.getCpuTemperature();
         return {
             cpu: {
                 usage: cpuUsage,
-                temperature: this.getCpuTemperature()
+                ...(temperature !== undefined && { temperature })
             },
             memory: memoryInfo,
             disk: diskInfo,

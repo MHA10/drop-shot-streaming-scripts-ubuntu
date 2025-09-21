@@ -75,13 +75,11 @@ class ConfigManager {
                 videoParams: {
                     ...config.streaming.videoParams,
                     bitrate: process.env.VIDEO_BITRATE || config.streaming.videoParams.bitrate,
-                    resolution: process.env.VIDEO_RESOLUTION || config.streaming.videoParams.resolution,
-                    framerate: process.env.VIDEO_FRAMERATE || config.streaming.videoParams.framerate,
                 },
                 audioParams: {
                     ...config.streaming.audioParams,
                     bitrate: process.env.AUDIO_BITRATE || config.streaming.audioParams.bitrate,
-                    sampleRate: process.env.AUDIO_SAMPLE_RATE || config.streaming.audioParams.sampleRate,
+                    sampleRate: parseInt(process.env.AUDIO_SAMPLE_RATE || '') || config.streaming.audioParams.sampleRate,
                 },
             },
             paths: {
@@ -92,9 +90,19 @@ class ConfigManager {
             },
             performance: {
                 ...config.performance,
-                maxConcurrentStreams: parseInt(process.env.MAX_CONCURRENT_STREAMS || '') || config.performance.maxConcurrentStreams,
-                memoryLimitMB: parseInt(process.env.MEMORY_LIMIT_MB || '') || config.performance.memoryLimitMB,
-                cpuThresholdPercent: parseInt(process.env.CPU_THRESHOLD_PERCENT || '') || config.performance.cpuThresholdPercent,
+                ...(process.env.MAX_CONCURRENT_STREAMS && !isNaN(parseInt(process.env.MAX_CONCURRENT_STREAMS)) && { maxConcurrentStreams: parseInt(process.env.MAX_CONCURRENT_STREAMS) }),
+                ...(process.env.MEMORY_LIMIT_MB && !isNaN(parseInt(process.env.MEMORY_LIMIT_MB)) && { memoryLimitMB: parseInt(process.env.MEMORY_LIMIT_MB) }),
+                ...(process.env.CPU_THRESHOLD_PERCENT && !isNaN(parseInt(process.env.CPU_THRESHOLD_PERCENT)) && { cpuThresholdPercent: parseInt(process.env.CPU_THRESHOLD_PERCENT) }),
+            },
+            monitoring: {
+                enabled: process.env.MONITORING_ENABLED === 'true' || config.monitoring?.enabled || true,
+                ...(process.env.MONITORING_INTERVAL && !isNaN(parseInt(process.env.MONITORING_INTERVAL)) ? { interval: parseInt(process.env.MONITORING_INTERVAL) } : config.monitoring?.interval ? { interval: config.monitoring.interval } : { interval: 30000 }),
+                alertThresholds: {
+                    ...(process.env.MONITORING_CPU_THRESHOLD && !isNaN(parseInt(process.env.MONITORING_CPU_THRESHOLD)) ? { cpu: parseInt(process.env.MONITORING_CPU_THRESHOLD) } : config.monitoring?.alertThresholds?.cpu ? { cpu: config.monitoring.alertThresholds.cpu } : { cpu: 80 }),
+                    ...(process.env.MONITORING_MEMORY_THRESHOLD && !isNaN(parseInt(process.env.MONITORING_MEMORY_THRESHOLD)) ? { memory: parseInt(process.env.MONITORING_MEMORY_THRESHOLD) } : config.monitoring?.alertThresholds?.memory ? { memory: config.monitoring.alertThresholds.memory } : { memory: 85 }),
+                    ...(process.env.MONITORING_DISK_THRESHOLD && !isNaN(parseInt(process.env.MONITORING_DISK_THRESHOLD)) ? { disk: parseInt(process.env.MONITORING_DISK_THRESHOLD) } : config.monitoring?.alertThresholds?.disk ? { disk: config.monitoring.alertThresholds.disk } : { disk: 90 }),
+                    ...(process.env.MONITORING_TEMP_THRESHOLD && !isNaN(parseInt(process.env.MONITORING_TEMP_THRESHOLD)) ? { temperature: parseInt(process.env.MONITORING_TEMP_THRESHOLD) } : config.monitoring?.alertThresholds?.temperature ? { temperature: config.monitoring.alertThresholds.temperature } : { temperature: 70 }),
+                },
             },
         };
     }

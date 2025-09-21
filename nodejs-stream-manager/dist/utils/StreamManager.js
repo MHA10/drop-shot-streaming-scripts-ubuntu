@@ -11,7 +11,7 @@ const child_process_1 = require("child_process");
 class StreamManager {
     constructor() {
         this.logger = Logger_1.Logger.getInstance();
-        this.config = ConfigManager_1.ConfigManager.getInstance().get('server');
+        this.config = ConfigManager_1.ConfigManager.getInstance().getConfig();
         this.healthMonitor = new HealthMonitor_1.HealthMonitor(this.logger);
         this.performanceOptimizer = new PerformanceOptimizer_1.PerformanceOptimizer();
         this.resourceMonitor = new ResourceMonitor_1.ResourceMonitor();
@@ -118,6 +118,10 @@ class StreamManager {
         }
         this.logger.info(`Restarting stream ${streamId}`);
         const { rtspUrl, rtmpUrl } = streamState;
+        if (!rtspUrl || !rtmpUrl) {
+            this.logger.error(`Cannot restart stream ${streamId}: missing rtspUrl or rtmpUrl`);
+            return false;
+        }
         await this.stopStream(streamId);
         await new Promise(resolve => setTimeout(resolve, 1000));
         return this.startStream(streamId, rtspUrl, rtmpUrl);

@@ -48,8 +48,8 @@ export class SSEClient {
           this.handleMessage(event);
         };
 
-        this.eventSource.onerror = (error) => {
-          this.logger.error('SSE connection error', error as Error);
+        this.eventSource.onerror = (event) => {
+          this.logger.error('SSE connection error', new Error('EventSource error occurred'));
           this.isConnected = false;
           
           if (this.reconnectAttempts === 0) {
@@ -263,11 +263,20 @@ export class SSEClient {
     reconnectAttempts: number;
     readyState?: number;
   } {
-    return {
+    const status: {
+      connected: boolean;
+      reconnectAttempts: number;
+      readyState?: number;
+    } = {
       connected: this.isConnected,
-      reconnectAttempts: this.reconnectAttempts,
-      readyState: this.eventSource?.readyState
+      reconnectAttempts: this.reconnectAttempts
     };
+
+    if (this.eventSource) {
+      status.readyState = this.eventSource.readyState;
+    }
+
+    return status;
   }
 
   public disconnect(): void {

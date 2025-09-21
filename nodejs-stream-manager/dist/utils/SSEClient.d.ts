@@ -4,13 +4,13 @@ export declare class SSEClient extends EventEmitter {
     private logger;
     private config;
     private _isConnected;
-    private request?;
+    private request;
     private reconnectAttempts;
     private maxReconnectAttempts;
     private reconnectDelay;
     private url;
     private headers;
-    private reconnectTimer?;
+    private reconnectTimer;
     constructor(url?: string, headers?: Record<string, string>);
     get isConnected(): boolean;
     connect(): void;

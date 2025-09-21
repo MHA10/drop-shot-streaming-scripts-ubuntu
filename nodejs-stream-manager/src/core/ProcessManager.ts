@@ -164,7 +164,10 @@ export class ProcessManager {
     });
 
     process.on('error', (error) => {
-      this.logger.error('Process error', error, { streamId, pid: process.pid });
+      this.logger.error('Process error', error, { 
+        streamId, 
+        ...(process.pid && { pid: process.pid })
+      });
       
       const info = this.processInfo.get(streamId);
       if (info) {
@@ -183,7 +186,9 @@ export class ProcessManager {
       return false;
     }
 
-    this.logger.stream(streamId, 'Stopping stream', { pid: process.pid });
+    this.logger.stream(streamId, 'Stopping stream', { 
+      ...(process.pid && { pid: process.pid })
+    });
 
     try {
       // Graceful termination first
@@ -192,14 +197,20 @@ export class ProcessManager {
       // Force kill after timeout
       setTimeout(() => {
         if (!process.killed) {
-          this.logger.warn('Force killing stream process', { streamId, pid: process.pid });
+          this.logger.warn('Force killing stream process', { 
+            streamId, 
+            ...(process.pid && { pid: process.pid })
+          });
           process.kill('SIGKILL');
         }
       }, this.config.streaming.processTimeoutMs);
 
       return true;
     } catch (error) {
-      this.logger.error('Failed to stop stream', error as Error, { streamId, pid: process.pid });
+      this.logger.error('Failed to stop stream', error as Error, { 
+        streamId, 
+        ...(process.pid && { pid: process.pid })
+      });
       return false;
     }
   }
@@ -265,7 +276,7 @@ export class ProcessManager {
     }
   }
 
-  public cleanup(): void {
+  public cleanupAll(): void {
     this.logger.info('Cleaning up all processes');
     
     for (const [streamId, process] of this.processes) {

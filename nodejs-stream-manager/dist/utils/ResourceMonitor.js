@@ -12,29 +12,28 @@ class ResourceMonitor extends events_1.EventEmitter {
         this.alertHistory = [];
         this.maxAlertHistory = 100;
         this.isMonitoring = false;
-        this.logger = new Logger_1.Logger('ResourceMonitor');
-        this.config = ConfigManager_1.ConfigManager.getInstance();
+        this.logger = Logger_1.Logger.getInstance();
+        this.config = ConfigManager_1.ConfigManager.getInstance().getConfig();
         this.performanceOptimizer = new PerformanceOptimizer_1.PerformanceOptimizer();
         this.thresholds = this.loadThresholds();
     }
     loadThresholds() {
-        const config = this.config.get();
         return {
             memory: {
-                warning: config.monitoring?.thresholds?.memory?.warning || 75,
-                critical: config.monitoring?.thresholds?.memory?.critical || 90,
+                warning: this.config.monitoring?.thresholds?.memory?.warning || 75,
+                critical: this.config.monitoring?.thresholds?.memory?.critical || 90,
             },
             cpu: {
-                warning: config.monitoring?.thresholds?.cpu?.warning || 80,
-                critical: config.monitoring?.thresholds?.cpu?.critical || 95,
+                warning: this.config.monitoring?.thresholds?.cpu?.warning || 80,
+                critical: this.config.monitoring?.thresholds?.cpu?.critical || 95,
             },
             temperature: {
-                warning: config.monitoring?.thresholds?.temperature?.warning || 70,
-                critical: config.monitoring?.thresholds?.temperature?.critical || 80,
+                warning: this.config.monitoring?.thresholds?.temperature?.warning || 70,
+                critical: this.config.monitoring?.thresholds?.temperature?.critical || 80,
             },
             disk: {
-                warning: config.monitoring?.thresholds?.disk?.warning || 85,
-                critical: config.monitoring?.thresholds?.disk?.critical || 95,
+                warning: this.config.monitoring?.thresholds?.disk?.warning || 85,
+                critical: this.config.monitoring?.thresholds?.disk?.critical || 95,
             },
         };
     }
@@ -113,7 +112,7 @@ class ResourceMonitor extends events_1.EventEmitter {
         }
     }
     checkProcessCount(processes) {
-        const maxFFmpeg = this.config.get().streaming?.maxConcurrentStreams || 2;
+        const maxFFmpeg = this.config.streaming?.maxConcurrentStreams || 2;
         if (processes.ffmpeg > maxFFmpeg) {
             this.createAlert('process', 'warning', `Too many FFmpeg processes: ${processes.ffmpeg}/${maxFFmpeg}`, processes.ffmpeg, maxFFmpeg, ['Stop unnecessary streams', 'Check for stuck processes']);
         }
@@ -129,14 +128,14 @@ class ResourceMonitor extends events_1.EventEmitter {
             value,
             threshold,
             timestamp: new Date(),
-            recommendations,
+            ...(recommendations && { recommendations }),
         };
         this.alertHistory.unshift(alert);
         if (this.alertHistory.length > this.maxAlertHistory) {
             this.alertHistory = this.alertHistory.slice(0, this.maxAlertHistory);
         }
         if (level === 'critical') {
-            this.logger.error(message, {
+            this.logger.error(message, undefined, {
                 type,
                 value,
                 threshold,
@@ -177,7 +176,7 @@ class ResourceMonitor extends events_1.EventEmitter {
             }
         }
         catch (error) {
-            this.logger.error('Failed to handle critical alert', { alert: alert.type, error });
+            this.logger.error('Failed to handle critical alert', error, { alert: alert.type });
         }
     }
     async handleCriticalMemory() {
@@ -227,7 +226,7 @@ class ResourceMonitor extends events_1.EventEmitter {
             const { exec } = require('child_process');
             const { promisify } = require('util');
             const execAsync = promisify(exec);
-            const logsPath = this.config.get().logging?.directory || '/var/log/stream-manager';
+            const logsPath = this.config.logging.directory || '/var/log/stream-manager';
             await execAsync(`find ${logsPath} -name "*.log" -mtime +7 -delete`);
             this.logger.info('Cleaned up old log files');
         }

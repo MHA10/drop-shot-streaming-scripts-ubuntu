@@ -155,7 +155,7 @@ export class StateManager {
       const newRetryCount = (state.retryCount || 0) + 1;
       this.setStreamState(streamId, { 
         retryCount: newRetryCount,
-        lastHealthCheck: Date.now()
+        lastHealthCheck: new Date()
       });
       return newRetryCount;
     }
@@ -167,13 +167,13 @@ export class StateManager {
   }
 
   public updateHealthCheck(streamId: string): void {
-    this.setStreamState(streamId, { lastHealthCheck: Date.now() });
+    this.setStreamState(streamId, { lastHealthCheck: new Date() });
   }
 
   public getStreamsNeedingHealthCheck(intervalMs: number): StreamState[] {
     const now = Date.now();
     return this.getActiveStreams().filter(state => {
-      const lastCheck = state.lastHealthCheck || 0;
+      const lastCheck = state.lastHealthCheck ? state.lastHealthCheck.getTime() : 0;
       return (now - lastCheck) > intervalMs;
     });
   }
@@ -182,34 +182,30 @@ export class StateManager {
     this.setStreamState(streamId, {
       status: 'active',
       pid,
-      startTime: Date.now(),
-      lastHealthCheck: Date.now(),
-      errorMessage: undefined
+      startTime: new Date(),
+      lastHealthCheck: new Date()
     });
   }
 
   public markStreamAsFailed(streamId: string, errorMessage: string): void {
     this.setStreamState(streamId, {
       status: 'failed',
-      pid: undefined,
       errorMessage,
-      lastHealthCheck: Date.now()
+      lastHealthCheck: new Date()
     });
   }
 
   public markStreamAsRetrying(streamId: string): void {
     this.setStreamState(streamId, {
       status: 'retrying',
-      lastHealthCheck: Date.now()
+      lastHealthCheck: new Date()
     });
   }
 
   public markStreamAsInactive(streamId: string): void {
     this.setStreamState(streamId, {
       status: 'inactive',
-      pid: undefined,
-      startTime: undefined,
-      lastHealthCheck: Date.now()
+      lastHealthCheck: new Date()
     });
   }
 

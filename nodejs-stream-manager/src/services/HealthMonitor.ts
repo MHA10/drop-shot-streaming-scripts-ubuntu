@@ -140,7 +140,7 @@ export class HealthMonitor {
     const cpuCount = os.cpus().length;
     
     // Calculate CPU usage as percentage of load average
-    const usage = Math.min((loadAverage[0] / cpuCount) * 100, 100);
+    const usage = Math.min(((loadAverage[0] ?? 0) / cpuCount) * 100, 100);
 
     let temperature: number | undefined;
     
@@ -152,11 +152,16 @@ export class HealthMonitor {
       // Temperature not available or not on Raspberry Pi
     }
 
-    return {
+    const result: SystemHealth['cpu'] = {
       usage: Math.round(usage * 100) / 100,
-      temperature,
       loadAverage
     };
+
+    if (temperature !== undefined) {
+      result.temperature = temperature;
+    }
+
+    return result;
   }
 
   private getMemoryInfo(): SystemHealth['memory'] {
@@ -178,7 +183,7 @@ export class HealthMonitor {
       const { stdout } = await execAsync('df -h / | tail -1');
       const parts = stdout.trim().split(/\s+/);
       
-      if (parts.length >= 6) {
+      if (parts.length >= 6 && parts[1] && parts[2] && parts[3] && parts[4]) {
         const total = this.parseSize(parts[1]);
         const used = this.parseSize(parts[2]);
         const free = this.parseSize(parts[3]);
@@ -203,7 +208,7 @@ export class HealthMonitor {
     };
 
     const match = sizeStr.match(/^(\d+(?:\.\d+)?)([KMGT]?)$/);
-    if (!match) return 0;
+    if (!match || !match[1]) return 0;
 
     const value = parseFloat(match[1]);
     const unit = match[2] || '';
@@ -216,7 +221,7 @@ export class HealthMonitor {
     const networkInterfaces: NetworkInterface[] = [];
 
     for (const [name, addresses] of Object.entries(interfaces)) {
-      if (addresses) {
+      if (addresses && Array.isArray(addresses)) {
         for (const addr of addresses) {
           networkInterfaces.push({
             name,
@@ -261,10 +266,10 @@ export class HealthMonitor {
     }
 
     // Check CPU temperature (Raspberry Pi)
-    if (health.cpu.temperature && health.cpu.temperature > thresholds.cpuTempThreshold) {
+    if (health.cpu.temperature && health.cpu.temperature > thresholds.temperatureThreshold) {
       this.logger.warn('High CPU temperature detected', {
         temperature: health.cpu.temperature,
-        threshold: thresholds.cpuTempThreshold
+        threshold: thresholds.temperatureThreshold
       });
     }
 

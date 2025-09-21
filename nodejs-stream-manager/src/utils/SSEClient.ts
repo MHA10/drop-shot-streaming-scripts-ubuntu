@@ -9,13 +9,13 @@ export class SSEClient extends EventEmitter {
   private logger: Logger;
   private config: any;
   private _isConnected: boolean = false;
-  private request?: http.ClientRequest;
+  private request: http.ClientRequest | undefined;
   private reconnectAttempts: number = 0;
   private maxReconnectAttempts: number = 10;
   private reconnectDelay: number = 1000;
   private url: string;
   private headers: Record<string, string>;
-  private reconnectTimer?: NodeJS.Timeout;
+  private reconnectTimer: NodeJS.Timeout | undefined;
 
   constructor(url?: string, headers?: Record<string, string>) {
     super();

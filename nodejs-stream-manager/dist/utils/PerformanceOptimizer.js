@@ -45,22 +45,21 @@ class PerformanceOptimizer {
     constructor() {
         this.lastMetrics = null;
         this.gcTimer = null;
-        this.logger = new Logger_1.Logger('PerformanceOptimizer');
-        this.config = ConfigManager_1.ConfigManager.getInstance();
+        this.logger = Logger_1.Logger.getInstance();
+        this.config = ConfigManager_1.ConfigManager.getInstance().getConfig();
         this.optimizationSettings = this.loadOptimizationSettings();
         this.setupGarbageCollection();
     }
     loadOptimizationSettings() {
-        const config = this.config.get();
         return {
-            maxConcurrentStreams: config.streaming?.maxConcurrentStreams || 2,
-            memoryThreshold: config.performance?.memoryThreshold || 80,
-            cpuThreshold: config.performance?.cpuThreshold || 85,
-            temperatureThreshold: config.performance?.temperatureThreshold || 70,
-            enableGpuAcceleration: config.performance?.enableGpuAcceleration || false,
-            enableHardwareDecoding: config.performance?.enableHardwareDecoding || false,
-            ffmpegNiceLevel: config.performance?.ffmpegNiceLevel || 10,
-            gcInterval: config.performance?.gcInterval || 300000,
+            maxConcurrentStreams: this.config.streaming?.maxConcurrentStreams || 2,
+            memoryThreshold: this.config.performance?.memoryThreshold || 80,
+            cpuThreshold: this.config.performance?.cpuThreshold || 85,
+            temperatureThreshold: this.config.performance?.temperatureThreshold || 70,
+            enableGpuAcceleration: this.config.performance?.enableGpuAcceleration || false,
+            enableHardwareDecoding: this.config.performance?.enableHardwareDecoding || false,
+            ffmpegNiceLevel: this.config.performance?.ffmpegNiceLevel || 10,
+            gcInterval: this.config.performance?.gcInterval || 300000,
         };
     }
     setupGarbageCollection() {
@@ -141,7 +140,7 @@ class PerformanceOptimizer {
             try {
                 const { stdout } = await execAsync('vcgencmd measure_temp');
                 const match = stdout.match(/temp=(\d+\.\d+)/);
-                return match ? parseFloat(match[1]) : 0;
+                return match && match[1] ? parseFloat(match[1]) : 0;
             }
             catch {
                 return 0;
@@ -157,7 +156,7 @@ class PerformanceOptimizer {
             try {
                 const { stdout } = await execAsync('vcgencmd measure_clock arm');
                 const match = stdout.match(/frequency\(45\)=(\d+)/);
-                return match ? parseInt(match[1]) / 1000000 : 0;
+                return match && match[1] ? parseInt(match[1]) / 1000000 : 0;
             }
             catch {
                 return 0;
@@ -168,7 +167,7 @@ class PerformanceOptimizer {
         try {
             const { stdout } = await execAsync('vcgencmd get_throttled');
             const match = stdout.match(/throttled=0x(\w+)/);
-            if (match) {
+            if (match && match[1]) {
                 const throttleValue = parseInt(match[1], 16);
                 return throttleValue !== 0;
             }
@@ -185,7 +184,7 @@ class PerformanceOptimizer {
             const line = lines.find(l => l.startsWith(key));
             if (line) {
                 const match = line.match(/(\d+)/);
-                return match ? parseInt(match[1]) * 1024 : 0;
+                return match && match[1] ? parseInt(match[1]) * 1024 : 0;
             }
             return 0;
         };
@@ -207,10 +206,13 @@ class PerformanceOptimizer {
             const { stdout } = await execAsync('df -B1 /');
             const lines = stdout.split('\n');
             const dataLine = lines[1];
+            if (!dataLine) {
+                throw new Error('No disk data available');
+            }
             const parts = dataLine.split(/\s+/);
-            const total = parseInt(parts[1]);
-            const used = parseInt(parts[2]);
-            const free = parseInt(parts[3]);
+            const total = parts[1] ? parseInt(parts[1]) : 0;
+            const used = parts[2] ? parseInt(parts[2]) : 0;
+            const free = parts[3] ? parseInt(parts[3]) : 0;
             const usage = Math.round((used / total) * 100);
             return {
                 total,
@@ -241,10 +243,10 @@ class PerformanceOptimizer {
                 if (line.includes(':') && !line.includes('lo:')) {
                     const parts = line.split(/\s+/);
                     if (parts.length >= 10) {
-                        bytesReceived += parseInt(parts[1]) || 0;
-                        packetsReceived += parseInt(parts[2]) || 0;
-                        bytesSent += parseInt(parts[9]) || 0;
-                        packetsSent += parseInt(parts[10]) || 0;
+                        bytesReceived += (parts[1] ? parseInt(parts[1]) : 0) || 0;
+                        packetsReceived += (parts[2] ? parseInt(parts[2]) : 0) || 0;
+                        bytesSent += (parts[9] ? parseInt(parts[9]) : 0) || 0;
+                        packetsSent += (parts[10] ? parseInt(parts[10]) : 0) || 0;
                     }
                 }
             }
@@ -271,9 +273,9 @@ class PerformanceOptimizer {
             const { stdout: ffmpegProc } = await execAsync('pgrep -f ffmpeg | wc -l');
             const { stdout: nodeProc } = await execAsync('pgrep -f node | wc -l');
             return {
-                total: parseInt(totalProc.trim()) - 1,
-                ffmpeg: parseInt(ffmpegProc.trim()),
-                node: parseInt(nodeProc.trim()),
+                total: (totalProc.trim() ? parseInt(totalProc.trim()) : 0) - 1,
+                ffmpeg: ffmpegProc.trim() ? parseInt(ffmpegProc.trim()) : 0,
+                node: nodeProc.trim() ? parseInt(nodeProc.trim()) : 0,
             };
         }
         catch (error) {

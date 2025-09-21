@@ -34,7 +34,7 @@ interface ResourceAlert {
 
 export class ResourceMonitor extends EventEmitter {
   private logger: Logger;
-  private config: ConfigManager;
+  private config: ReturnType<ConfigManager['getConfig']>;
   private performanceOptimizer: PerformanceOptimizer;
   private thresholds: ResourceThresholds;
   private monitoringInterval: NodeJS.Timeout | null = null;
@@ -44,30 +44,29 @@ export class ResourceMonitor extends EventEmitter {
 
   constructor() {
     super();
-    this.logger = new Logger('ResourceMonitor');
-    this.config = ConfigManager.getInstance();
+    this.logger = Logger.getInstance();
+    this.config = ConfigManager.getInstance().getConfig();
     this.performanceOptimizer = new PerformanceOptimizer();
     this.thresholds = this.loadThresholds();
   }
 
   private loadThresholds(): ResourceThresholds {
-    const config = this.config.get();
     return {
       memory: {
-        warning: config.monitoring?.thresholds?.memory?.warning || 75,
-        critical: config.monitoring?.thresholds?.memory?.critical || 90,
+        warning: this.config.monitoring?.thresholds?.memory?.warning || 75,
+        critical: this.config.monitoring?.thresholds?.memory?.critical || 90,
       },
       cpu: {
-        warning: config.monitoring?.thresholds?.cpu?.warning || 80,
-        critical: config.monitoring?.thresholds?.cpu?.critical || 95,
+        warning: this.config.monitoring?.thresholds?.cpu?.warning || 80,
+        critical: this.config.monitoring?.thresholds?.cpu?.critical || 95,
       },
       temperature: {
-        warning: config.monitoring?.thresholds?.temperature?.warning || 70,
-        critical: config.monitoring?.thresholds?.temperature?.critical || 80,
+        warning: this.config.monitoring?.thresholds?.temperature?.warning || 70,
+        critical: this.config.monitoring?.thresholds?.temperature?.critical || 80,
       },
       disk: {
-        warning: config.monitoring?.thresholds?.disk?.warning || 85,
-        critical: config.monitoring?.thresholds?.disk?.critical || 95,
+        warning: this.config.monitoring?.thresholds?.disk?.warning || 85,
+        critical: this.config.monitoring?.thresholds?.disk?.critical || 95,
       },
     };
   }
@@ -197,7 +196,7 @@ export class ResourceMonitor extends EventEmitter {
   }
 
   private checkProcessCount(processes: any): void {
-    const maxFFmpeg = this.config.get().streaming?.maxConcurrentStreams || 2;
+    const maxFFmpeg = this.config.streaming?.maxConcurrentStreams || 2;
     
     if (processes.ffmpeg > maxFFmpeg) {
       this.createAlert('process', 'warning', 
@@ -232,7 +231,7 @@ export class ResourceMonitor extends EventEmitter {
       value,
       threshold,
       timestamp: new Date(),
-      recommendations,
+      ...(recommendations && { recommendations }),
     };
 
     // Add to history
@@ -243,7 +242,7 @@ export class ResourceMonitor extends EventEmitter {
 
     // Log the alert
     if (level === 'critical') {
-      this.logger.error(message, { 
+      this.logger.error(message, undefined, { 
         type, 
         value, 
         threshold, 
@@ -288,7 +287,7 @@ export class ResourceMonitor extends EventEmitter {
           this.logger.warn('No auto-remediation for alert type', { type: alert.type });
       }
     } catch (error) {
-      this.logger.error('Failed to handle critical alert', { alert: alert.type, error });
+      this.logger.error('Failed to handle critical alert', error as Error, { alert: alert.type });
     }
   }
 
@@ -355,7 +354,7 @@ export class ResourceMonitor extends EventEmitter {
       const { promisify } = require('util');
       const execAsync = promisify(exec);
       
-      const logsPath = this.config.get().logging?.directory || '/var/log/stream-manager';
+      const logsPath = this.config.logging.directory || '/var/log/stream-manager';
       await execAsync(`find ${logsPath} -name "*.log" -mtime +7 -delete`);
       this.logger.info('Cleaned up old log files');
     } catch (error) {

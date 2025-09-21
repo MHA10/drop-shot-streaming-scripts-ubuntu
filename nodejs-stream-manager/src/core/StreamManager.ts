@@ -163,7 +163,7 @@ export class StreamManager {
         if (!isValid) {
           this.logger.warn('Stream process not found, attempting recovery', { 
             streamId: stream.id,
-            pid: stream.pid 
+            pid: stream.pid ?? -1
           });
 
           // Check retry limits
@@ -300,7 +300,7 @@ export class StreamManager {
 
   public cleanup(): void {
     this.logger.info('Cleaning up StreamManager');
-    this.processManager.cleanup();
+    this.processManager.cleanupAll();
     this.stateManager.cleanup();
   }
 }

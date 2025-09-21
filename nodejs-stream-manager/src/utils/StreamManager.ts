@@ -23,7 +23,7 @@ export class StreamManager {
 
     constructor() {
         this.logger = Logger.getInstance();
-        this.config = ConfigManager.getInstance().get('server');
+        this.config = ConfigManager.getInstance().getConfig();
         this.healthMonitor = new HealthMonitor(this.logger);
         this.performanceOptimizer = new PerformanceOptimizer();
         this.resourceMonitor = new ResourceMonitor();
@@ -160,6 +160,12 @@ export class StreamManager {
         this.logger.info(`Restarting stream ${streamId}`);
 
         const { rtspUrl, rtmpUrl } = streamState;
+        
+        if (!rtspUrl || !rtmpUrl) {
+            this.logger.error(`Cannot restart stream ${streamId}: missing rtspUrl or rtmpUrl`);
+            return false;
+        }
+        
         await this.stopStream(streamId);
         
         // Wait a moment before restarting

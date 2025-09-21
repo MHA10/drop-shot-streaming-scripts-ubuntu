@@ -14,7 +14,9 @@ export declare class ProcessManager {
     getAllProcesses(): ProcessInfo[];
     isStreamRunning(streamId: string): boolean;
     validateProcess(streamId: string): boolean;
+    private cleanup;
     private writePidFile;
     private removePidFile;
+    cleanupAll(): void;
 }
 //# sourceMappingURL=ProcessManager.d.ts.map

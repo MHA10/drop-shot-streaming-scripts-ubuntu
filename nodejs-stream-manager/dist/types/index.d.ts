@@ -8,7 +8,11 @@ export interface StreamingConfig {
     maxRetries: number;
     retryBackoffMs: number;
     processTimeoutMs: number;
-    rtspTransport?: string;
+    rtspTransport: string;
+    maxConcurrentStreams?: number;
+    silentAudioParams: {
+        source: string;
+    };
     videoParams: {
         codec: string;
         preset: string;
@@ -35,6 +39,40 @@ export interface LoggingConfig {
     datePattern: string;
     maxSize: string;
     maxFiles: string;
+    directory?: string;
+}
+export interface SSEConfig {
+    endpoint?: string;
+    maxReconnectAttempts?: number;
+    reconnectDelay?: number;
+}
+export interface MonitoringConfig {
+    enabled: boolean;
+    interval: number;
+    alertThresholds: {
+        cpu: number;
+        memory: number;
+        disk: number;
+        temperature: number;
+    };
+    thresholds?: {
+        memory?: {
+            warning?: number;
+            critical?: number;
+        };
+        cpu?: {
+            warning?: number;
+            critical?: number;
+        };
+        temperature?: {
+            warning?: number;
+            critical?: number;
+        };
+        disk?: {
+            warning?: number;
+            critical?: number;
+        };
+    };
 }
 export interface PerformanceConfig {
     cpuThreshold: number;
@@ -45,6 +83,10 @@ export interface PerformanceConfig {
     maxConcurrentStreams?: number;
     memoryLimitMB?: number;
     cpuThresholdPercent?: number;
+    enableGpuAcceleration?: boolean;
+    enableHardwareDecoding?: boolean;
+    ffmpegNiceLevel?: number;
+    gcInterval?: number;
 }
 export interface Config {
     server: ServerConfig;
@@ -52,6 +94,8 @@ export interface Config {
     paths: PathsConfig;
     logging: LoggingConfig;
     performance: PerformanceConfig;
+    sse: SSEConfig;
+    monitoring: MonitoringConfig;
 }
 export interface StreamConfig {
     id: string;
@@ -87,11 +131,11 @@ export interface ProcessInfo {
 }
 export interface StreamState {
     id: string;
-    rtspUrl: string;
-    rtmpUrl: string;
+    rtspUrl?: string;
+    rtmpUrl?: string;
     status: 'pending' | 'running' | 'active' | 'stopped' | 'failed' | 'expected' | 'inactive' | 'retrying';
     pid?: number;
-    startTime: Date;
+    startTime?: Date;
     lastHealthCheck?: Date;
     retryCount: number;
     error?: string;
@@ -126,7 +170,7 @@ export interface HealthStatus {
     lastCheck: Date;
 }
 export interface SSEEvent {
-    eventType: 'start' | 'stop' | 'health' | 'config' | 'system';
+    eventType: 'start' | 'stop' | 'restart' | 'health' | 'config' | 'system';
     cameraUrl?: string;
     streamKey?: string;
     data?: any;
@@ -136,6 +180,7 @@ export interface SSEMessage {
     type: 'start' | 'stop' | 'restart' | 'status';
     streamId: string;
     data?: any;
+    timestamp: Date;
 }
 export interface LogLevel {
     level: 'error' | 'warn' | 'info' | 'debug';
