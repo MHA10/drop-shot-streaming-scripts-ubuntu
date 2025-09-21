@@ -13,6 +13,7 @@ const SSEClient_1 = require("./utils/SSEClient");
 class StreamManagerApp {
     constructor() {
         this.isShuttingDown = false;
+        this.processedEvents = new Set();
         this.logger = Logger_1.Logger.getInstance();
         this.config = ConfigManager_1.ConfigManager.getInstance();
         if (!this.config.validateConfig()) {
@@ -39,19 +40,76 @@ class StreamManagerApp {
             this.logger.error("SSE connection error", error);
         });
         this.sseClient.on("message", (event) => {
-            this.logger.info(`Received SSE event: ${event.eventType}`, { event });
-            switch (event.eventType) {
-                case "start":
-                    this.streamManager.startStream(event.data.streamId, event.data.rtspUrl, event.data.rtmpUrl);
-                    break;
-                case "stop":
-                    this.streamManager.stopStream(event.data.streamId);
-                    break;
-                case "restart":
-                    this.streamManager.restartStream(event.data.streamId);
-                    break;
-                default:
-                    this.logger.warn(`Unknown SSE event type: ${event.eventType}`);
+            if (!event || typeof event !== 'object') {
+                this.logger.warn('Received invalid SSE event: not an object', { event });
+                return;
+            }
+            if (!event.eventType) {
+                this.logger.warn('Received SSE event without eventType', { event });
+                return;
+            }
+            if (!event.data || typeof event.data !== 'object') {
+                this.logger.warn('Received SSE event without valid data', { event });
+                return;
+            }
+            const eventHash = this.generateEventHash(event);
+            if (this.processedEvents.has(eventHash)) {
+                this.logger.debug('Duplicate SSE event detected, skipping', {
+                    eventType: event.eventType,
+                    streamId: event.data.streamId,
+                    hash: eventHash
+                });
+                return;
+            }
+            this.processedEvents.add(eventHash);
+            this.logger.info(`Processing SSE event: ${event.eventType}`, {
+                event: {
+                    eventType: event.eventType,
+                    streamId: event.data.streamId,
+                    timestamp: event.timestamp
+                }
+            });
+            try {
+                switch (event.eventType) {
+                    case "start":
+                        if (!event.data.streamId || !event.data.rtspUrl || !event.data.rtmpUrl) {
+                            this.logger.warn('Start event missing required data fields', {
+                                streamId: event.data.streamId,
+                                rtspUrl: event.data.rtspUrl ? 'present' : 'missing',
+                                rtmpUrl: event.data.rtmpUrl ? 'present' : 'missing'
+                            });
+                            return;
+                        }
+                        this.streamManager.startStream(event.data.streamId, event.data.rtspUrl, event.data.rtmpUrl);
+                        break;
+                    case "stop":
+                        if (!event.data.streamId) {
+                            this.logger.warn('Stop event missing streamId', { event });
+                            return;
+                        }
+                        this.streamManager.stopStream(event.data.streamId);
+                        break;
+                    case "restart":
+                        if (!event.data.streamId) {
+                            this.logger.warn('Restart event missing streamId', { event });
+                            return;
+                        }
+                        this.streamManager.restartStream(event.data.streamId);
+                        break;
+                    case "health":
+                    case "config":
+                    case "system":
+                        this.logger.info(`Received ${event.eventType} event`, { event });
+                        break;
+                    default:
+                        this.logger.warn(`Unknown SSE event type: ${event.eventType}`, {
+                            eventType: event.eventType,
+                            availableTypes: ['start', 'stop', 'restart', 'health', 'config', 'system']
+                        });
+                }
+            }
+            catch (error) {
+                this.logger.error(`Error processing SSE event: ${event.eventType} for stream ${event.data.streamId}`, error instanceof Error ? error : new Error(String(error)));
             }
         });
         this.resourceMonitor.on("alert", (alert) => {
@@ -76,6 +134,7 @@ class StreamManagerApp {
             await this.systemOptimizer.applyOptimizations();
             await this.streamManager.start();
             this.sseClient.connect();
+            this.startEventCacheCleanup();
             this.logger.info("All services started successfully");
         }
         catch (error) {
@@ -91,6 +150,7 @@ class StreamManagerApp {
         this.logger.info("Shutting down Node.js Stream Manager");
         try {
             this.sseClient.disconnect();
+            this.stopEventCacheCleanup();
             this.healthMonitor.stop();
             this.resourceMonitor.stopMonitoring();
             await this.streamManager.shutdown();
@@ -100,6 +160,32 @@ class StreamManagerApp {
         catch (error) {
             this.logger.error("Error during shutdown", error);
             process.exit(1);
+        }
+    }
+    generateEventHash(event) {
+        const hashData = {
+            eventType: event.eventType,
+            streamId: event.data?.streamId || 'unknown',
+            timestamp: event.timestamp ? new Date(event.timestamp).getTime() : Date.now()
+        };
+        return Buffer.from(JSON.stringify(hashData)).toString('base64');
+    }
+    startEventCacheCleanup() {
+        this.eventCacheCleanupInterval = setInterval(() => {
+            const cacheSize = this.processedEvents.size;
+            if (cacheSize > 1000) {
+                const eventsArray = Array.from(this.processedEvents);
+                const toKeep = eventsArray.slice(Math.floor(eventsArray.length / 2));
+                this.processedEvents.clear();
+                toKeep.forEach(event => this.processedEvents.add(event));
+                this.logger.debug(`Cleaned up event cache: ${cacheSize} -> ${this.processedEvents.size}`);
+            }
+        }, 5 * 60 * 1000);
+    }
+    stopEventCacheCleanup() {
+        if (this.eventCacheCleanupInterval) {
+            clearInterval(this.eventCacheCleanupInterval);
+            this.eventCacheCleanupInterval = undefined;
         }
     }
     getStatus() {

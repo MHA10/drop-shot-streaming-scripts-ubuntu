@@ -48,7 +48,7 @@ class SSEClient extends events_1.EventEmitter {
         this.reconnectDelay = 1000;
         this.logger = Logger_1.Logger.getInstance();
         this.config = ConfigManager_1.ConfigManager.getInstance().get('sse') || {};
-        this.url = url || this.config.endpoint || 'http://localhost:3000/events';
+        this.url = url || this.config.endpoint || 'https://e50c3c52ed0a.ngrok-free.app/events';
         this.headers = {
             'Accept': 'text/event-stream',
             'Cache-Control': 'no-cache',
@@ -149,10 +149,17 @@ class SSEClient extends events_1.EventEmitter {
                 return;
             }
             try {
-                const eventData = JSON.parse(data);
-                this.logger.debug('SSE event received', eventData);
-                this.emit('message', eventData);
-                this.emit('event', eventData);
+                const rawEventData = JSON.parse(data);
+                this.logger.debug('SSE raw event received', rawEventData);
+                const transformedEvent = this.transformSSEEvent(rawEventData);
+                if (transformedEvent) {
+                    this.logger.debug('SSE event transformed', transformedEvent);
+                    this.emit('message', transformedEvent);
+                    this.emit('event', transformedEvent);
+                }
+                else {
+                    this.logger.warn('Failed to transform SSE event', { rawEventData });
+                }
             }
             catch (error) {
                 this.logger.warn('Failed to parse SSE event data', { data, error });
@@ -177,6 +184,60 @@ class SSEClient extends events_1.EventEmitter {
         else if (line === '') {
             this.emit('eventEnd');
         }
+    }
+    transformSSEEvent(rawEvent) {
+        try {
+            if (!rawEvent || typeof rawEvent !== 'object') {
+                this.logger.warn('Invalid SSE event: not an object', { rawEvent });
+                return null;
+            }
+            const { eventType, cameraUrl, streamKey } = rawEvent;
+            if (!eventType || typeof eventType !== 'string') {
+                this.logger.warn('Invalid or missing eventType in SSE event', { rawEvent });
+                return null;
+            }
+            const validEventTypes = ['start', 'stop', 'restart', 'health', 'config', 'system', 'status'];
+            if (!validEventTypes.includes(eventType)) {
+                this.logger.warn(`Unknown eventType: ${eventType}`, { rawEvent });
+            }
+            if (['start', 'stop', 'restart'].includes(eventType)) {
+                if (!cameraUrl || typeof cameraUrl !== 'string' || cameraUrl.trim() === '') {
+                    this.logger.warn('Invalid or missing cameraUrl for stream event', { rawEvent });
+                    return null;
+                }
+                if (!streamKey || typeof streamKey !== 'string' || streamKey.trim() === '') {
+                    this.logger.warn('Invalid or missing streamKey for stream event', { rawEvent });
+                    return null;
+                }
+                try {
+                    new URL(cameraUrl);
+                }
+                catch (urlError) {
+                    this.logger.warn('Invalid cameraUrl format', { cameraUrl, error: urlError });
+                    return null;
+                }
+            }
+            const streamId = this.generateStreamId(cameraUrl || '', streamKey || '');
+            const rtmpUrl = `rtmp://localhost:1935/live/${streamKey}`;
+            return {
+                eventType,
+                data: {
+                    streamId,
+                    rtspUrl: cameraUrl,
+                    rtmpUrl,
+                    timestamp: new Date().toISOString()
+                }
+            };
+        }
+        catch (error) {
+            this.logger.error(`Error transforming SSE event: ${JSON.stringify(rawEvent)}`, error instanceof Error ? error : new Error(String(error)));
+            return null;
+        }
+    }
+    generateStreamId(rtspUrl, streamKey) {
+        const urlPart = rtspUrl.replace(/[^a-zA-Z0-9]/g, '_').substring(0, 20);
+        const keyPart = streamKey.substring(0, 10);
+        return `${urlPart}_${keyPart}`;
     }
     handleConnectionError(error) {
         this._isConnected = false;

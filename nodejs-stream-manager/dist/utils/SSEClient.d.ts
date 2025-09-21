@@ -17,6 +17,8 @@ export declare class SSEClient extends EventEmitter {
     disconnect(): void;
     send(event: SSEEvent): boolean;
     private processSSELine;
+    private transformSSEEvent;
+    private generateStreamId;
     private handleConnectionError;
     private handleDisconnection;
     private scheduleReconnect;
