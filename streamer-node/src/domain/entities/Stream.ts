@@ -97,12 +97,17 @@ export class Stream {
 
   public markAsFailed(error?: string): void {
     this.props.state = StreamState.FAILED;
-    this.props.processId = undefined;
+    // Keep processId so we can still terminate the process later
     this.props.updatedAt = new Date();
   }
 
   public updateAudioDetection(hasAudio: boolean): void {
     this.props.hasAudio = hasAudio;
+    this.props.updatedAt = new Date();
+  }
+
+  public clearProcessId(): void {
+    this.props.processId = undefined;
     this.props.updatedAt = new Date();
   }
 

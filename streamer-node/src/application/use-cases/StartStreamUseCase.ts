@@ -1,9 +1,9 @@
-import { Stream } from '../../domain/entities/Stream';
-import { StreamId } from '../../domain/value-objects/StreamId';
-import { StreamUrl } from '../../domain/value-objects/StreamUrl';
-import { StreamRepository } from '../../domain/repositories/StreamRepository';
-import { FFmpegService } from '../../domain/services/FFmpegService';
-import { Logger } from '../interfaces/Logger';
+import { Stream } from "../../domain/entities/Stream";
+import { StreamId } from "../../domain/value-objects/StreamId";
+import { StreamUrl } from "../../domain/value-objects/StreamUrl";
+import { StreamRepository } from "../../domain/repositories/StreamRepository";
+import { FFmpegService } from "../../domain/services/FFmpegService";
+import { Logger } from "../interfaces/Logger";
 
 export interface StartStreamRequest {
   cameraUrl: string;
@@ -24,8 +24,13 @@ export class StartStreamUseCase {
     private readonly logger: Logger
   ) {}
 
-  public async execute(request: StartStreamRequest): Promise<StartStreamResponse> {
-    this.logger.info('Starting stream', { cameraUrl: request.cameraUrl, streamKey: request.streamKey });
+  public async execute(
+    request: StartStreamRequest
+  ): Promise<StartStreamResponse> {
+    this.logger.info("Starting stream", {
+      cameraUrl: request.cameraUrl,
+      streamKey: request.streamKey,
+    });
 
     try {
       // Create value objects
@@ -35,16 +40,26 @@ export class StartStreamUseCase {
       // Detect audio if requested
       let hasAudio = false;
       if (request.detectAudio) {
-        this.logger.info('Detecting audio for stream', { streamId: streamId.value });
+        this.logger.info("Detecting audio for stream", {
+          streamId: streamId.value,
+        });
         hasAudio = await this.ffmpegService.detectAudio(cameraUrl);
-        this.logger.info('Audio detection result', { streamId: streamId.value, hasAudio });
+        this.logger.info("Audio detection result", {
+          streamId: streamId.value,
+          hasAudio,
+        });
       }
 
       // Create stream entity
-      const stream = Stream.create(streamId, cameraUrl, request.streamKey, hasAudio);
+      const stream = Stream.create(
+        streamId,
+        cameraUrl,
+        request.streamKey,
+        hasAudio
+      );
 
       // Start FFmpeg process
-      this.logger.info('Starting FFmpeg process', { streamId: streamId.value });
+      this.logger.info("Starting FFmpeg process", { streamId: streamId.value });
       const ffmpegProcess = await this.ffmpegService.startStream(
         cameraUrl,
         request.streamKey,
@@ -57,23 +72,27 @@ export class StartStreamUseCase {
       // Save stream state
       await this.streamRepository.save(stream);
 
-      this.logger.info('Stream started successfully', {
+      // log all saved streams information
+      this.logger.info("All saved streams", {
+        streams: await this.streamRepository.findAll(),
+      });
+
+      this.logger.info("Stream started successfully", {
         streamId: streamId.value,
         processId: ffmpegProcess.pid,
-        hasAudio
+        hasAudio,
       });
 
       return {
         streamId: streamId.value,
         processId: ffmpegProcess.pid,
-        hasAudio
+        hasAudio,
       };
-
     } catch (error) {
-      this.logger.error('Failed to start stream', {
+      this.logger.error("Failed to start stream", {
         error: error instanceof Error ? error.message : String(error),
         cameraUrl: request.cameraUrl,
-        streamKey: request.streamKey
+        streamKey: request.streamKey,
       });
       throw error;
     }
