@@ -72,11 +72,6 @@ export class StartStreamUseCase {
       // Save stream state
       await this.streamRepository.save(stream);
 
-      // log all saved streams information
-      this.logger.info("All saved streams", {
-        streams: await this.streamRepository.findAll(),
-      });
-
       this.logger.info("Stream started successfully", {
         streamId: streamId.value,
         processId: ffmpegProcess.pid,
