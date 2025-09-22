@@ -1,0 +1,1 @@
+{"version":3,"file":"StreamId.d.ts","sourceRoot":"","sources":["../../../../src/domain/value-objects/StreamId.ts"],"names":[],"mappings":"AAEA,qBAAa,QAAQ;IACC,OAAO,CAAC,QAAQ,CAAC,MAAM;IAA3C,OAAO;WAMO,MAAM,IAAI,QAAQ;WAMlB,UAAU,CAAC,KAAK,EAAE,MAAM,GAAG,QAAQ;IAIjD,IAAW,KAAK,IAAI,MAAM,CAEzB;IAEM,MAAM,CAAC,KAAK,EAAE,QAAQ,GAAG,OAAO;IAIhC,QAAQ,IAAI,MAAM;CAG1B"}
