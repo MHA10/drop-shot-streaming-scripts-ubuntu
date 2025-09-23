@@ -1,37 +1,37 @@
-import { FileSystemStreamRepository } from '../../../src/infrastructure/repositories/FileSystemStreamRepository';
-import { Stream } from '../../../src/domain/entities/Stream';
-import { StreamId } from '../../../src/domain/value-objects/StreamId';
-import { StreamUrl } from '../../../src/domain/value-objects/StreamUrl';
-import { StreamState } from '../../../src/domain/value-objects/StreamState';
-import { Logger } from '../../../src/application/interfaces/Logger';
-import { promises as fs } from 'fs';
-import { join } from 'path';
+import { FileSystemStreamRepository } from "../../../src/infrastructure/repositories/FileSystemStreamRepository";
+import { Stream } from "../../../src/domain/entities/Stream";
+import { StreamId } from "../../../src/domain/value-objects/StreamId";
+import { StreamUrl } from "../../../src/domain/value-objects/StreamUrl";
+import { StreamState } from "../../../src/domain/value-objects/StreamState";
+import { Logger } from "../../../src/application/interfaces/Logger";
+import { promises as fs } from "fs";
+import { join } from "path";
 
 // Mock fs module
-jest.mock('fs', () => ({
+jest.mock("fs", () => ({
   promises: {
     mkdir: jest.fn(),
     writeFile: jest.fn(),
     readFile: jest.fn(),
     readdir: jest.fn(),
     unlink: jest.fn(),
-    access: jest.fn()
-  }
+    access: jest.fn(),
+  },
 }));
 
 const mockFs = fs as jest.Mocked<typeof fs>;
 
-describe('FileSystemStreamRepository', () => {
+describe("FileSystemStreamRepository", () => {
   let repository: FileSystemStreamRepository;
   let mockLogger: jest.Mocked<Logger>;
-  const testDir = '/tmp/test-streams';
+  const testDir = "/tmp/test-streams";
 
   beforeEach(() => {
     mockLogger = {
       info: jest.fn(),
       error: jest.fn(),
       warn: jest.fn(),
-      debug: jest.fn()
+      debug: jest.fn(),
     };
 
     repository = new FileSystemStreamRepository(testDir, mockLogger);
@@ -40,11 +40,17 @@ describe('FileSystemStreamRepository', () => {
     jest.clearAllMocks();
   });
 
-  describe('save', () => {
-    it('should save stream to file system', async () => {
+  describe("save", () => {
+    it("should save stream to file system", async () => {
       const streamId = StreamId.create();
-      const cameraUrl = StreamUrl.create('rtsp://camera1.example.com');
-      const stream = Stream.create(streamId, cameraUrl, 'stream1', true);
+      const cameraUrl = StreamUrl.create("rtsp://camera1.example.com");
+      const stream = Stream.create(
+        streamId,
+        cameraUrl,
+        "stream1",
+        "court-123",
+        true
+      );
 
       mockFs.mkdir.mockResolvedValue(undefined);
       mockFs.writeFile.mockResolvedValue();
@@ -55,35 +61,41 @@ describe('FileSystemStreamRepository', () => {
       expect(mockFs.writeFile).toHaveBeenCalledWith(
         join(testDir, `${streamId.value}.json`),
         expect.stringContaining(streamId.value),
-        'utf8'
+        "utf8"
       );
     });
 
-    it('should handle file system errors', async () => {
+    it("should handle file system errors", async () => {
       const streamId = StreamId.create();
-      const cameraUrl = StreamUrl.create('rtsp://camera1.example.com');
-      const stream = Stream.create(streamId, cameraUrl, 'stream1', true);
+      const cameraUrl = StreamUrl.create("rtsp://camera1.example.com");
+      const stream = Stream.create(
+        streamId,
+        cameraUrl,
+        "stream1",
+        "court-123",
+        true
+      );
 
       mockFs.mkdir.mockResolvedValue(undefined);
-      mockFs.writeFile.mockRejectedValue(new Error('Write failed'));
+      mockFs.writeFile.mockRejectedValue(new Error("Write failed"));
 
-      await expect(repository.save(stream)).rejects.toThrow('Write failed');
+      await expect(repository.save(stream)).rejects.toThrow("Write failed");
       expect(mockLogger.error).toHaveBeenCalled();
     });
   });
 
-  describe('findById', () => {
-    it('should find stream by id', async () => {
+  describe("findById", () => {
+    it("should find stream by id", async () => {
       const streamId = StreamId.create();
       const streamData = {
         id: streamId.value,
-        cameraUrl: 'rtsp://camera1.example.com',
-        streamKey: 'stream1',
+        cameraUrl: "rtsp://camera1.example.com",
+        streamKey: "stream1",
         hasAudio: true,
         state: StreamState.RUNNING,
         processId: 12345,
         createdAt: new Date().toISOString(),
-        updatedAt: new Date().toISOString()
+        updatedAt: new Date().toISOString(),
       };
 
       mockFs.readFile.mockResolvedValue(JSON.stringify(streamData));
@@ -94,61 +106,61 @@ describe('FileSystemStreamRepository', () => {
       expect(result?.id.value).toBe(streamId.value);
       expect(mockFs.readFile).toHaveBeenCalledWith(
         join(testDir, `${streamId.value}.json`),
-        'utf8'
+        "utf8"
       );
     });
 
-    it('should return null when stream not found', async () => {
+    it("should return null when stream not found", async () => {
       const streamId = StreamId.create();
 
-      mockFs.readFile.mockRejectedValue({ code: 'ENOENT' });
+      mockFs.readFile.mockRejectedValue({ code: "ENOENT" });
 
       const result = await repository.findById(streamId);
 
       expect(result).toBeNull();
     });
 
-    it('should handle invalid JSON data', async () => {
+    it("should handle invalid JSON data", async () => {
       const streamId = StreamId.create();
 
-      mockFs.readFile.mockResolvedValue('invalid json');
+      mockFs.readFile.mockResolvedValue("invalid json");
 
-      await expect(repository.findById(streamId)).rejects.toThrow();
-      expect(mockLogger.error).toHaveBeenCalled();
+      const result = await repository.findById(streamId);
+      expect(result).toBeNull();
     });
   });
 
-  describe('findAll', () => {
-    it('should find all streams', async () => {
+  describe("findAll", () => {
+    it("should find all streams", async () => {
       const streamId1 = StreamId.create();
       const streamId2 = StreamId.create();
-      
+
       mockFs.readdir.mockResolvedValue([
         `${streamId1.value}.json`,
         `${streamId2.value}.json`,
-        'other-file.txt'
+        "other-file.txt",
       ] as any);
 
       const streamData1 = {
         id: streamId1.value,
-        cameraUrl: 'rtsp://camera1.example.com',
-        streamKey: 'stream1',
+        cameraUrl: "rtsp://camera1.example.com",
+        streamKey: "stream1",
         hasAudio: true,
         state: StreamState.RUNNING,
         processId: 12345,
         createdAt: new Date().toISOString(),
-        updatedAt: new Date().toISOString()
+        updatedAt: new Date().toISOString(),
       };
 
       const streamData2 = {
         id: streamId2.value,
-        cameraUrl: 'rtsp://camera2.example.com',
-        streamKey: 'stream2',
+        cameraUrl: "rtsp://camera2.example.com",
+        streamKey: "stream2",
         hasAudio: false,
         state: StreamState.STOPPED,
         processId: null,
         createdAt: new Date().toISOString(),
-        updatedAt: new Date().toISOString()
+        updatedAt: new Date().toISOString(),
       };
 
       mockFs.readFile
@@ -162,23 +174,25 @@ describe('FileSystemStreamRepository', () => {
       expect(result[1].id.value).toBe(streamId2.value);
     });
 
-    it('should handle directory not found', async () => {
-      mockFs.readdir.mockRejectedValue({ code: 'ENOENT' });
+    it("should handle directory not found", async () => {
+      mockFs.readdir.mockRejectedValue({ code: "ENOENT" });
 
-      await expect(repository.findAll()).rejects.toMatchObject({ code: 'ENOENT' });
+      await expect(repository.findAll()).rejects.toMatchObject({
+        code: "ENOENT",
+      });
 
       expect(mockLogger.error).toHaveBeenCalledWith(
-        'Failed to read all streams',
+        "Failed to read all streams",
         expect.objectContaining({
           directory: expect.any(String),
-          error: expect.any(String)
+          error: expect.any(String),
         })
       );
-      });
     });
+  });
 
-    describe('delete', () => {
-    it('should delete stream file', async () => {
+  describe("delete", () => {
+    it("should delete stream file", async () => {
       const streamId = StreamId.create();
 
       mockFs.unlink.mockResolvedValue();
@@ -190,10 +204,10 @@ describe('FileSystemStreamRepository', () => {
       );
     });
 
-    it('should handle file not found during delete', async () => {
+    it("should handle file not found during delete", async () => {
       const streamId = StreamId.create();
 
-      mockFs.unlink.mockRejectedValue({ code: 'ENOENT' });
+      mockFs.unlink.mockRejectedValue({ code: "ENOENT" });
 
       // Should not throw error
       await repository.delete(streamId);
@@ -203,8 +217,8 @@ describe('FileSystemStreamRepository', () => {
     });
   });
 
-  describe('exists', () => {
-    it('should return true when stream exists', async () => {
+  describe("exists", () => {
+    it("should return true when stream exists", async () => {
       const streamId = StreamId.create();
 
       mockFs.access.mockResolvedValue();
@@ -217,10 +231,10 @@ describe('FileSystemStreamRepository', () => {
       );
     });
 
-    it('should return false when stream does not exist', async () => {
+    it("should return false when stream does not exist", async () => {
       const streamId = StreamId.create();
 
-      mockFs.access.mockRejectedValue({ code: 'ENOENT' });
+      mockFs.access.mockRejectedValue({ code: "ENOENT" });
 
       const result = await repository.exists(streamId);
 

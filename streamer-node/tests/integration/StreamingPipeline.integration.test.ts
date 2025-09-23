@@ -4,6 +4,7 @@ import { FileSystemStreamRepository } from '../../src/infrastructure/repositorie
 import { NodeFFmpegService } from '../../src/infrastructure/services/NodeFFmpegService';
 import { ConsoleLogger } from '../../src/infrastructure/logging/ConsoleLogger';
 import { Config } from '../../src/infrastructure/config/Config';
+import { HttpClient } from '../../src/application/services/HttpClient';
 import { StreamId } from '../../src/domain/value-objects/StreamId';
 import { StreamUrl } from '../../src/domain/value-objects/StreamUrl';
 import { Stream } from '../../src/domain/entities/Stream';
@@ -18,6 +19,7 @@ describe('Streaming Pipeline Integration Tests', () => {
   let ffmpegService: NodeFFmpegService;
   let logger: ConsoleLogger;
   let config: Config;
+  let httpClient: HttpClient;
   let testDir: string;
 
   beforeAll(async () => {
@@ -31,8 +33,16 @@ describe('Streaming Pipeline Integration Tests', () => {
     repository = new FileSystemStreamRepository(testDir, logger);
     ffmpegService = new NodeFFmpegService(logger, config);
     
+    // Mock HttpClient to prevent actual HTTP requests
+    httpClient = jest.mocked(new HttpClient());
+    httpClient.goLiveYouTube = jest.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      statusText: 'OK',
+    } as Response);
+    
     // Initialize use cases
-    startStreamUseCase = new StartStreamUseCase(repository, ffmpegService, logger);
+    startStreamUseCase = new StartStreamUseCase(repository, ffmpegService, logger, httpClient);
     stopStreamUseCase = new StopStreamUseCase(repository, ffmpegService, logger);
   });
 
@@ -58,7 +68,7 @@ describe('Streaming Pipeline Integration Tests', () => {
       // Create a stream manually and save it
       const streamId = StreamId.create();
       const streamUrlObj = StreamUrl.create(cameraUrl);
-      const stream = Stream.create(streamId, streamUrlObj, streamKey);
+      const stream = Stream.create(streamId, streamUrlObj, streamKey, 'court-123', true);
       
       await repository.save(stream);
 
@@ -87,7 +97,7 @@ describe('Streaming Pipeline Integration Tests', () => {
       for (let i = 0; i < 3; i++) {
         const streamId = StreamId.create();
         const streamUrlObj = StreamUrl.create(`rtsp://test${i}.example.com/stream`);
-        const stream = Stream.create(streamId, streamUrlObj, `key-${i}`);
+        const stream = Stream.create(streamId, streamUrlObj, `key-${i}`, 'court-123', true);
         streams.push(stream);
         await repository.save(stream);
       }
@@ -121,6 +131,7 @@ describe('Streaming Pipeline Integration Tests', () => {
         await startStreamUseCase.execute({
           cameraUrl,
           streamKey,
+          courtId: 'court-123',
           detectAudio: false
         });
       } catch (error) {
@@ -150,11 +161,12 @@ describe('Streaming Pipeline Integration Tests', () => {
     it('should handle repository errors gracefully', async () => {
       // Create a repository with invalid directory to trigger errors
       const invalidRepository = new FileSystemStreamRepository('/invalid/path/that/does/not/exist', logger);
-      const errorStartUseCase = new StartStreamUseCase(invalidRepository, ffmpegService, logger);
+      const errorStartUseCase = new StartStreamUseCase(invalidRepository, ffmpegService, logger, httpClient);
 
       await expect(errorStartUseCase.execute({
         cameraUrl: 'rtsp://test.com/stream',
         streamKey: 'test',
+        courtId: 'court-123',
         detectAudio: false
       })).rejects.toThrow();
     }, 15000);
@@ -171,6 +183,7 @@ describe('Streaming Pipeline Integration Tests', () => {
         await expect(startStreamUseCase.execute({
           cameraUrl: invalidUrl,
           streamKey: 'test',
+          courtId: 'court-123',
           detectAudio: false
         })).rejects.toThrow();
       }
@@ -180,6 +193,7 @@ describe('Streaming Pipeline Integration Tests', () => {
       await expect(startStreamUseCase.execute({
         cameraUrl: 'rtsp://test.com/stream',
         streamKey: '',
+        courtId: 'court-123',
         detectAudio: false
       })).rejects.toThrow();
     }, 15000);

@@ -1,16 +1,24 @@
-import { StartStreamUseCase, StartStreamRequest, StartStreamResponse } from '../../../src/application/use-cases/StartStreamUseCase';
-import { StreamRepository } from '../../../src/domain/repositories/StreamRepository';
-import { FFmpegService, FFmpegProcess } from '../../../src/domain/services/FFmpegService';
-import { Logger } from '../../../src/application/interfaces/Logger';
-import { Stream } from '../../../src/domain/entities/Stream';
-import { StreamId } from '../../../src/domain/value-objects/StreamId';
-import { StreamUrl } from '../../../src/domain/value-objects/StreamUrl';
+import {
+  StartStreamUseCase,
+  StartStreamRequest,
+  StartStreamResponse,
+} from "../../../src/application/use-cases/StartStreamUseCase";
+import { StreamRepository } from "../../../src/domain/repositories/StreamRepository";
+import {
+  FFmpegService,
+  FFmpegProcess,
+} from "../../../src/domain/services/FFmpegService";
+import { Logger } from "../../../src/application/interfaces/Logger";
+import { Stream } from "../../../src/domain/entities/Stream";
+import { StreamUrl } from "../../../src/domain/value-objects/StreamUrl";
+import { HttpClient } from "../../../src/application/services/HttpClient";
 
-describe('StartStreamUseCase', () => {
+describe("StartStreamUseCase", () => {
   let useCase: StartStreamUseCase;
   let mockRepository: jest.Mocked<StreamRepository>;
   let mockFFmpegService: jest.Mocked<FFmpegService>;
   let mockLogger: jest.Mocked<Logger>;
+  let mockHttpClient: jest.Mocked<HttpClient>;
 
   beforeEach(() => {
     mockRepository = {
@@ -22,7 +30,7 @@ describe('StartStreamUseCase', () => {
       delete: jest.fn(),
       exists: jest.fn(),
       getAllIds: jest.fn(),
-      clear: jest.fn()
+      clear: jest.fn(),
     };
 
     mockFFmpegService = {
@@ -32,31 +40,44 @@ describe('StartStreamUseCase', () => {
       detectAudio: jest.fn(),
       buildStreamCommand: jest.fn(),
       getRunningProcesses: jest.fn(),
-      killAllProcesses: jest.fn()
+      killAllProcesses: jest.fn(),
     };
 
     mockLogger = {
       info: jest.fn(),
       error: jest.fn(),
       warn: jest.fn(),
-      debug: jest.fn()
+      debug: jest.fn(),
     };
 
-    useCase = new StartStreamUseCase(mockRepository, mockFFmpegService, mockLogger);
+    // Create a proper mock of HttpClient
+    mockHttpClient = jest.mocked(new HttpClient());
+    mockHttpClient.goLiveYouTube = jest.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      statusText: 'OK',
+    } as Response);
+
+    useCase = new StartStreamUseCase(
+      mockRepository,
+      mockFFmpegService,
+      mockLogger,
+      mockHttpClient
+    );
   });
 
-  describe('execute', () => {
-    it('should start a new stream successfully with audio detection', async () => {
-      const cameraUrl = 'rtsp://camera1.example.com';
-      const streamKey = 'stream1';
+  describe("execute", () => {
+    it("should start a new stream successfully with audio detection", async () => {
+      const cameraUrl = "rtsp://camera1.example.com";
+      const streamKey = "stream1";
       const mockProcess: FFmpegProcess = {
         pid: 12345,
         command: {
-          command: 'ffmpeg',
-          args: ['-i', cameraUrl],
-          fullCommand: 'ffmpeg -i rtsp://camera1.example.com'
+          command: "ffmpeg",
+          args: ["-i", cameraUrl],
+          fullCommand: "ffmpeg -i rtsp://camera1.example.com",
         },
-        startTime: new Date()
+        startTime: new Date(),
       };
 
       mockFFmpegService.detectAudio.mockResolvedValue(true);
@@ -66,7 +87,8 @@ describe('StartStreamUseCase', () => {
       const result = await useCase.execute({
         cameraUrl,
         streamKey,
-        detectAudio: true
+        detectAudio: true,
+        courtId: "default-court",
       });
 
       expect(result.streamId).toBeDefined();
@@ -81,22 +103,20 @@ describe('StartStreamUseCase', () => {
         streamKey,
         true
       );
-      expect(mockRepository.save).toHaveBeenCalledWith(
-        expect.any(Stream)
-      );
+      expect(mockRepository.save).toHaveBeenCalledWith(expect.any(Stream));
     });
 
-    it('should start a stream without audio detection', async () => {
-      const cameraUrl = 'rtsp://camera1.example.com';
-      const streamKey = 'stream1';
+    it("should start a stream without audio detection", async () => {
+      const cameraUrl = "rtsp://camera1.example.com";
+      const streamKey = "stream1";
       const mockProcess: FFmpegProcess = {
         pid: 12345,
         command: {
-          command: 'ffmpeg',
-          args: ['-i', cameraUrl],
-          fullCommand: 'ffmpeg -i rtsp://camera1.example.com'
+          command: "ffmpeg",
+          args: ["-i", cameraUrl],
+          fullCommand: "ffmpeg -i rtsp://camera1.example.com",
         },
-        startTime: new Date()
+        startTime: new Date(),
       };
 
       mockFFmpegService.startStream.mockResolvedValue(mockProcess);
@@ -104,7 +124,8 @@ describe('StartStreamUseCase', () => {
 
       const result = await useCase.execute({
         cameraUrl,
-        streamKey
+        streamKey,
+        courtId: "default-court",
       });
 
       expect(result.streamId).toBeDefined();
@@ -119,38 +140,43 @@ describe('StartStreamUseCase', () => {
       );
     });
 
-    it('should handle FFmpeg service errors', async () => {
-      const cameraUrl = 'rtsp://camera1.example.com';
-      const streamKey = 'stream1';
+    it("should handle FFmpeg service errors", async () => {
+      const cameraUrl = "rtsp://camera1.example.com";
+      const streamKey = "stream1";
 
-      mockFFmpegService.startStream.mockRejectedValue(new Error('FFmpeg failed'));
+      mockFFmpegService.startStream.mockRejectedValue(
+        new Error("FFmpeg failed")
+      );
 
-      await expect(useCase.execute({
-        cameraUrl,
-        streamKey
-      })).rejects.toThrow('FFmpeg failed');
+      await expect(
+        useCase.execute({
+          cameraUrl,
+          streamKey,
+          courtId: "default",
+        })
+      ).rejects.toThrow("FFmpeg failed");
 
       expect(mockLogger.error).toHaveBeenCalledWith(
-        'Failed to start stream',
+        "Failed to start stream",
         expect.objectContaining({
-          error: 'FFmpeg failed',
+          error: "FFmpeg failed",
           cameraUrl,
-          streamKey
+          streamKey,
         })
       );
     });
 
-    it('should handle audio detection when enabled', async () => {
-      const cameraUrl = 'rtsp://camera1.example.com';
-      const streamKey = 'stream1';
+    it("should handle audio detection when enabled", async () => {
+      const cameraUrl = "rtsp://camera1.example.com";
+      const streamKey = "stream1";
       const mockProcess: FFmpegProcess = {
         pid: 12345,
         command: {
-          command: 'ffmpeg',
-          args: ['-i', cameraUrl],
-          fullCommand: 'ffmpeg -i rtsp://camera1.example.com'
+          command: "ffmpeg",
+          args: ["-i", cameraUrl],
+          fullCommand: "ffmpeg -i rtsp://camera1.example.com",
         },
-        startTime: new Date()
+        startTime: new Date(),
       };
 
       mockFFmpegService.detectAudio.mockResolvedValue(false);
@@ -160,7 +186,8 @@ describe('StartStreamUseCase', () => {
       const result = await useCase.execute({
         cameraUrl,
         streamKey,
-        detectAudio: true
+        detectAudio: true,
+        courtId: "default-court",
       });
 
       expect(result.hasAudio).toBe(false);

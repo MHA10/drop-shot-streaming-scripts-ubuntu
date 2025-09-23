@@ -7,14 +7,16 @@ describe('Stream Entity', () => {
   const validStreamId = StreamId.create();
   const validCameraUrl = StreamUrl.create('rtsp://example.com/stream');
   const validStreamKey = 'test-stream-key';
+  const validCourtId = 'court-123';
 
   describe('Creation', () => {
     it('should create a stream with valid parameters', () => {
-      const stream = Stream.create(validStreamId, validCameraUrl, validStreamKey);
+      const stream = Stream.create(validStreamId, validCameraUrl, validStreamKey, validCourtId);
 
       expect(stream.id).toBe(validStreamId);
       expect(stream.cameraUrl).toBe(validCameraUrl);
       expect(stream.streamKey).toBe(validStreamKey);
+      expect(stream.courtId).toBe(validCourtId);
       expect(stream.state).toBe(StreamState.PENDING);
       expect(stream.hasAudio).toBe(false);
       expect(stream.processId).toBeUndefined();
@@ -23,7 +25,7 @@ describe('Stream Entity', () => {
     });
 
     it('should create a stream with audio detection enabled', () => {
-      const stream = Stream.create(validStreamId, validCameraUrl, validStreamKey, true);
+      const stream = Stream.create(validStreamId, validCameraUrl, validStreamKey, validCourtId, true);
       expect(stream.hasAudio).toBe(true);
     });
   });
@@ -32,7 +34,7 @@ describe('Stream Entity', () => {
     let stream: Stream;
 
     beforeEach(() => {
-      stream = Stream.create(StreamId.create(), validCameraUrl, validStreamKey);
+      stream = Stream.create(StreamId.create(), validCameraUrl, validStreamKey, validCourtId);
     });
 
     it('should start a stream successfully', () => {
@@ -84,7 +86,7 @@ describe('Stream Entity', () => {
 
   describe('Serialization', () => {
     it('should serialize to JSON correctly', () => {
-      const stream = Stream.create(validStreamId, validCameraUrl, validStreamKey);
+      const stream = Stream.create(validStreamId, validCameraUrl, validStreamKey, validCourtId);
       stream.start(12345);
       
       const json = stream.toJSON();
@@ -93,6 +95,7 @@ describe('Stream Entity', () => {
         id: validStreamId.value,
         cameraUrl: validCameraUrl.value,
         streamKey: validStreamKey,
+        courtId: validCourtId,
         state: StreamState.RUNNING,
         hasAudio: false,
         processId: 12345,

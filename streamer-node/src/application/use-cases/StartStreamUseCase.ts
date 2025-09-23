@@ -4,10 +4,13 @@ import { StreamUrl } from "../../domain/value-objects/StreamUrl";
 import { StreamRepository } from "../../domain/repositories/StreamRepository";
 import { FFmpegService } from "../../domain/services/FFmpegService";
 import { Logger } from "../interfaces/Logger";
+import { HttpClient } from "../services/HttpClient";
+import { Config } from "../../infrastructure/config/Config";
 
 export interface StartStreamRequest {
   cameraUrl: string;
   streamKey: string;
+  courtId: string;
   detectAudio?: boolean;
 }
 
@@ -18,10 +21,13 @@ export interface StartStreamResponse {
 }
 
 export class StartStreamUseCase {
+  private readonly config = Config.getInstance().get();
+
   constructor(
     private readonly streamRepository: StreamRepository,
     private readonly ffmpegService: FFmpegService,
-    private readonly logger: Logger
+    private readonly logger: Logger,
+    private readonly httpClient: HttpClient
   ) {}
 
   public async execute(
@@ -30,6 +36,7 @@ export class StartStreamUseCase {
     this.logger.info("Starting stream", {
       cameraUrl: request.cameraUrl,
       streamKey: request.streamKey,
+      courtId: request.courtId,
     });
 
     try {
@@ -55,6 +62,7 @@ export class StartStreamUseCase {
         streamId,
         cameraUrl,
         request.streamKey,
+        request.courtId,
         hasAudio
       );
 
@@ -77,6 +85,13 @@ export class StartStreamUseCase {
         processId: ffmpegProcess.pid,
         hasAudio,
       });
+
+      // notify server that the stream has started to go live on YouTube
+      await this.httpClient.goLiveYouTube(
+        this.config.groundInfo.groundId,
+        stream.courtId,
+        stream.streamKey
+      );
 
       return {
         streamId: streamId.value,

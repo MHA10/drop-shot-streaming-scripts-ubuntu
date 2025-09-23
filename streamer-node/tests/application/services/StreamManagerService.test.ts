@@ -98,12 +98,14 @@ describe("StreamManagerService", () => {
         streamId,
         StreamUrl.create(cameraUrl),
         streamKey,
+        "court-123",
         true
       );
       runningStream.start(12345);
 
       const stopEvent: SSEStreamEvent = {
         eventId: "test-event-1",
+        courtId: "court-123",
         occurredOn: new Date(),
         eventType: "SSEStreamEvent",
         action: "stop",
@@ -145,6 +147,7 @@ describe("StreamManagerService", () => {
         StreamId.create(),
         StreamUrl.create(cameraUrl),
         streamKey,
+        "court-123",
         true
       );
       stoppedStream.start(99999); // Start first
@@ -152,6 +155,7 @@ describe("StreamManagerService", () => {
 
       const stopEvent: SSEStreamEvent = {
         eventId: "test-event-2",
+        courtId: "court-123",
         occurredOn: new Date(),
         eventType: "SSEStreamEvent",
         action: "stop",
@@ -186,6 +190,7 @@ describe("StreamManagerService", () => {
         StreamId.create(),
         StreamUrl.create(cameraUrl),
         streamKey,
+        "court-123",
         true
       );
       failedStream.markAsFailed();
@@ -195,6 +200,7 @@ describe("StreamManagerService", () => {
         runningStreamId,
         StreamUrl.create(cameraUrl),
         streamKey,
+        "court-123",
         true
       );
       runningStream.start(12345);
@@ -203,6 +209,7 @@ describe("StreamManagerService", () => {
         StreamId.create(),
         StreamUrl.create(cameraUrl),
         streamKey,
+        "court-123",
         true
       );
       stoppedStream.start(33333); // Start first
@@ -210,6 +217,7 @@ describe("StreamManagerService", () => {
 
       const stopEvent: SSEStreamEvent = {
         eventId: "test-event-3",
+        courtId: "court-123",
         occurredOn: new Date(),
         eventType: "SSEStreamEvent",
         action: "stop",
@@ -248,6 +256,7 @@ describe("StreamManagerService", () => {
         StreamId.create(),
         StreamUrl.create("rtsp://camera1.example.com"),
         "stream1",
+        "court-456",
         true
       );
       otherStream.start(11111);
@@ -257,12 +266,14 @@ describe("StreamManagerService", () => {
         targetStreamId,
         StreamUrl.create(targetCameraUrl),
         targetStreamKey,
+        "court-123",
         true
       );
       targetStream.start(22222);
 
       const stopEvent: SSEStreamEvent = {
         eventId: "test-event-4",
+        courtId: "court-123",
         occurredOn: new Date(),
         eventType: "SSEStreamEvent",
         action: "stop",
@@ -298,6 +309,7 @@ describe("StreamManagerService", () => {
 
       const stopEvent: SSEStreamEvent = {
         eventId: "test-event-5",
+        courtId: "court-123",
         occurredOn: new Date(),
         eventType: "SSEStreamEvent",
         action: "stop",

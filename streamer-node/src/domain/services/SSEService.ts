@@ -1,7 +1,8 @@
-import { SSEStreamEvent } from '../events/StreamEvent';
+import { SSEStreamEvent } from "../events/StreamEvent";
 
 export interface SSEConnectionConfig {
-  readonly endpoint: string;
+  readonly groundId: string;
+  readonly baseUrl: string;
   readonly retryInterval: number;
   readonly maxRetries: number;
 }
@@ -30,12 +31,14 @@ export interface SSEService {
   /**
    * Subscribe to connection status changes
    */
-  onConnectionChange(callback: (status: 'connected' | 'disconnected' | 'reconnecting') => void): void;
+  onConnectionChange(
+    callback: (status: "connected" | "disconnected" | "reconnecting") => void
+  ): void;
 
   /**
    * Get current connection status
    */
-  getConnectionStatus(): 'connected' | 'disconnected' | 'reconnecting';
+  getConnectionStatus(): "connected" | "disconnected" | "reconnecting";
 
   /**
    * Get retry count for current connection attempt

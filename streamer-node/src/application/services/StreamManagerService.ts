@@ -40,7 +40,11 @@ export class StreamManagerService {
 
       // Start SSE connection
       const sseConfig = this.config.get().sse;
-      await this.sseService.start(sseConfig);
+      await this.sseService.start({
+        ...sseConfig,
+        groundId: this.config.get().groundInfo.groundId,
+        baseUrl: this.config.get().server.baseUrl,
+      });
 
       // Start health check monitoring
       this.startHealthCheck();
@@ -227,6 +231,7 @@ export class StreamManagerService {
         await this.startStreamUseCase.execute({
           cameraUrl: event.cameraUrl,
           streamKey: event.streamKey,
+          courtId: event.courtId,
           detectAudio: true,
         });
       } else if (event.action === "stop") {

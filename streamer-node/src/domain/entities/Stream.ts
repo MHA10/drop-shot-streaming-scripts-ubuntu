@@ -6,6 +6,7 @@ export interface StreamProps {
   id: StreamId;
   cameraUrl: StreamUrl;
   streamKey: string;
+  courtId: string;
   state: StreamState;
   hasAudio: boolean;
   processId?: number;
@@ -20,6 +21,7 @@ export class Stream {
     id: StreamId,
     cameraUrl: StreamUrl,
     streamKey: string,
+    courtId: string,
     hasAudio: boolean = false
   ): Stream {
     const now = new Date();
@@ -27,6 +29,7 @@ export class Stream {
       id,
       cameraUrl,
       streamKey,
+      courtId,
       state: StreamState.PENDING,
       hasAudio,
       createdAt: now,
@@ -49,6 +52,10 @@ export class Stream {
 
   public get streamKey(): string {
     return this.props.streamKey;
+  }
+
+  public get courtId(): string {
+    return this.props.courtId;
   }
 
   public get state(): StreamState {
@@ -128,6 +135,7 @@ export class Stream {
       id: this.props.id.value,
       cameraUrl: this.props.cameraUrl.value,
       streamKey: this.props.streamKey,
+      courtId: this.props.courtId,
       state: this.props.state,
       hasAudio: this.props.hasAudio,
       processId: this.props.processId,

@@ -27,7 +27,7 @@ export class NodeSSEService extends EventEmitter implements SSEService {
     this.isActive = true;
     this.retryCount = 0;
 
-    this.logger.info("Starting SSE client", { endpoint: config.endpoint });
+    this.logger.info("Starting SSE client", { groundId: config.groundId });
     await this.connect();
   }
 
@@ -97,17 +97,20 @@ export class NodeSSEService extends EventEmitter implements SSEService {
 
     try {
       this.logger.info("Connecting to SSE endpoint", {
-        endpoint: this.config.endpoint,
+        groundId: this.config.groundId,
         retryCount: this.retryCount,
       });
 
-      const response = await fetch(this.config.endpoint, {
-        headers: {
-          Accept: "text/event-stream",
-          "Cache-Control": "no-cache",
-        },
-        signal: this.abortController.signal,
-      });
+      const response = await fetch(
+        `${this.config.baseUrl}/api/v1/padel-grounds/${this.config.groundId}/events`,
+        {
+          headers: {
+            Accept: "text/event-stream",
+            "Cache-Control": "no-cache",
+          },
+          signal: this.abortController.signal,
+        }
+      );
 
       if (!response.ok) {
         throw new Error(`HTTP ${response.status}: ${response.statusText}`);
@@ -244,7 +247,8 @@ export class NodeSSEService extends EventEmitter implements SSEService {
       if (
         !parsedData.cameraUrl ||
         !parsedData.streamKey ||
-        !parsedData.eventType
+        !parsedData.eventType ||
+        !parsedData.courtId
       ) {
         this.logger.warn("Invalid SSE event data", { data: parsedData });
         return;
@@ -258,6 +262,7 @@ export class NodeSSEService extends EventEmitter implements SSEService {
         action: parsedData.eventType,
         cameraUrl: parsedData.cameraUrl,
         streamKey: parsedData.streamKey,
+        courtId: parsedData.courtId,
         reconciliationMode: parsedData.reconciliation_mode || false,
       };
 

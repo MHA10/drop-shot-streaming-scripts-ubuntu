@@ -1,10 +1,10 @@
-import { Logger } from '../../application/interfaces/Logger';
+import { Logger } from "../../application/interfaces/Logger";
 
 export class ConsoleLogger implements Logger {
-  constructor(private readonly logLevel: string = 'info') {}
+  constructor(private readonly logLevel: string = "debug") {}
 
   private shouldLog(level: string): boolean {
-    const levels = ['debug', 'info', 'warn', 'error'];
+    const levels = ["debug", "info", "warn", "error"];
     const currentLevelIndex = levels.indexOf(this.logLevel);
     const messageLevelIndex = levels.indexOf(level);
     return messageLevelIndex >= currentLevelIndex;
@@ -12,31 +12,31 @@ export class ConsoleLogger implements Logger {
 
   private formatMessage(level: string, message: string, meta?: any): string {
     const timestamp = new Date().toISOString();
-    const metaStr = meta ? ` ${JSON.stringify(meta)}` : '';
+    const metaStr = meta ? ` ${JSON.stringify(meta)}` : "";
     return `[${timestamp}] ${level.toUpperCase()}: ${message}${metaStr}`;
   }
 
   public info(message: string, meta?: any): void {
-    if (this.shouldLog('info')) {
-      console.log(this.formatMessage('info', message, meta));
+    if (this.shouldLog("info")) {
+      console.log(this.formatMessage("info", message, meta));
     }
   }
 
   public warn(message: string, meta?: any): void {
-    if (this.shouldLog('warn')) {
-      console.warn(this.formatMessage('warn', message, meta));
+    if (this.shouldLog("warn")) {
+      console.warn(this.formatMessage("warn", message, meta));
     }
   }
 
   public error(message: string, meta?: any): void {
-    if (this.shouldLog('error')) {
-      console.error(this.formatMessage('error', message, meta));
+    if (this.shouldLog("error")) {
+      console.error(this.formatMessage("error", message, meta));
     }
   }
 
   public debug(message: string, meta?: any): void {
-    if (this.shouldLog('debug')) {
-      console.debug(this.formatMessage('debug', message, meta));
+    if (this.shouldLog("debug")) {
+      console.debug(this.formatMessage("debug", message, meta));
     }
   }
 }

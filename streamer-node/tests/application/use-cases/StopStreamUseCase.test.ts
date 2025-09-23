@@ -50,7 +50,7 @@ describe('StopStreamUseCase', () => {
     it('should stop stream successfully', async () => {
       const streamId = StreamId.create();
       const cameraUrl = StreamUrl.create('rtsp://example.com/stream');
-      const mockStream = Stream.create(streamId, cameraUrl, 'stream-key', false);
+      const mockStream = Stream.create(streamId, cameraUrl, 'stream-key', 'court-123', false);
       mockStream.start(123);
 
       mockRepository.findById.mockResolvedValue(mockStream);
@@ -99,7 +99,7 @@ describe('StopStreamUseCase', () => {
     it('should handle FFmpeg service errors', async () => {
       const streamId = StreamId.create();
       const cameraUrl = StreamUrl.create('rtsp://camera1.example.com');
-      const stream = Stream.create(streamId, cameraUrl, 'stream1', true);
+      const stream = Stream.create(streamId, cameraUrl, 'stream1', 'court-123', true);
       stream.start(12345);
 
       mockRepository.findById.mockResolvedValue(stream);
@@ -121,7 +121,7 @@ describe('StopStreamUseCase', () => {
     it('should handle stopping non-running stream', async () => {
       const streamId = StreamId.create();
       const cameraUrl = StreamUrl.create('rtsp://camera1.example.com');
-      const stream = Stream.create(streamId, cameraUrl, 'stream1', true);
+      const stream = Stream.create(streamId, cameraUrl, 'stream1', 'court-123', true);
       // Stream is in PENDING state, not started
 
       mockRepository.findById.mockResolvedValue(stream);
@@ -140,7 +140,7 @@ describe('StopStreamUseCase', () => {
     it('should handle stream with PID but process not running', async () => {
       const streamId = StreamId.create();
       const cameraUrl = StreamUrl.create('rtsp://camera1.example.com');
-      const stream = Stream.create(streamId, cameraUrl, 'stream1', true);
+      const stream = Stream.create(streamId, cameraUrl, 'stream1', 'court-123', true);
       stream.start(12345); // Stream has PID but process is dead
 
       mockRepository.findById.mockResolvedValue(stream);
@@ -161,7 +161,7 @@ describe('StopStreamUseCase', () => {
     it('should handle failed stream with orphaned process', async () => {
       const streamId = StreamId.create();
       const cameraUrl = StreamUrl.create('rtsp://camera1.example.com');
-      const stream = Stream.create(streamId, cameraUrl, 'stream1', true);
+      const stream = Stream.create(streamId, cameraUrl, 'stream1', 'court-123', true);
       
       // Simulate a failed stream that still has a process ID (orphaned process scenario)
       // We'll manually set the state and processId to simulate this edge case
@@ -191,13 +191,13 @@ describe('StopStreamUseCase', () => {
 
       // Create first stream and mark it as failed
       const firstStreamId = StreamId.create();
-      const firstStream = Stream.create(firstStreamId, cameraUrl, streamKey, true);
+      const firstStream = Stream.create(firstStreamId, cameraUrl, streamKey, 'court-123', true);
       firstStream.start(11111); // Start with PID
       (firstStream as any).props.state = StreamState.FAILED; // Mark as failed but keep processId
 
       // Create second stream with same camera URL and stream key
       const secondStreamId = StreamId.create();
-      const secondStream = Stream.create(secondStreamId, cameraUrl, streamKey, true);
+      const secondStream = Stream.create(secondStreamId, cameraUrl, streamKey, 'court-456', true);
       secondStream.start(22222); // Start with different PID
 
       // Mock repository to return the second stream when queried by ID

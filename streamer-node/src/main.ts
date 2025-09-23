@@ -1,23 +1,25 @@
-import { Config } from './infrastructure/config/Config';
-import { ConsoleLogger } from './infrastructure/logging/ConsoleLogger';
-import { FileSystemStreamRepository } from './infrastructure/repositories/FileSystemStreamRepository';
-import { NodeFFmpegService } from './infrastructure/services/NodeFFmpegService';
-import { NodeSSEService } from './infrastructure/services/NodeSSEService';
-import { StartStreamUseCase } from './application/use-cases/StartStreamUseCase';
-import { StopStreamUseCase } from './application/use-cases/StopStreamUseCase';
-import { StreamManagerService } from './application/services/StreamManagerService';
+import { Config } from "./infrastructure/config/Config";
+import { ConsoleLogger } from "./infrastructure/logging/ConsoleLogger";
+import { FileSystemStreamRepository } from "./infrastructure/repositories/FileSystemStreamRepository";
+import { NodeFFmpegService } from "./infrastructure/services/NodeFFmpegService";
+import { NodeSSEService } from "./infrastructure/services/NodeSSEService";
+import { StartStreamUseCase } from "./application/use-cases/StartStreamUseCase";
+import { StopStreamUseCase } from "./application/use-cases/StopStreamUseCase";
+import { StreamManagerService } from "./application/services/StreamManagerService";
+import { HttpClient } from "./application/services/HttpClient";
 
 class Application {
   private streamManager?: StreamManagerService;
-  private logger = new ConsoleLogger('INFO');
+  private readonly logger = new ConsoleLogger();
+  private readonly httpClient = new HttpClient();
 
   public async start(): Promise<void> {
     try {
-      this.logger.info('Starting Streamer Node Application');
+      this.logger.info("Starting Streamer Node Application");
 
       // Initialize configuration
       const config = Config.getInstance();
-      this.logger.info('Configuration loaded', { config: config.get() });
+      this.logger.info("Configuration loaded", { config: config.get() });
 
       // Initialize dependencies
       const streamRepository = new FileSystemStreamRepository(
@@ -31,7 +33,8 @@ class Application {
       const startStreamUseCase = new StartStreamUseCase(
         streamRepository,
         ffmpegService,
-        this.logger
+        this.logger,
+        this.httpClient
       );
 
       const stopStreamUseCase = new StopStreamUseCase(
@@ -54,14 +57,13 @@ class Application {
       // Start the stream manager
       await this.streamManager.start();
 
-      this.logger.info('Streamer Node Application started successfully');
+      this.logger.info("Streamer Node Application started successfully");
 
       // Setup graceful shutdown
       this.setupGracefulShutdown();
-
     } catch (error) {
-      this.logger.error('Failed to start application', {
-        error: error instanceof Error ? error.message : String(error)
+      this.logger.error("Failed to start application", {
+        error: error instanceof Error ? error.message : String(error),
       });
       process.exit(1);
     }
@@ -75,29 +77,29 @@ class Application {
         if (this.streamManager) {
           await this.streamManager.stop();
         }
-        this.logger.info('Application shutdown completed');
+        this.logger.info("Application shutdown completed");
         process.exit(0);
       } catch (error) {
-        this.logger.error('Error during shutdown', {
-          error: error instanceof Error ? error.message : String(error)
+        this.logger.error("Error during shutdown", {
+          error: error instanceof Error ? error.message : String(error),
         });
         process.exit(1);
       }
     };
 
     // Handle different shutdown signals
-    process.on('SIGTERM', () => shutdown('SIGTERM'));
-    process.on('SIGINT', () => shutdown('SIGINT'));
-    process.on('SIGUSR2', () => shutdown('SIGUSR2')); // nodemon restart
+    process.on("SIGTERM", () => shutdown("SIGTERM"));
+    process.on("SIGINT", () => shutdown("SIGINT"));
+    process.on("SIGUSR2", () => shutdown("SIGUSR2")); // nodemon restart
 
     // Handle uncaught exceptions
-    process.on('uncaughtException', (error) => {
-      this.logger.error('Uncaught exception', { error: error.message });
+    process.on("uncaughtException", (error) => {
+      this.logger.error("Uncaught exception", { error: error.message });
       process.exit(1);
     });
 
-    process.on('unhandledRejection', (reason) => {
-      this.logger.error('Unhandled rejection', { reason });
+    process.on("unhandledRejection", (reason) => {
+      this.logger.error("Unhandled rejection", { reason });
       process.exit(1);
     });
   }
@@ -106,6 +108,6 @@ class Application {
 // Start the application
 const app = new Application();
 app.start().catch((error) => {
-  console.error('Failed to start application:', error);
+  console.error("Failed to start application:", error);
   process.exit(1);
 });
