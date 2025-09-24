@@ -67,6 +67,26 @@ $SUDO apt install -y \
     libssl-dev \
     libgnutls28-dev || handle_error "Failed to install network libraries"
 
+echo "Installing Node.js and npm..."
+# Install Node.js 18.x LTS
+curl -fsSL https://deb.nodesource.com/setup_18.x | $SUDO -E bash - || handle_error "Failed to add NodeSource repository"
+$SUDO apt install -y nodejs || handle_error "Failed to install Node.js"
+
+# Verify Node.js and npm installation
+echo "Verifying Node.js and npm installation..."
+if ! command_exists node; then
+    handle_error "Node.js installation failed"
+fi
+
+if ! command_exists npm; then
+    handle_error "npm installation failed"
+fi
+
+node_version=$(node --version 2>/dev/null)
+npm_version=$(npm --version 2>/dev/null)
+echo "Installed Node.js: $node_version"
+echo "Installed npm: $npm_version"
+
 # Verify FFmpeg installation and check for required codecs
 echo "Verifying FFmpeg installation..."
 if ! command_exists ffmpeg; then
@@ -115,11 +135,14 @@ fi
 echo "================================================"
 echo "Installation completed successfully!"
 echo ""
-echo "Your system is now ready to run the streaming script."
-echo "You can now execute: ./initial.sh"
+echo "Your system is now ready to run the streaming applications."
+echo "You can now:"
+echo "1. Execute: ./initial.sh (for basic streaming script)"
+echo "2. Navigate to streamer-node/ and run: npm install (for Node.js application)"
 echo ""
 echo "Note: Make sure to:"
 echo "1. Update the RTSP URL with your camera credentials"
 echo "2. Update the RTMP URL with your streaming service key"
 echo "3. Adjust video quality settings as needed"
+echo "4. Configure the .env file in streamer-node/ for the Node.js application"
 echo "================================================"
