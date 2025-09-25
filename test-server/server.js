@@ -11,9 +11,36 @@ let clients = [];
 app.use(express.json());
 app.use(express.static("public"));
 
+// Go Live API endpoint
+app.get(
+  "/api/v1/padel-grounds/:groundId/courts/:courtId/go-live/:streamKey",
+  (req, res) => {
+    const { groundId, courtId, streamKey } = req.params;
+
+    console.log(
+      `Go Live API called - Ground ID: ${groundId}, Court ID: ${courtId}, Stream Key: ${streamKey}`
+    );
+
+    res.status(200).json({
+      success: true,
+      message: "Go live request received",
+      data: {
+        groundId,
+        courtId,
+        streamKey,
+        timestamp: new Date().toISOString(),
+      },
+    });
+  }
+);
+
 // SSE endpoint
-app.get("/events", (req, res) => {
+app.get("/api/v1/padel-grounds/:groundId/events", (req, res) => {
   // Set SSE headers
+  console.log("request received");
+  const { groundId } = req.params;
+  console.log("groundId: ", groundId);
+
   res.writeHead(200, {
     "Content-Type": "text/event-stream",
     "Cache-Control": "no-cache",
@@ -48,13 +75,19 @@ app.get("/events", (req, res) => {
 });
 
 // Endpoint to send SSE events
+app.post("/api/v1/logs/logs", (req, res) => {
+  console.log("Received log:", JSON.stringify(req.body, null, 2));
+  res.json({ success: true, message: "Log received" });
+});
+
 app.post("/send-event", (req, res) => {
-  const { eventType, cameraUrl, streamKey } = req.body;
+  const { eventType, cameraUrl, streamKey, courtId } = req.body;
 
   const eventData = {
     eventType,
     cameraUrl,
     streamKey,
+    courtId,
   };
 
   console.log("Broadcasting event:", eventData);

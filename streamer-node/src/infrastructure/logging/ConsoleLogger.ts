@@ -3,7 +3,7 @@ import { Logger } from "../../application/interfaces/Logger";
 export class ConsoleLogger implements Logger {
   constructor(private readonly logLevel: string = "debug") {}
 
-  private shouldLog(level: string): boolean {
+  shouldLog(level: string): boolean {
     const levels = ["debug", "info", "warn", "error"];
     const currentLevelIndex = levels.indexOf(this.logLevel);
     const messageLevelIndex = levels.indexOf(level);

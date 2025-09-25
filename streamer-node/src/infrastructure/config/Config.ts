@@ -19,18 +19,12 @@ export interface AppConfig {
     tempStateDir: string;
     healthCheckInterval: number;
   };
-  ffmpeg: {
-    rtspInputParams: string;
-    outputParamsVideo: string;
-    outputParamsAudio: string;
-  };
   logging: {
     level: string;
     file?: string;
   };
   remoteLogging: {
     enabled: boolean;
-    url: string;
     sourceId: string;
     batchSize: number;
     batchInterval: number;
@@ -82,27 +76,12 @@ export class Config {
           this.getEnvVar("HEALTH_CHECK_INTERVAL", "30000")
         ),
       },
-      ffmpeg: {
-        rtspInputParams: this.getEnvVar(
-          "RTSP_INPUT_PARAMS",
-          "-rtsp_transport tcp -use_wallclock_as_timestamps 1 -fflags +genpts"
-        ),
-        outputParamsVideo: this.getEnvVar(
-          "OUTPUT_PARAMS_VIDEO",
-          "-c:v libx264 -preset veryfast -tune zerolatency -crf 23 -maxrate 2500k -bufsize 5000k -pix_fmt yuv420p -g 50 -f flv"
-        ),
-        outputParamsAudio: this.getEnvVar(
-          "OUTPUT_PARAMS_AUDIO",
-          "-c:a aac -b:a 128k -ar 44100 -ac 2"
-        ),
-      },
       logging: {
         level: this.getEnvVar("LOG_LEVEL", "info"),
         file: process.env.LOG_FILE,
       },
       remoteLogging: {
         enabled: this.getEnvVar("REMOTE_LOGGING_ENABLED", "false") === "true",
-        url: this.getEnvVar("REMOTE_LOGGING_URL", ""),
         sourceId: this.getEnvVar(
           "REMOTE_LOGGING_SOURCE_ID",
           "raspberry-pi-001"

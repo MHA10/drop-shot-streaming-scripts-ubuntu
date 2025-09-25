@@ -13,7 +13,7 @@ export class RemoteLogger implements Logger {
   constructor(
     remoteConfig: {
       enabled: boolean;
-      url: string;
+      baseUrl: string;
       sourceId: string;
       batchSize: number;
       batchInterval: number;
@@ -21,16 +21,16 @@ export class RemoteLogger implements Logger {
       retryAttempts: number;
       retryDelay: number;
     },
-    logLevel: string = "info"
+    logLevel: string = "debug"
   ) {
     // Always create console logger for local logging
     this.consoleLogger = new ConsoleLogger(logLevel);
     this.enabled = remoteConfig.enabled;
 
-    if (this.enabled && remoteConfig.url) {
+    if (this.enabled && remoteConfig.baseUrl) {
       // Initialize shipping service
       this.shippingService = new LogShippingService(
-        remoteConfig.url,
+        remoteConfig.baseUrl,
         remoteConfig.sourceId,
         remoteConfig.retryAttempts,
         remoteConfig.retryDelay
@@ -87,10 +87,10 @@ export class RemoteLogger implements Logger {
     this.consoleLogger.debug(message, meta);
 
     // Ship to remote if enabled
-    if (this.enabled && this.logBuffer) {
-      const logEntry = this.createLogEntry("debug", message, meta);
-      this.logBuffer.add(logEntry);
-    }
+    // if (this.enabled && this.logBuffer) {
+    //   const logEntry = this.createLogEntry("debug", message, meta);
+    //   this.logBuffer.add(logEntry);
+    // }
   }
 
   private createLogEntry(

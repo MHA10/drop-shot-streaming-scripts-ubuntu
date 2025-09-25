@@ -249,7 +249,7 @@ export class StreamManagerService {
     );
 
     if (targetStream) {
-      this.logger.warn("Stream already running", {
+      this.logger.warn("Stream already running on court", {
         cameraUrl: event.cameraUrl,
         streamKey: event.streamKey,
       });

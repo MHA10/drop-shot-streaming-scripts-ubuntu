@@ -1,4 +1,6 @@
 import { spawn, ChildProcess } from "child_process";
+import * as fs from "fs";
+import * as path from "path";
 import {
   FFmpegService,
   FFmpegCommand,
@@ -192,10 +194,9 @@ export class NodeFFmpegService implements FFmpegService {
     this.logger.info("Detecting audio for stream", {
       cameraUrl: cameraUrl.value,
     });
-
-    const ffmpegConfig = this.config.get().ffmpeg;
     const args = [
-      ...ffmpegConfig.rtspInputParams.split(" "),
+      "-rtsp_transport",
+      "tcp",
       "-i",
       cameraUrl.value,
       "-t",
@@ -243,39 +244,70 @@ export class NodeFFmpegService implements FFmpegService {
     streamKey: string,
     hasAudio: boolean
   ): FFmpegCommand {
-    const ffmpegConfig = this.config.get().ffmpeg;
     const rtmpUrl = `rtmp://a.rtmp.youtube.com/live2/${streamKey}`;
+    let fakeAudioInputCounter = 0;
 
     let args: string[] = [];
 
     // Add input parameters
-    args.push(...ffmpegConfig.rtspInputParams.split(" "));
+    args.push("-rtsp_transport", "tcp");
 
     args.push("-i", cameraUrl.value);
 
-    if (hasAudio) {
-      // With audio - use the exact command from bash script
-      args.push(...ffmpegConfig.outputParamsVideo.split(" "));
-      args.push(...ffmpegConfig.outputParamsAudio.split(" "));
-    } else {
+    if (!hasAudio) {
       // Without audio - add null audio source like in bash script
       args.push("-f", "lavfi");
       args.push("-i", "anullsrc=channel_layout=stereo:sample_rate=44100");
-      args.push(...ffmpegConfig.outputParamsVideo.split(" "));
-      args.push(
-        "-c:a",
-        "aac",
-        "-b:a",
-        "128k",
-        "-ar",
-        "44100",
-        "-ac",
-        "2",
-        "-shortest"
-      );
+      fakeAudioInputCounter++;
     }
 
-    args.push(rtmpUrl);
+    // Validate logo files exist before adding them
+    this.validateImageFiles();
+
+    // logo overlays & their formatting
+    // Add logo image inputs
+    args.push("-i", "./public/ds.png"); // Input 1: DropShot logo
+    const dsInputIndex = 1 + fakeAudioInputCounter;
+    args.push("-i", "./public/client.png"); // Input 2: Client logo
+    const clientInputIndex = 2 + fakeAudioInputCounter;
+    // position them correctly using filter complex
+    const filterComplex = [
+      `[${dsInputIndex}:v] scale=500:-1:force_original_aspect_ratio=decrease [ds];`,
+      `[${clientInputIndex}:v] scale=350:-1:force_original_aspect_ratio=decrease [client];`,
+      "[0:v] scale=1920:1080 [base];",
+      "[base][ds] overlay=main_w-overlay_w-10:main_h-overlay_h-10 [tmp1];",
+      "[tmp1][client] overlay=main_w-overlay_w-10:10",
+    ].join(" ");
+
+    args.push("-filter_complex", filterComplex);
+
+    // audio & video output configurations
+    args.push(
+      "-c:v",
+      "libx264",
+      "-preset",
+      "veryfast",
+      "-b:v",
+      "4500k",
+      "-maxrate",
+      "5000k",
+      "-bufsize",
+      "10000k"
+    );
+    args.push(
+      "-c:a",
+      "aac",
+      "-b:a",
+      "128k",
+      "-ar",
+      "44100",
+      "-ac",
+      "2",
+      "-shortest"
+    );
+
+    // Specify output format for RTMP streaming
+    args.push("-f", "flv", rtmpUrl);
 
     const fullCommand = `ffmpeg ${args.join(" ")}`;
 
@@ -301,5 +333,23 @@ export class NodeFFmpegService implements FFmpegService {
 
     await Promise.all(killPromises);
     this.runningProcesses.clear();
+  }
+
+  private validateImageFiles(): void {
+    const dsLogoPath = path.resolve("./public/ds.png");
+    const clientLogoPath = path.resolve("./public/client.png");
+
+    if (!fs.existsSync(dsLogoPath)) {
+      throw new Error(`DropShot logo not found at: ${dsLogoPath}`);
+    }
+
+    if (!fs.existsSync(clientLogoPath)) {
+      throw new Error(`Client logo not found at: ${clientLogoPath}`);
+    }
+
+    this.logger.info("Logo files validated successfully", {
+      dsLogo: dsLogoPath,
+      clientLogo: clientLogoPath,
+    });
   }
 }
