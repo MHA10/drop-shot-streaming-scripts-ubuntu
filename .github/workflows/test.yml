@@ -1,0 +1,51 @@
+name: Run Tests
+
+on:
+  push:
+    branches: ['*']  # Trigger on push to any branch
+  pull_request:
+    branches: ['*']  # Also trigger on pull requests to any branch
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    
+    strategy:
+      matrix:
+        node-version: [18.x, 20.x]  # Test on multiple Node.js versions
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      
+      - name: Setup Node.js ${{ matrix.node-version }}
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node-version }}
+          cache: 'npm'
+          cache-dependency-path: 'streamer-node/package-lock.json'
+      
+      - name: Install dependencies
+        working-directory: ./streamer-node
+        run: npm ci
+      
+      - name: Setup test environment
+        working-directory: ./streamer-node
+        run: |
+          # Create basic .env file for testing
+          echo "LOG_LEVEL=error" > .env
+          echo "PERSISTENT_STATE_DIR=/tmp/test_stream_registry" >> .env
+          echo "TEMP_STATE_DIR=/tmp/test_stream_registry" >> .env
+          echo "HEALTH_CHECK_INTERVAL=30000" >> .env
+      
+      - name: Run tests
+        working-directory: ./streamer-node
+        run: npm test
+      
+      - name: Run tests with coverage
+        working-directory: ./streamer-node
+        run: npm run test:coverage
+      
+      - name: Build project
+        working-directory: ./streamer-node
+        run: npm run build
