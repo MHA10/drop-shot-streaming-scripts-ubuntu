@@ -228,37 +228,69 @@ export class StreamManagerService {
 
     try {
       if (event.action === "start") {
-        await this.startStreamUseCase.execute({
-          cameraUrl: event.cameraUrl,
-          streamKey: event.streamKey,
-          courtId: event.courtId,
-          detectAudio: true,
-        });
+        await this.handleStartEvent(event);
       } else if (event.action === "stop") {
-        // Find stream by camera URL and stream key
-        const streams = await this.streamRepository.findAll();
-        const targetStream = streams.find(
-          (stream) =>
-            stream.cameraUrl.value === event.cameraUrl &&
-            stream.streamKey === event.streamKey &&
-            stream.state === StreamState.RUNNING
-        );
-
-        if (targetStream) {
-          await this.stopStreamUseCase.execute({
-            streamId: targetStream.id.value,
-          });
-        } else {
-          this.logger.warn("Stream not found for stop event", {
-            cameraUrl: event.cameraUrl,
-            streamKey: event.streamKey,
-          });
-        }
+        await this.handleStopEvent(event);
       }
     } catch (error) {
       this.logger.error("Failed to process stream event", {
         event,
         error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+
+  private async handleStartEvent(event: SSEStreamEvent) {
+    // Find stream by camera URL and stream key
+    const streams = await this.streamRepository.findAll();
+    const targetStream = streams.find(
+      (stream) =>
+        stream.courtId === event.courtId && stream.state === StreamState.RUNNING
+    );
+
+    if (targetStream) {
+      this.logger.warn("Stream already running", {
+        cameraUrl: event.cameraUrl,
+        streamKey: event.streamKey,
+      });
+      if (targetStream.streamKey === event.streamKey) {
+        this.logger.warn("Ignoring duplicate event");
+        return;
+      } else {
+        // we need to first close the current stream
+        this.logger.warn("Closing running stream");
+        await this.stopStreamUseCase.execute({
+          streamId: targetStream.id.toString(),
+        });
+      }
+    }
+    this.logger.info("Setting up new stream");
+    await this.startStreamUseCase.execute({
+      cameraUrl: event.cameraUrl,
+      streamKey: event.streamKey,
+      courtId: event.courtId,
+      detectAudio: true,
+    });
+  }
+
+  private async handleStopEvent(event: SSEStreamEvent) {
+    // Find stream by camera URL and stream key
+    const streams = await this.streamRepository.findAll();
+    const targetStream = streams.find(
+      (stream) =>
+        stream.cameraUrl.value === event.cameraUrl &&
+        stream.streamKey === event.streamKey &&
+        stream.state === StreamState.RUNNING
+    );
+
+    if (targetStream) {
+      await this.stopStreamUseCase.execute({
+        streamId: targetStream.id.value,
+      });
+    } else {
+      this.logger.warn("Stream not found for stop event", {
+        cameraUrl: event.cameraUrl,
+        streamKey: event.streamKey,
       });
     }
   }
