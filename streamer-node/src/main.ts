@@ -15,7 +15,7 @@ class Application {
       ...Config.getInstance().get().remoteLogging,
       baseUrl: Config.getInstance().get().server.baseUrl,
     },
-    "info"
+    "debug"
   );
   private readonly httpClient = new HttpClient();
 
