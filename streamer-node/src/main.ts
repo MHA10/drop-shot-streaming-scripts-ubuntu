@@ -7,14 +7,15 @@ import { StartStreamUseCase } from "./application/use-cases/StartStreamUseCase";
 import { StopStreamUseCase } from "./application/use-cases/StopStreamUseCase";
 import { StreamManagerService } from "./application/services/StreamManagerService";
 import { HttpClient } from "./application/services/HttpClient";
-import { RemoteLogger } from "./infrastructure/logging/RemoteLogger";
+// import { RemoteLogger } from "./infrastructure/logging/RemoteLogger";
 
 class Application {
   private streamManager?: StreamManagerService;
-  private readonly logger = new RemoteLogger({
-    ...Config.getInstance().get().remoteLogging,
-    baseUrl: Config.getInstance().get().server.baseUrl,
-  });
+  // private readonly logger = new RemoteLogger({
+  //   ...Config.getInstance().get().remoteLogging,
+  //   baseUrl: Config.getInstance().get().server.baseUrl,
+  // });
+  private readonly logger = new ConsoleLogger();
   private readonly httpClient = new HttpClient();
 
   public async start(): Promise<void> {
