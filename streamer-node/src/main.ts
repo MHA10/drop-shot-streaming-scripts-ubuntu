@@ -10,10 +10,13 @@ import { RemoteLogger } from "./infrastructure/logging/RemoteLogger";
 
 class Application {
   private streamManager?: StreamManagerService;
-  private readonly logger = new RemoteLogger({
-    ...Config.getInstance().get().remoteLogging,
-    baseUrl: Config.getInstance().get().server.baseUrl,
-  });
+  private readonly logger = new RemoteLogger(
+    {
+      ...Config.getInstance().get().remoteLogging,
+      baseUrl: Config.getInstance().get().server.baseUrl,
+    },
+    "info"
+  );
   private readonly httpClient = new HttpClient();
 
   public async start(): Promise<void> {
