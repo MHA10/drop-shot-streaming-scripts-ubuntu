@@ -196,25 +196,7 @@ export class StreamManagerService {
     this.logger.info("Setting up SSE event handlers");
 
     this.sseService.onStreamEvent(async (event: SSEStreamEvent) => {
-      try {
-        await this.handleStreamEvent(event);
-      } catch (error) {
-        this.logger.error("Failed to handle SSE stream event", {
-          event,
-          error: error instanceof Error ? error.message : String(error),
-        });
-      }
-    });
-
-    this.sseService.onConnectionChange((status) => {
-      this.logger.info("SSE connection status changed", { status });
-
-      if (status === "connected" && this.isRunning) {
-        // Trigger reconciliation when reconnected
-        this.logger.info("SSE reconnected, triggering stream reconciliation");
-        // Note: In a real implementation, you might want to request
-        // current state from the server here
-      }
+      await this.handleStreamEvent(event);
     });
   }
 
@@ -249,21 +231,61 @@ export class StreamManagerService {
     );
 
     if (targetStream) {
-      this.logger.warn("Stream already running on court", {
-        cameraUrl: event.cameraUrl,
-        streamKey: event.streamKey,
-      });
-      if (targetStream.streamKey === event.streamKey) {
-        this.logger.warn("Ignoring duplicate event");
-        return;
+      // Validate that the process is actually running
+      if (targetStream.processId) {
+        const isProcessRunning = await this.ffmpegService.isProcessRunning(
+          targetStream.processId
+        );
+
+        if (!isProcessRunning) {
+          this.logger.warn(
+            "Found stream marked as RUNNING but process is dead, updating state",
+            {
+              streamId: targetStream.id.toString(),
+              processId: targetStream.processId,
+              courtId: targetStream.courtId,
+            }
+          );
+
+          // Update stream state to reflect reality
+          targetStream.stop();
+          targetStream.clearProcessId();
+          await this.streamRepository.save(targetStream);
+
+          // Continue with starting new stream since the old one is actually dead
+        } else {
+          this.logger.warn("Stream already running on court", {
+            cameraUrl: event.cameraUrl,
+            streamKey: event.streamKey,
+            processId: targetStream.processId,
+          });
+
+          if (targetStream.streamKey === event.streamKey) {
+            this.logger.warn("Ignoring duplicate event");
+            return;
+          } else {
+            // we need to first close the current stream
+            this.logger.warn("Closing running stream");
+            await this.stopStreamUseCase.execute({
+              streamId: targetStream.id.toString(),
+            });
+          }
+        }
       } else {
-        // we need to first close the current stream
-        this.logger.warn("Closing running stream");
-        await this.stopStreamUseCase.execute({
-          streamId: targetStream.id.toString(),
-        });
+        // Stream marked as RUNNING but no process ID - this is inconsistent state
+        this.logger.warn(
+          "Found stream marked as RUNNING but no process ID, updating state",
+          {
+            streamId: targetStream.id.toString(),
+            courtId: targetStream.courtId,
+          }
+        );
+
+        targetStream.stop();
+        await this.streamRepository.save(targetStream);
       }
     }
+
     this.logger.info("Setting up new stream");
     await this.startStreamUseCase.execute({
       cameraUrl: event.cameraUrl,

@@ -3,14 +3,12 @@ import {
   SSEService,
   SSEConnectionConfig,
 } from "../../domain/services/SSEService";
-import {
-  SSEStreamEvent,
-  SSEConnectionEvent,
-} from "../../domain/events/StreamEvent";
+import { SSEStreamEvent } from "../../domain/events/StreamEvent";
 import { Logger } from "../../application/interfaces/Logger";
 
 export class NodeSSEService extends EventEmitter implements SSEService {
   private isActive = false;
+  private isConnecting = false;
   private connectionStatus: "connected" | "disconnected" | "reconnecting" =
     "disconnected";
   private retryCount = 0;
@@ -91,6 +89,19 @@ export class NodeSSEService extends EventEmitter implements SSEService {
       return;
     }
 
+    // Prevent concurrent connection attempts
+    if (this.isConnecting) {
+      this.logger.debug("Connection attempt already in progress, skipping");
+      return;
+    }
+
+    this.isConnecting = true;
+
+    // Abort any existing connection attempt
+    if (this.abortController) {
+      this.abortController.abort();
+    }
+
     this.abortController = new AbortController();
     this.connectionStatus = "reconnecting";
     this.emitConnectionEvent("reconnecting");
@@ -101,16 +112,25 @@ export class NodeSSEService extends EventEmitter implements SSEService {
         retryCount: this.retryCount,
       });
 
-      const response = await fetch(
-        `${this.config.baseUrl}/api/v1/padel-grounds/${this.config.groundId}/events`,
-        {
-          headers: {
-            Accept: "text/event-stream",
-            "Cache-Control": "no-cache",
-          },
-          signal: this.abortController.signal,
-        }
-      );
+      // Create timeout promise
+      const timeoutPromise = new Promise<never>((_, reject) => {
+        setTimeout(() => reject(new Error("Connection timeout")), 30000);
+      });
+
+      // Race between fetch and timeout
+      const response = await Promise.race([
+        fetch(
+          `${this.config.baseUrl}/api/v1/padel-grounds/${this.config.groundId}/events`,
+          {
+            headers: {
+              Accept: "text/event-stream",
+              "Cache-Control": "no-cache",
+            },
+            signal: this.abortController.signal,
+          }
+        ),
+        timeoutPromise,
+      ]);
 
       if (!response.ok) {
         throw new Error(`HTTP ${response.status}: ${response.statusText}`);
@@ -122,6 +142,7 @@ export class NodeSSEService extends EventEmitter implements SSEService {
 
       this.connectionStatus = "connected";
       this.retryCount = 0;
+      this.isConnecting = false;
       this.emitConnectionEvent("connected");
 
       this.logger.info("SSE connection established");
@@ -129,6 +150,8 @@ export class NodeSSEService extends EventEmitter implements SSEService {
       // Process the stream
       await this.processEventStream(response.body);
     } catch (error) {
+      this.isConnecting = false;
+
       if (error instanceof Error && error.name === "AbortError") {
         this.logger.info("SSE connection aborted");
         return;
@@ -142,12 +165,9 @@ export class NodeSSEService extends EventEmitter implements SSEService {
       this.connectionStatus = "disconnected";
       this.emitConnectionEvent("disconnected");
 
-      // Schedule retry if still active and under retry limit
-      if (this.isActive && this.retryCount < this.config.maxRetries) {
+      // Schedule retry if still active (infinite retries)
+      if (this.isActive) {
         this.scheduleRetry();
-      } else if (this.retryCount >= this.config.maxRetries) {
-        this.logger.error("Max retry attempts reached, stopping SSE client");
-        this.isActive = false;
       }
     }
   }
@@ -287,9 +307,19 @@ export class NodeSSEService extends EventEmitter implements SSEService {
       return;
     }
 
+    // Don't schedule retry if already connecting
+    if (this.isConnecting) {
+      this.logger.debug(
+        "Connection attempt in progress, skipping retry schedule"
+      );
+      return;
+    }
+
     this.retryCount++;
+    // Cap retry count at 10 for exponential backoff calculation to prevent overflow
+    const effectiveRetryCount = Math.min(this.retryCount, 10);
     const delay = Math.min(
-      this.config.retryInterval * Math.pow(2, this.retryCount - 1),
+      this.config.retryInterval * Math.pow(2, effectiveRetryCount - 1),
       30000 // Max 30 seconds
     );
 
@@ -306,14 +336,6 @@ export class NodeSSEService extends EventEmitter implements SSEService {
   private emitConnectionEvent(
     status: "connected" | "disconnected" | "reconnecting"
   ): void {
-    const event: SSEConnectionEvent = {
-      eventId: `conn_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
-      occurredOn: new Date(),
-      eventType: "SSEConnectionEvent",
-      status,
-      retryCount: this.retryCount,
-    };
-
     this.emit("connectionChange", status);
     this.logger.debug("SSE connection status changed", {
       status,

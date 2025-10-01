@@ -68,10 +68,25 @@ export class StartStreamUseCase {
 
       // Start FFmpeg process
       this.logger.info("Starting FFmpeg process", { streamId: streamId.value });
+
+      // Create PID update callback for retries
+      const onPidUpdate = async (newPid: number) => {
+        this.logger.info("Updating stream PID after retry", {
+          streamId: streamId.value,
+          oldPid: stream.processId,
+          newPid,
+        });
+        stream.updateProcessId(newPid);
+        await this.streamRepository.save(stream);
+      };
+
       const ffmpegProcess = await this.ffmpegService.startStream(
         cameraUrl,
         request.streamKey,
-        hasAudio
+        hasAudio,
+        5, // maxRetries
+        5000, // retryDelayMs
+        onPidUpdate
       );
 
       // Update stream with process ID

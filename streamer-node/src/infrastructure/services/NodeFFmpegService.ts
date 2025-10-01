@@ -12,6 +12,7 @@ import { Config } from "../config/Config";
 
 export class NodeFFmpegService implements FFmpegService {
   private runningProcesses: Map<number, FFmpegProcess> = new Map();
+  private intentionallyStopped: Set<number> = new Set();
 
   constructor(
     private readonly logger: Logger,
@@ -23,7 +24,8 @@ export class NodeFFmpegService implements FFmpegService {
     streamKey: string,
     hasAudio: boolean,
     maxRetries = 5,
-    retryDelayMs = 5000
+    retryDelayMs = 5000,
+    onPidUpdate?: (newPid: number) => Promise<void>
   ): Promise<FFmpegProcess> {
     const command = this.buildStreamCommand(cameraUrl, streamKey, hasAudio);
     this.logger.info("Command full form", command);
@@ -65,6 +67,16 @@ export class NodeFFmpegService implements FFmpegService {
         // Monitor stderr for startup confirmation & errors
         process.stderr?.on("data", (data) => {
           const output = data.toString();
+
+          // Filter out FFmpeg progress output (frame statistics) to reduce noise
+          if (
+            output.includes("frame=") &&
+            output.includes("fps=") &&
+            output.includes("time=")
+          ) {
+            return; // Ignore progress output
+          }
+
           this.logger.debug("FFmpeg stderr", { pid: process.pid, output });
 
           if (
@@ -75,6 +87,20 @@ export class NodeFFmpegService implements FFmpegService {
               resolved = true;
               clearTimeout(startupTimeout);
               this.runningProcesses.set(process.pid!, ffmpegProcess);
+
+              // If this is a retry (attempt > 1) and we have a PID update callback, call it
+              if (attempt > 1 && onPidUpdate) {
+                onPidUpdate(process.pid!).catch((error) => {
+                  this.logger.error(
+                    "Failed to update PID in stream repository",
+                    {
+                      newPid: process.pid,
+                      error: error.message,
+                    }
+                  );
+                });
+              }
+
               resolve(ffmpegProcess);
             }
           }
@@ -102,7 +128,25 @@ export class NodeFFmpegService implements FFmpegService {
             cameraUrl: cameraUrl.value,
           });
 
-          if (process.pid) this.runningProcesses.delete(process.pid);
+          if (process.pid) {
+            this.runningProcesses.delete(process.pid);
+
+            // Check if this process was intentionally stopped
+            const wasIntentionallyStopped = this.intentionallyStopped.has(
+              process.pid
+            );
+            if (wasIntentionallyStopped) {
+              this.intentionallyStopped.delete(process.pid);
+              this.logger.info(
+                "Process was intentionally stopped, not retrying",
+                {
+                  pid: process.pid,
+                  cameraUrl: cameraUrl.value,
+                }
+              );
+              return; // Don't retry if intentionally stopped
+            }
+          }
 
           if (!resolved) {
             resolved = true;
@@ -144,6 +188,9 @@ export class NodeFFmpegService implements FFmpegService {
   public async stopStream(pid: number): Promise<void> {
     this.logger.info("Stopping FFmpeg process", { pid });
 
+    // Mark this process as intentionally stopped to prevent retries
+    this.intentionallyStopped.add(pid);
+
     const ffmpegProcess = this.runningProcesses.get(pid);
     if (!ffmpegProcess) {
       this.logger.warn("Process not found in running processes", { pid });
@@ -153,6 +200,7 @@ export class NodeFFmpegService implements FFmpegService {
         // Wait a bit, then force kill if needed
         setTimeout(() => {
           try {
+            this.logger.warn("Force killing the stream process", { pid });
             process.kill(pid, "SIGKILL");
           } catch (error) {
             // Process might already be dead

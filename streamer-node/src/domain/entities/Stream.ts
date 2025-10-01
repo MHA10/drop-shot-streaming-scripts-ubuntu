@@ -118,6 +118,15 @@ export class Stream {
     this.props.updatedAt = new Date();
   }
 
+  public updateProcessId(processId: number): void {
+    if (this.props.state !== StreamState.RUNNING) {
+      throw new Error(`Cannot update processId for stream in ${this.props.state} state`);
+    }
+    
+    this.props.processId = processId;
+    this.props.updatedAt = new Date();
+  }
+
   public isRunning(): boolean {
     return this.props.state === StreamState.RUNNING;
   }

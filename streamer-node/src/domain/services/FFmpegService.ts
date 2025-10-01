@@ -19,7 +19,10 @@ export interface FFmpegService {
   startStream(
     cameraUrl: StreamUrl,
     streamKey: string,
-    hasAudio: boolean
+    hasAudio: boolean,
+    maxRetries?: number,
+    retryDelayMs?: number,
+    onPidUpdate?: (newPid: number) => Promise<void>
   ): Promise<FFmpegProcess>;
 
   /**
