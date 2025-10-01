@@ -7,6 +7,7 @@
     "build": "tsc",
     "start": "node dist/src/main.js",
     "dev": "npm run build && npm start",
+    "monitor": "npm run dev 2>&1 | tee >(grep -E \"ERROR|WARN|INFO\" > node.logs.ts) >(grep \"DEBUG\" | grep -v \"frame=\" > ffmpeg.logs.ts)",
     "test": "jest",
     "test:watch": "jest --watch",
     "test:coverage": "jest --coverage",
