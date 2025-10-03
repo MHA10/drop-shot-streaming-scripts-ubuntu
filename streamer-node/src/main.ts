@@ -32,7 +32,7 @@ class Application {
         config.get().stream.persistentStateDir,
         this.logger
       );
-      const ffmpegService = new NodeFFmpegService(this.logger, config);
+      const ffmpegService = new NodeFFmpegService(this.logger);
       const sseService = new NodeSSEService(this.logger);
 
       // Initialize use cases
