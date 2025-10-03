@@ -19,7 +19,6 @@ export interface AppConfig {
   };
   stream: {
     persistentStateDir: string;
-    tempStateDir: string;
     healthCheckInterval: number;
   };
   logging: {
@@ -61,7 +60,7 @@ export class Config {
   private loadConfig(): AppConfig {
     return {
       server: {
-        baseUrl: this.getEnvVar("BASE_URL", "https://api.drop-shot.live/"),
+        baseUrl: this.getEnvVar("BASE_URL", "https://api.drop-shot.live"),
       },
       images: {
         clientPath: this.getEnvVar("CLIENT_IMAGES_PATH", ""),
@@ -78,7 +77,6 @@ export class Config {
           "PERSISTENT_STATE_DIR",
           "/var/tmp/stream_registry"
         ),
-        tempStateDir: this.getEnvVar("TEMP_STATE_DIR", "/tmp/stream_registry"),
         healthCheckInterval: parseInt(
           this.getEnvVar("HEALTH_CHECK_INTERVAL", "30000")
         ),
@@ -128,18 +126,6 @@ export class Config {
 
     if (!this.config.images.clientPath) {
       errors.push("CLIENT_IMAGES_PATH is required");
-    }
-
-    if (this.config.sse.retryInterval <= 0) {
-      errors.push("SSE_RETRY_INTERVAL must be positive");
-    }
-
-    if (this.config.sse.maxRetries <= 0) {
-      errors.push("SSE_MAX_RETRIES must be positive");
-    }
-
-    if (!this.config.server.baseUrl) {
-      errors.push("SERVER_BASE_URL is required");
     }
 
     if (errors.length > 0) {
