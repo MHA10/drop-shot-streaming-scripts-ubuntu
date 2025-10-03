@@ -1,4 +1,5 @@
-import { StreamUrl } from '../value-objects/StreamUrl';
+import { StartStreamRequest } from "../../application/interfaces/StartStreamUseCase.types";
+import { StreamUrl } from "../value-objects/StreamUrl";
 
 export interface FFmpegCommand {
   readonly command: string;
@@ -20,9 +21,10 @@ export interface FFmpegService {
     cameraUrl: StreamUrl,
     streamKey: string,
     hasAudio: boolean,
-    maxRetries?: number,
-    retryDelayMs?: number,
-    onPidUpdate?: (newPid: number) => Promise<void>
+    retry: {
+      event: StartStreamRequest;
+      onRetryStream: (event: StartStreamRequest) => Promise<void>;
+    }
   ): Promise<FFmpegProcess>;
 
   /**

@@ -30,13 +30,7 @@ export class StartStreamUseCase {
     event: StartStreamRequest,
     stopStream: (request: StopStreamRequest) => Promise<StopStreamResponse>
   ): Promise<ShouldStartStream> {
-    // Find stream by camera URL and stream key
-    const streams = await this.streamRepository.findAll();
-    const runningStreams = streams.filter(
-      (stream) =>
-        stream.courtId === event.courtId && stream.state === StreamState.RUNNING
-    );
-    const action = await this.validateStreamEvent(runningStreams, event);
+    const action = await this.validateStreamEvent(event);
     if (action.isValid) return { isValid: true }; // return true for happy case
 
     // handle other event types
@@ -87,9 +81,33 @@ export class StartStreamUseCase {
    * 6. Process dead but stream marked as running (stale state)
    */
   private async validateStreamEvent(
-    runningStreams: Stream[],
     event: StartStreamRequest
   ): Promise<ValidationEvent> {
+    // Find stream by camera URL and stream key
+    const streams = await this.streamRepository.findAll();
+
+    // if the stream is in pending state, then we can ignore this event
+    const pendingStreams = streams.filter(
+      (stream) =>
+        stream.courtId === event.courtId && stream.state === StreamState.PENDING
+    );
+
+    if (pendingStreams.length > 0) {
+      return {
+        isValid: false,
+        data: {
+          action: StreamAction.DUPLICATE_EVENT,
+          stream: pendingStreams[0],
+        },
+      };
+    }
+
+    const runningStreams = streams.filter(
+      (stream) =>
+        stream.courtId === event.courtId && stream.state === StreamState.RUNNING
+    );
+
+    // check if the stream is already running
     const targetStream = runningStreams.length > 0 ? runningStreams[0] : null;
 
     if (!targetStream) {
@@ -146,6 +164,7 @@ export class StartStreamUseCase {
       };
     }
 
+    // a running process exists with a PID, but process is actually dead.
     return {
       isValid: false,
       data: {
@@ -176,6 +195,15 @@ export class StartStreamUseCase {
       // Create value objects
       const streamId = StreamId.create();
       const cameraUrl = StreamUrl.create(request.cameraUrl);
+      // Create stream entity
+      const stream = Stream.create(
+        streamId,
+        cameraUrl,
+        request.streamKey,
+        request.courtId
+      );
+      // Save stream state with pending state. To stop any duplicate streams from starting
+      await this.streamRepository.save(stream);
 
       // Detect audio if requested
       let hasAudio = false;
@@ -189,37 +217,31 @@ export class StartStreamUseCase {
           hasAudio,
         });
       }
-
-      // Create stream entity
-      const stream = Stream.create(
-        streamId,
-        cameraUrl,
-        request.streamKey,
-        request.courtId,
-        hasAudio
-      );
+      stream.setAudio(hasAudio);
 
       // Start FFmpeg process
       this.logger.info("Starting FFmpeg process", { streamId: streamId.value });
 
-      // Create PID update callback for retries
-      const onPidUpdate = async (newPid: number) => {
-        this.logger.info("Updating stream PID after retry", {
-          streamId: streamId.value,
-          oldPid: stream.processId,
-          newPid,
-        });
-        stream.updateProcessId(newPid);
+      // This will attempt a retry if the stream gives a retryable error
+      const onRetryStream = async (event: StartStreamRequest) => {
+        this.logger.info("Stream retrying", { event });
+
+        // close the current running stream
+        stream.markAsFailed();
         await this.streamRepository.save(stream);
+
+        // start a new process
+        await this.execute(request, stopProcess);
       };
 
       const ffmpegProcess = await this.ffmpegService.startStream(
         cameraUrl,
         request.streamKey,
         hasAudio,
-        5, // maxRetries
-        5000, // retryDelayMs
-        onPidUpdate
+        {
+          event: request,
+          onRetryStream,
+        }
       );
 
       // Update stream with process ID
@@ -247,6 +269,12 @@ export class StartStreamUseCase {
         hasAudio,
       };
     } catch (error) {
+      // check if the error is retry-able
+
+      // try to restart the process
+      await this.execute(request, stopProcess);
+
+      // otherwise just log and move on
       this.logger.error("Failed to start stream", {
         error: error instanceof Error ? error.message : String(error),
         cameraUrl: request.cameraUrl,
