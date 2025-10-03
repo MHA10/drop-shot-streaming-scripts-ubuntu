@@ -223,76 +223,16 @@ export class StreamManagerService {
   }
 
   private async handleStartEvent(event: SSEStreamEvent) {
-    // Find stream by camera URL and stream key
-    const streams = await this.streamRepository.findAll();
-    const targetStream = streams.find(
-      (stream) =>
-        stream.courtId === event.courtId && stream.state === StreamState.RUNNING
+    this.logger.info("Handling new stream");
+    await this.startStreamUseCase.execute(
+      {
+        cameraUrl: event.cameraUrl,
+        streamKey: event.streamKey,
+        courtId: event.courtId,
+        detectAudio: true,
+      },
+      this.stopStreamUseCase.execute
     );
-
-    if (targetStream) {
-      // Validate that the process is actually running
-      if (targetStream.processId) {
-        const isProcessRunning = await this.ffmpegService.isProcessRunning(
-          targetStream.processId
-        );
-
-        if (!isProcessRunning) {
-          this.logger.warn(
-            "Found stream marked as RUNNING but process is dead, updating state",
-            {
-              streamId: targetStream.id.toString(),
-              processId: targetStream.processId,
-              courtId: targetStream.courtId,
-            }
-          );
-
-          // Update stream state to reflect reality
-          targetStream.stop();
-          targetStream.clearProcessId();
-          await this.streamRepository.save(targetStream);
-
-          // Continue with starting new stream since the old one is actually dead
-        } else {
-          this.logger.warn("Stream already running on court", {
-            cameraUrl: event.cameraUrl,
-            streamKey: event.streamKey,
-            processId: targetStream.processId,
-          });
-
-          if (targetStream.streamKey === event.streamKey) {
-            this.logger.warn("Ignoring duplicate event");
-            return;
-          } else {
-            // we need to first close the current stream
-            this.logger.warn("Closing running stream");
-            await this.stopStreamUseCase.execute({
-              streamId: targetStream.id.toString(),
-            });
-          }
-        }
-      } else {
-        // Stream marked as RUNNING but no process ID - this is inconsistent state
-        this.logger.warn(
-          "Found stream marked as RUNNING but no process ID, updating state",
-          {
-            streamId: targetStream.id.toString(),
-            courtId: targetStream.courtId,
-          }
-        );
-
-        targetStream.stop();
-        await this.streamRepository.save(targetStream);
-      }
-    }
-
-    this.logger.info("Setting up new stream");
-    await this.startStreamUseCase.execute({
-      cameraUrl: event.cameraUrl,
-      streamKey: event.streamKey,
-      courtId: event.courtId,
-      detectAudio: true,
-    });
   }
 
   private async handleStopEvent(event: SSEStreamEvent) {

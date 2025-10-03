@@ -1,4 +1,4 @@
-import { spawn, ChildProcess } from "child_process";
+import { spawn } from "child_process";
 import * as fs from "fs";
 import * as path from "path";
 import {
@@ -8,24 +8,16 @@ import {
 } from "../../domain/services/FFmpegService";
 import { StreamUrl } from "../../domain/value-objects/StreamUrl";
 import { Logger } from "../../application/interfaces/Logger";
-import { Config } from "../config/Config";
 
 export class NodeFFmpegService implements FFmpegService {
-  private runningProcesses: Map<number, FFmpegProcess> = new Map();
-  private intentionallyStopped: Set<number> = new Set();
+  private readonly runningProcesses: Map<number, FFmpegProcess> = new Map();
 
-  constructor(
-    private readonly logger: Logger,
-    private readonly config: Config
-  ) {}
+  constructor(private readonly logger: Logger) {}
 
   public async startStream(
     cameraUrl: StreamUrl,
     streamKey: string,
-    hasAudio: boolean,
-    maxRetries = 5,
-    retryDelayMs = 5000,
-    onPidUpdate?: (newPid: number) => Promise<void>
+    hasAudio: boolean
   ): Promise<FFmpegProcess> {
     const command = this.buildStreamCommand(cameraUrl, streamKey, hasAudio);
     this.logger.info("Command full form", command);
@@ -37,159 +29,95 @@ export class NodeFFmpegService implements FFmpegService {
       hasAudio,
     });
 
-    let attempt = 0;
-
-    const launchProcess = (): Promise<FFmpegProcess> => {
-      attempt++;
-
-      return new Promise((resolve, reject) => {
-        const process = spawn(command.command, command.args, {
-          stdio: ["ignore", "pipe", "pipe"],
-          detached: false,
-        });
-
-        const ffmpegProcess: FFmpegProcess = {
-          pid: process.pid!,
-          command,
-          startTime: new Date(),
-        };
-
-        // Handle process startup timeout
-        let resolved = false;
-        const startupTimeout = setTimeout(() => {
-          if (!resolved) {
-            resolved = true;
-            process.kill("SIGTERM");
-            reject(new Error("FFmpeg process startup timeout"));
-          }
-        }, 10000); // 10 second timeout
-
-        // Monitor stderr for startup confirmation & errors
-        process.stderr?.on("data", (data) => {
-          const output = data.toString();
-
-          // Filter out FFmpeg progress output (frame statistics) to reduce noise
-          if (
-            output.includes("frame=") &&
-            output.includes("fps=") &&
-            output.includes("time=")
-          ) {
-            return; // Ignore progress output
-          }
-
-          this.logger.debug("FFmpeg stderr", { pid: process.pid, output });
-
-          if (
-            output.includes("Stream mapping:") ||
-            output.includes("Press [q] to stop")
-          ) {
-            if (!resolved) {
-              resolved = true;
-              clearTimeout(startupTimeout);
-              this.runningProcesses.set(process.pid!, ffmpegProcess);
-
-              // If this is a retry (attempt > 1) and we have a PID update callback, call it
-              if (attempt > 1 && onPidUpdate) {
-                onPidUpdate(process.pid!).catch((error) => {
-                  this.logger.error(
-                    "Failed to update PID in stream repository",
-                    {
-                      newPid: process.pid,
-                      error: error.message,
-                    }
-                  );
-                });
-              }
-
-              resolve(ffmpegProcess);
-            }
-          }
-
-          if (
-            output.includes("Connection refused") ||
-            output.includes("No route to host") ||
-            output.includes("Invalid data found")
-          ) {
-            if (!resolved) {
-              resolved = true;
-              clearTimeout(startupTimeout);
-              process.kill("SIGTERM");
-              reject(new Error(`FFmpeg error: ${output}`));
-            }
-          }
-        });
-
-        // Handle process exit
-        process.on("exit", (code, signal) => {
-          this.logger.info("FFmpeg process exited", {
-            pid: process.pid,
-            code,
-            signal,
-            cameraUrl: cameraUrl.value,
-          });
-
-          if (process.pid) {
-            this.runningProcesses.delete(process.pid);
-
-            // Check if this process was intentionally stopped
-            const wasIntentionallyStopped = this.intentionallyStopped.has(
-              process.pid
-            );
-            if (wasIntentionallyStopped) {
-              this.intentionallyStopped.delete(process.pid);
-              this.logger.info(
-                "Process was intentionally stopped, not retrying",
-                {
-                  pid: process.pid,
-                  cameraUrl: cameraUrl.value,
-                }
-              );
-              return; // Don't retry if intentionally stopped
-            }
-          }
-
-          if (!resolved) {
-            resolved = true;
-            clearTimeout(startupTimeout);
-            reject(new Error(`FFmpeg process exited with code ${code}`));
-          } else if (code !== 0 && attempt < maxRetries) {
-            // Retry logic
-            this.logger.info(
-              `Retrying FFmpeg in ${retryDelayMs}ms (attempt ${attempt})`
-            );
-            setTimeout(() => {
-              launchProcess().catch(() => {
-                /* silently ignore retry failure */
-              });
-            }, retryDelayMs);
-          }
-        });
-
-        // Handle spawn errors
-        process.on("error", (error) => {
-          this.logger.error("FFmpeg process error", { error: error.message });
-          if (!resolved) {
-            resolved = true;
-            clearTimeout(startupTimeout);
-            reject(error);
-          } else if (attempt < maxRetries) {
-            this.logger.info(
-              `Retrying FFmpeg in ${retryDelayMs}ms due to spawn error (attempt ${attempt})`
-            );
-            setTimeout(() => launchProcess().catch(() => {}), retryDelayMs);
-          }
-        });
+    return new Promise((resolve, reject) => {
+      const process = spawn(command.command, command.args, {
+        stdio: ["ignore", "pipe", "pipe"],
+        detached: false,
       });
-    };
 
-    return launchProcess();
+      const ffmpegProcess: FFmpegProcess = {
+        pid: process.pid!,
+        command,
+        startTime: new Date(),
+      };
+
+      // Handle process startup
+      let resolved = false;
+      const startupTimeout = setTimeout(() => {
+        if (!resolved) {
+          resolved = true;
+          process.kill("SIGTERM");
+          reject(new Error("FFmpeg process startup timeout"));
+        }
+      }, 10000); // 10 second timeout
+
+      // Monitor stderr for startup confirmation
+      process.stderr?.on("data", (data) => {
+        const output = data.toString();
+        this.logger.debug("FFmpeg stderr", { pid: process.pid, output });
+
+        // Look for successful stream start indicators
+        if (
+          output.includes("Stream mapping:") ||
+          output.includes("Press [q] to stop")
+        ) {
+          if (!resolved) {
+            resolved = true;
+            clearTimeout(startupTimeout);
+            this.runningProcesses.set(process.pid!, ffmpegProcess);
+            resolve(ffmpegProcess);
+          }
+        }
+
+        // Check for errors
+        if (
+          output.includes("Connection refused") ||
+          output.includes("No route to host") ||
+          output.includes("Invalid data found")
+        ) {
+          if (!resolved) {
+            resolved = true;
+            clearTimeout(startupTimeout);
+            process.kill("SIGTERM");
+            reject(new Error(`FFmpeg error: ${output}`));
+          }
+        }
+      });
+
+      // Handle process exit
+      process.on("exit", (code, signal) => {
+        this.logger.info("FFmpeg process exited", {
+          pid: process.pid,
+          code,
+          signal,
+          cameraUrl: cameraUrl.value,
+        });
+
+        if (process.pid) {
+          this.runningProcesses.delete(process.pid);
+        }
+
+        if (!resolved && code !== 0) {
+          resolved = true;
+          clearTimeout(startupTimeout);
+          reject(new Error(`FFmpeg process exited with code ${code}`));
+        }
+      });
+
+      // Handle spawn errors
+      process.on("error", (error) => {
+        this.logger.error("FFmpeg process error", { error: error.message });
+        if (!resolved) {
+          resolved = true;
+          clearTimeout(startupTimeout);
+          reject(error);
+        }
+      });
+    });
   }
 
   public async stopStream(pid: number): Promise<void> {
     this.logger.info("Stopping FFmpeg process", { pid });
-
-    // Mark this process as intentionally stopped to prevent retries
-    this.intentionallyStopped.add(pid);
 
     const ffmpegProcess = this.runningProcesses.get(pid);
     if (!ffmpegProcess) {
@@ -200,7 +128,6 @@ export class NodeFFmpegService implements FFmpegService {
         // Wait a bit, then force kill if needed
         setTimeout(() => {
           try {
-            this.logger.warn("Force killing the stream process", { pid });
             process.kill(pid, "SIGKILL");
           } catch (error) {
             // Process might already be dead

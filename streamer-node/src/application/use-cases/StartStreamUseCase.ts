@@ -6,19 +6,15 @@ import { FFmpegService } from "../../domain/services/FFmpegService";
 import { Logger } from "../interfaces/Logger";
 import { HttpClient } from "../services/HttpClient";
 import { Config } from "../../infrastructure/config/Config";
-
-export interface StartStreamRequest {
-  cameraUrl: string;
-  streamKey: string;
-  courtId: string;
-  detectAudio?: boolean;
-}
-
-export interface StartStreamResponse {
-  streamId: string;
-  processId: number;
-  hasAudio: boolean;
-}
+import { StreamState } from "../../domain/value-objects/StreamState";
+import { StopStreamRequest, StopStreamResponse } from "./StopStreamUseCase";
+import {
+  ShouldStartStream,
+  StartStreamRequest,
+  StartStreamResponse,
+  StreamAction,
+  ValidationEvent,
+} from "../interfaces/StartStreamUseCase.types";
 
 export class StartStreamUseCase {
   private readonly config = Config.getInstance().get();
@@ -30,9 +26,146 @@ export class StartStreamUseCase {
     private readonly httpClient: HttpClient
   ) {}
 
+  private async shouldStartNewStream(
+    event: StartStreamRequest,
+    stopStream: (request: StopStreamRequest) => Promise<StopStreamResponse>
+  ): Promise<ShouldStartStream> {
+    // Find stream by camera URL and stream key
+    const streams = await this.streamRepository.findAll();
+    const runningStreams = streams.filter(
+      (stream) =>
+        stream.courtId === event.courtId && stream.state === StreamState.RUNNING
+    );
+    const action = await this.validateStreamEvent(runningStreams, event);
+    if (action.isValid) return { isValid: true }; // return true for happy case
+
+    // handle other event types
+    const streamEvent = action.data;
+    switch (streamEvent.action) {
+      // stop all running streams, and run against the only one event received
+      case StreamAction.MULTIPLE_STREAMS_RUNNING:
+        await Promise.all(
+          streamEvent.streamList.map((stream) =>
+            stopStream({
+              streamId: stream.id.toString(),
+            })
+          )
+        );
+        return { isValid: true };
+      // update the file with the failed state against process
+      case StreamAction.STREAM_RUNNING_WITHOUT_PID:
+      case StreamAction.DEAD_PROCESS_DETECTED:
+        streamEvent.stream.markAsFailed();
+        await this.streamRepository.save(streamEvent.stream);
+        return { isValid: true };
+      // ignore the event is received for a stream that is already running
+      case StreamAction.DUPLICATE_EVENT:
+        return {
+          isValid: false,
+          data: {
+            streamId: streamEvent.stream.id.toString(),
+            hasAudio: streamEvent.stream.hasAudio,
+            processId: streamEvent.stream.processId!,
+          },
+        };
+      // restart the stream since the youtube stream key is no longer valid
+      case StreamAction.INVALID_YOUTUBE_STREAM_KEY:
+        await stopStream({
+          streamId: streamEvent.stream.id.toString(),
+        });
+        return { isValid: true };
+    }
+  }
+
+  /**
+   * Validates if a new stream can be started by checking:
+   * 1. No existing streams (valid to start)
+   * 2. Multiple streams on same court (invalid)
+   * 3. Stream exists but missing process ID (invalid)
+   * 4. Different stream key than existing (invalid)
+   * 5. Process already running (duplicate event)
+   * 6. Process dead but stream marked as running (stale state)
+   */
+  private async validateStreamEvent(
+    runningStreams: Stream[],
+    event: StartStreamRequest
+  ): Promise<ValidationEvent> {
+    const targetStream = runningStreams.length > 0 ? runningStreams[0] : null;
+
+    if (!targetStream) {
+      // there is no running stream. Safe to say stream can be started
+      return {
+        isValid: true,
+      };
+    }
+
+    // check if there are multiple streams on a single court - ideally this should never be the case
+    if (runningStreams.length > 1) {
+      return {
+        isValid: false,
+        data: {
+          action: StreamAction.MULTIPLE_STREAMS_RUNNING,
+          streamList: runningStreams,
+        },
+      };
+    }
+
+    // stream file info update issue - stream was saved without pid - ideally this should never be the case
+    if (!targetStream.processId) {
+      return {
+        isValid: false,
+        data: {
+          action: StreamAction.STREAM_RUNNING_WITHOUT_PID,
+          stream: targetStream,
+        },
+      };
+    }
+
+    // check if the incoming event is not a duplicate
+    if (targetStream.streamKey !== event.streamKey) {
+      return {
+        isValid: false,
+        data: {
+          action: StreamAction.INVALID_YOUTUBE_STREAM_KEY,
+          stream: targetStream,
+        },
+      };
+    }
+
+    const ffmpegProcess = await this.ffmpegService.isProcessRunning(
+      targetStream.processId
+    );
+    // check if the process is already running - this means the event is duplicate
+    if (ffmpegProcess) {
+      return {
+        isValid: false,
+        data: {
+          action: StreamAction.DUPLICATE_EVENT,
+          stream: targetStream,
+        },
+      };
+    }
+
+    return {
+      isValid: false,
+      data: {
+        action: StreamAction.DEAD_PROCESS_DETECTED,
+        stream: targetStream,
+      },
+    };
+  }
+
   public async execute(
-    request: StartStreamRequest
+    request: StartStreamRequest,
+    stopProcess: (request: StopStreamRequest) => Promise<StopStreamResponse>
   ): Promise<StartStreamResponse> {
+    // check if the stream should be started
+    const handleResponse = await this.shouldStartNewStream(
+      request,
+      stopProcess
+    );
+    if (!handleResponse.isValid) return handleResponse.data;
+
     this.logger.info("Starting stream", {
       cameraUrl: request.cameraUrl,
       streamKey: request.streamKey,
