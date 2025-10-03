@@ -1,4 +1,4 @@
 # ignoring all build modules
-streamer-node/dist/
+**/dist/
 # ignoring all node js modules
-*/node_modules/
+**/node_modules/

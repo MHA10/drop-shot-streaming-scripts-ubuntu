@@ -4,7 +4,7 @@
   "description": "A lightweight TypeScript streaming system with Clean Architecture",
   "main": "dist/index.js",
   "scripts": {
-    "build": "tsc",
+    "build": "tsc && cp -r public dist/",
     "start": "node dist/src/main.js",
     "dev": "npm run build && npm start",
     "monitor": "bash -c 'npm run dev 2>&1 | tee >(grep -E \"ERROR|WARN|INFO\" > node.logs) >(grep \"DEBUG\" | grep -v \"frame=\" > ffmpeg.logs)'",
