@@ -31,6 +31,7 @@ export class StartStreamUseCase {
     stopStream: (request: StopStreamRequest) => Promise<StopStreamResponse>
   ): Promise<ShouldStartStream> {
     const action = await this.validateStreamEvent(event);
+    this.logger.info("Stream validation result", { action });
     if (action.isValid) return { isValid: true }; // return true for happy case
 
     // handle other event types

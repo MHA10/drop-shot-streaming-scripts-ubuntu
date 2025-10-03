@@ -8,16 +8,28 @@ import {
 } from "../../domain/services/FFmpegService";
 import { StreamUrl } from "../../domain/value-objects/StreamUrl";
 import { Logger } from "../../application/interfaces/Logger";
+import { StartStreamRequest } from "../../application/interfaces/StartStreamUseCase.types";
+import { Config } from "../config/Config";
 
 export class NodeFFmpegService implements FFmpegService {
   private readonly runningProcesses: Map<number, FFmpegProcess> = new Map();
+  private readonly clientLogoPath: string;
 
-  constructor(private readonly logger: Logger) {}
+  constructor(
+    private readonly logger: Logger,
+    private readonly config: Config
+  ) {
+    this.clientLogoPath = path.resolve(this.config.get().images.clientPath);
+  }
 
   public async startStream(
     cameraUrl: StreamUrl,
     streamKey: string,
-    hasAudio: boolean
+    hasAudio: boolean,
+    retry: {
+      event: StartStreamRequest;
+      onRetryStream: (event: StartStreamRequest) => Promise<void>;
+    }
   ): Promise<FFmpegProcess> {
     const command = this.buildStreamCommand(cameraUrl, streamKey, hasAudio);
     this.logger.info("Command full form", command);
@@ -79,6 +91,7 @@ export class NodeFFmpegService implements FFmpegService {
             resolved = true;
             clearTimeout(startupTimeout);
             process.kill("SIGTERM");
+            retry.onRetryStream(retry.event);
             reject(new Error(`FFmpeg error: ${output}`));
           }
         }
@@ -264,7 +277,7 @@ export class NodeFFmpegService implements FFmpegService {
     // Add logo image inputs
     args.push("-i", "./public/ds.png"); // Input 1: DropShot logo
     const dsInputIndex = 1 + fakeAudioInputCounter;
-    args.push("-i", "./public/client.png"); // Input 2: Client logo
+    args.push("-i", this.clientLogoPath); // Input 2: Client logo
     const clientInputIndex = 2 + fakeAudioInputCounter;
     // position them correctly using filter complex
     const filterComplex = [
@@ -333,7 +346,7 @@ export class NodeFFmpegService implements FFmpegService {
 
   private validateImageFiles(): void {
     const dsLogoPath = path.resolve("./public/ds.png");
-    const clientLogoPath = path.resolve("./public/client.png");
+    const clientLogoPath = path.resolve(this.clientLogoPath);
 
     if (!fs.existsSync(dsLogoPath)) {
       throw new Error(`DropShot logo not found at: ${dsLogoPath}`);
