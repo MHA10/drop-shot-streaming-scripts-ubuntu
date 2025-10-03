@@ -120,9 +120,11 @@ export class Stream {
 
   public updateProcessId(processId: number): void {
     if (this.props.state !== StreamState.RUNNING) {
-      throw new Error(`Cannot update processId for stream in ${this.props.state} state`);
+      throw new Error(
+        `Cannot update processId for stream in ${this.props.state} state`
+      );
     }
-    
+
     this.props.processId = processId;
     this.props.updatedAt = new Date();
   }
@@ -137,6 +139,11 @@ export class Stream {
 
   public isFailed(): boolean {
     return this.props.state === StreamState.FAILED;
+  }
+
+  public setAudio(hasAudio: boolean): void {
+    this.props.hasAudio = hasAudio;
+    this.props.updatedAt = new Date();
   }
 
   public toJSON(): any {

@@ -7,6 +7,9 @@ export interface AppConfig {
   server: {
     baseUrl: string;
   };
+  images: {
+    clientPath: string;
+  };
   groundInfo: {
     groundId: string;
   };
@@ -41,6 +44,7 @@ export class Config {
 
   private constructor() {
     this.config = this.loadConfig();
+    this.validate();
   }
 
   public static getInstance(): Config {
@@ -58,6 +62,9 @@ export class Config {
     return {
       server: {
         baseUrl: this.getEnvVar("BASE_URL", "https://api.drop-shot.live/"),
+      },
+      images: {
+        clientPath: this.getEnvVar("CLIENT_IMAGES_PATH", ""),
       },
       groundInfo: {
         groundId: this.getEnvVar("GROUND_ID", ""),
@@ -117,6 +124,10 @@ export class Config {
 
     if (!this.config.groundInfo.groundId) {
       errors.push("GROUND_ID is required");
+    }
+
+    if (!this.config.images.clientPath) {
+      errors.push("CLIENT_IMAGES_PATH is required");
     }
 
     if (this.config.sse.retryInterval <= 0) {
