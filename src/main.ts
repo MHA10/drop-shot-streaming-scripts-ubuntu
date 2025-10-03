@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 
+import * as packageJson from "../package.json";
 import { Config } from "./infrastructure/config/Config";
 import { FileSystemStreamRepository } from "./infrastructure/repositories/FileSystemStreamRepository";
 import { NodeFFmpegService } from "./infrastructure/services/NodeFFmpegService";
@@ -23,7 +24,10 @@ class Application {
 
   public async start(): Promise<void> {
     try {
+
+      
       this.logger.info("Starting Streamer Node Application");
+      this.logger.info(`Current version: ${packageJson.version}`);
 
       // Initialize configuration
       const config = Config.getInstance();
@@ -34,7 +38,7 @@ class Application {
         config.get().stream.persistentStateDir,
         this.logger
       );
-      const ffmpegService = new NodeFFmpegService(this.logger);
+      const ffmpegService = new NodeFFmpegService(this.logger, config);
       const sseService = new NodeSSEService(this.logger);
 
       // Initialize use cases
