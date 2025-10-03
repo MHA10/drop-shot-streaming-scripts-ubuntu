@@ -1,0 +1,4 @@
+# ignoring all build modules
+**/dist/
+# ignoring all node js modules
+**/node_modules/
