@@ -1,3 +1,5 @@
+#!/usr/bin/env node
+
 import { Config } from "./infrastructure/config/Config";
 import { FileSystemStreamRepository } from "./infrastructure/repositories/FileSystemStreamRepository";
 import { NodeFFmpegService } from "./infrastructure/services/NodeFFmpegService";
