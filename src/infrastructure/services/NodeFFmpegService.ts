@@ -111,6 +111,7 @@ export class NodeFFmpegService implements FFmpegService {
         }
 
         if (code !== 0) {
+          retry.onRetryStream(retry.event);
           resolved = true;
           clearTimeout(startupTimeout);
           reject(new Error(`FFmpeg process exited with code ${code}`));
@@ -119,6 +120,7 @@ export class NodeFFmpegService implements FFmpegService {
 
       // Handle spawn errors
       process.on("error", (error) => {
+        retry.onRetryStream(retry.event);
         this.logger.error("FFmpeg process error", { error: error.message });
         clearTimeout(startupTimeout);
         reject(error);
