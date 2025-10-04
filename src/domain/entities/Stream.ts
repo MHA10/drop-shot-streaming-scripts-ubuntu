@@ -98,6 +98,7 @@ export class Stream {
   }
 
   public markAsFailed(error?: string): void {
+    console.log("mark as failed was called");
     // ignore if the stream is already stopped
     if (this.props.state === StreamState.STOPPED) return;
 
