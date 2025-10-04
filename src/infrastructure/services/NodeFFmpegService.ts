@@ -83,8 +83,6 @@ export class NodeFFmpegService implements FFmpegService {
           }
         }
 
-        if (!this.stoppedManually) retry.onRetryStream(retry.event);
-
         if (
           output.includes("Connection refused") ||
           output.includes("No route to host") ||
