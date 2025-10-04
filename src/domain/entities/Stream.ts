@@ -93,12 +93,7 @@ export class Stream {
   }
 
   public stop(): void {
-    if (this.props.state !== StreamState.RUNNING) {
-      throw new Error(`Cannot stop stream in ${this.props.state} state`);
-    }
-
     this.props.state = StreamState.STOPPED;
-    this.props.processId = undefined;
     this.props.updatedAt = new Date();
   }
 
