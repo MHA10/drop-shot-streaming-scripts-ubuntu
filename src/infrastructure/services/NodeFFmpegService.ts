@@ -66,7 +66,6 @@ export class NodeFFmpegService implements FFmpegService {
       // Monitor stderr for startup confirmation
       process.stderr?.on("data", (data) => {
         const output = data.toString();
-        this.logger.debug("FFmpeg stderr", { pid: process.pid, output });
 
         // Look for successful stream start indicators
         if (
