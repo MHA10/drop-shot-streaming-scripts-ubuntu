@@ -92,10 +92,12 @@ export class StartStreamUseCase {
     // stopped are ignored since that could be a stale retry
     const pendingStreams = streams.filter(
       (stream) =>
-        stream.courtId === event.courtId &&
+        stream.streamKey === event.streamKey &&
         (stream.state === StreamState.PENDING ||
           stream.state === StreamState.STOPPED)
     );
+
+    this.logger.info("Pending Streams: ", pendingStreams);
 
     if (pendingStreams.length > 0) {
       return {
@@ -111,6 +113,8 @@ export class StartStreamUseCase {
       (stream) =>
         stream.courtId === event.courtId && stream.state === StreamState.RUNNING
     );
+
+    this.logger.info("Running Streams: ", runningStreams);
 
     // check if the stream is already running
     const targetStream = runningStreams.length > 0 ? runningStreams[0] : null;
