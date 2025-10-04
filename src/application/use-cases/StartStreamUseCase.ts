@@ -88,9 +88,13 @@ export class StartStreamUseCase {
     const streams = await this.streamRepository.findAll();
 
     // if the stream is in pending state, then we can ignore this event
+    // pending are ignored since they're already in the process of starting up
+    // stopped are ignored since that could be a stale retry
     const pendingStreams = streams.filter(
       (stream) =>
-        stream.courtId === event.courtId && stream.state === StreamState.PENDING
+        stream.courtId === event.courtId &&
+        (stream.state === StreamState.PENDING ||
+          stream.state === StreamState.STOPPED)
     );
 
     if (pendingStreams.length > 0) {
@@ -270,11 +274,6 @@ export class StartStreamUseCase {
         hasAudio,
       };
     } catch (error) {
-      // check if the error is retry-able
-
-      // try to restart the process
-      await this.execute(request, stopProcess);
-
       // otherwise just log and move on
       this.logger.error("Failed to start stream", {
         error: error instanceof Error ? error.message : String(error),

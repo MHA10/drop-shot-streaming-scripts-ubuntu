@@ -154,6 +154,11 @@ export class StreamManagerService {
           await this.streamRepository.save(stream);
         }
       }
+
+      // Stop all running streams and clear all persistent data
+      this.logger.info("Stopping all streams and clearing data after recovery");
+      await this.stopAllStreams();
+      await this.streamRepository.clear();
     } catch (error) {
       this.logger.error("Stream recovery failed", {
         error: error instanceof Error ? error.message : String(error),
