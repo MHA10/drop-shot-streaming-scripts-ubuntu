@@ -14,6 +14,8 @@ import { Config } from "../config/Config";
 export class NodeFFmpegService implements FFmpegService {
   private readonly runningProcesses: Map<number, FFmpegProcess> = new Map();
   private readonly clientLogoPath: string;
+  // use this flag to differentiate if we killed the process / processes crashed
+  private stoppedManually: boolean = false;
 
   constructor(
     private readonly logger: Logger,
@@ -81,17 +83,18 @@ export class NodeFFmpegService implements FFmpegService {
           }
         }
 
-        // Check for errors
+        if (!this.stoppedManually) retry.onRetryStream(retry.event);
+
         if (
           output.includes("Connection refused") ||
           output.includes("No route to host") ||
           output.includes("Invalid data found")
         ) {
+          // Check for errors
           if (!resolved) {
             resolved = true;
             clearTimeout(startupTimeout);
             process.kill("SIGTERM");
-            retry.onRetryStream(retry.event);
             reject(new Error(`FFmpeg error: ${output}`));
           }
         }
@@ -110,7 +113,9 @@ export class NodeFFmpegService implements FFmpegService {
           this.runningProcesses.delete(process.pid);
         }
 
-        if (!resolved && code !== 0) {
+        if (!this.stoppedManually) retry.onRetryStream(retry.event);
+
+        if (code !== 0) {
           resolved = true;
           clearTimeout(startupTimeout);
           reject(new Error(`FFmpeg process exited with code ${code}`));
@@ -119,12 +124,10 @@ export class NodeFFmpegService implements FFmpegService {
 
       // Handle spawn errors
       process.on("error", (error) => {
+        if (!this.stoppedManually) retry.onRetryStream(retry.event);
         this.logger.error("FFmpeg process error", { error: error.message });
-        if (!resolved) {
-          resolved = true;
-          clearTimeout(startupTimeout);
-          reject(error);
-        }
+        clearTimeout(startupTimeout);
+        reject(error);
       });
     });
   }
@@ -137,11 +140,11 @@ export class NodeFFmpegService implements FFmpegService {
       this.logger.warn("Process not found in running processes", { pid });
       // Try to kill the process anyway using Node.js process.kill
       try {
-        process.kill(pid, "SIGTERM");
+        this.stoppedManually = process.kill(pid, "SIGTERM");
         // Wait a bit, then force kill if needed
         setTimeout(() => {
           try {
-            process.kill(pid, "SIGKILL");
+            this.stoppedManually = process.kill(pid, "SIGKILL");
           } catch (error) {
             // Process might already be dead
           }
