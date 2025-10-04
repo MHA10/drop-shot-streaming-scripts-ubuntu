@@ -110,7 +110,7 @@ export class NodeFFmpegService implements FFmpegService {
           this.runningProcesses.delete(process.pid);
         }
 
-        if (!resolved && code !== 0) {
+        if (code !== 0) {
           resolved = true;
           clearTimeout(startupTimeout);
           reject(new Error(`FFmpeg process exited with code ${code}`));
@@ -120,11 +120,8 @@ export class NodeFFmpegService implements FFmpegService {
       // Handle spawn errors
       process.on("error", (error) => {
         this.logger.error("FFmpeg process error", { error: error.message });
-        if (!resolved) {
-          resolved = true;
-          clearTimeout(startupTimeout);
-          reject(error);
-        }
+        clearTimeout(startupTimeout);
+        reject(error);
       });
     });
   }
