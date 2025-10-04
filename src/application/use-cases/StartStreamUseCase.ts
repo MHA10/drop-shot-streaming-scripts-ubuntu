@@ -86,6 +86,7 @@ export class StartStreamUseCase {
   ): Promise<ValidationEvent> {
     // Find stream by camera URL and stream key
     const streams = await this.streamRepository.findAll();
+    this.logger.info("All Streams", streams);
 
     // if the stream is in pending state, then we can ignore this event
     // pending are ignored since they're already in the process of starting up
