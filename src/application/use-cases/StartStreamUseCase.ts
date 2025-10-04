@@ -236,8 +236,17 @@ export class StartStreamUseCase {
       const onRetryStream = async (event: StartStreamRequest) => {
         this.logger.info("Stream retrying", { event });
 
+        // fetch the updated state from the repository
+        const updatedStream = await this.streamRepository.findById(streamId);
+        if (!updatedStream || updatedStream.state === StreamState.STOPPED) {
+          this.logger.error("Stream can not be retried", {
+            streamId: streamId.value,
+          });
+          return;
+        }
+
         // close the current running stream
-        stream.markAsFailed();
+        updatedStream.markAsFailed();
         await this.streamRepository.save(stream);
 
         // start a new process
