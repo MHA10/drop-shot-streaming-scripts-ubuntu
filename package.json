@@ -1,6 +1,6 @@
 {
   "name": "streamer-node",
-  "version": "1.0.12",
+  "version": "1.0.13",
   "description": "A lightweight TypeScript streaming system with Clean Architecture",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
