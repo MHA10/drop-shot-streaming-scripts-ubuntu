@@ -98,6 +98,9 @@ export class Stream {
   }
 
   public markAsFailed(error?: string): void {
+    // ignore if the stream is already stopped
+    if (this.props.state === StreamState.STOPPED) return;
+
     this.props.state = StreamState.FAILED;
     // Keep processId so we can still terminate the process later
     this.props.updatedAt = new Date();
