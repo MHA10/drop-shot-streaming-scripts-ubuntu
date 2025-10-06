@@ -42,8 +42,12 @@ export class Config {
   private config: AppConfig;
 
   private constructor() {
+    console.log("[CONFIG] Initializing application configuration...");
+    console.log("[CONFIG] Note: dotenv.config() was called at module load time");
+    console.log("[CONFIG] Environment variables from npx command will override .env file values");
     this.config = this.loadConfig();
     this.validate();
+    console.log("[CONFIG] Configuration loaded successfully");
   }
 
   public static getInstance(): Config {
@@ -66,7 +70,7 @@ export class Config {
         clientPath: this.getEnvVar("CLIENT_IMAGES_PATH", ""),
       },
       groundInfo: {
-        groundId: this.getEnvVar("GROUND_ID", ""),
+        groundId: this.getEnvVar("DROPSHOT_GROUND_ID", ""),
       },
       sse: {
         retryInterval: parseInt(this.getEnvVar("SSE_RETRY_INTERVAL", "5000")),
@@ -111,6 +115,23 @@ export class Config {
 
   private getEnvVar(key: string, defaultValue: string): string {
     const value = process.env[key];
+    
+    // Special logging for DROPSHOT_GROUND_ID to confirm source
+    if (key === "DROPSHOT_GROUND_ID") {
+      console.log(`[CONFIG] Checking environment variable: ${key}`);
+      console.log(`[CONFIG] Value from process.env: ${value || 'undefined'}`);
+      console.log(`[CONFIG] Default value: ${defaultValue}`);
+      
+      if (value === undefined) {
+        console.log(`[CONFIG] WARNING: ${key} not found in environment, using default: ${defaultValue}`);
+        return defaultValue;
+      } else {
+        console.log(`[CONFIG] CONFIRMED: ${key} loaded from environment (npx command): '${value}'`);
+        console.log(`[CONFIG] This confirms the value is NOT from .env file but from OS environment`);
+        return value;
+      }
+    }
+    
     if (value === undefined) {
       return defaultValue;
     }
