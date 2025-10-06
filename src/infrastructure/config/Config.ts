@@ -66,7 +66,7 @@ export class Config {
         clientPath: this.getEnvVar("CLIENT_IMAGES_PATH", ""),
       },
       groundInfo: {
-        groundId: this.getEnvVar("GROUND_ID", ""),
+        groundId: this.getEnvVar("DROPSHOT_GROUND_ID", ""),
       },
       sse: {
         retryInterval: parseInt(this.getEnvVar("SSE_RETRY_INTERVAL", "5000")),

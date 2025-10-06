@@ -55,12 +55,22 @@ The system uses the following priority order for ground identification:
 3. **Configuration File**: `GROUND_NAME` in `pm2-config.conf`
 4. **Default Value**: `ground1` (fallback)
 
+#### Application Integration
+
+The `DROPSHOT_GROUND_ID` environment variable is automatically passed to the streaming application:
+
+- **PM2 Process**: Environment variable is set in the PM2 process environment
+- **Runner Script**: Passes the variable to the `npx streamer-node@latest` command
+- **Application Config**: The streaming application reads `DROPSHOT_GROUND_ID` directly
+- **No .env Required**: Ground ID is passed at runtime, not from configuration files
+
 #### Benefits
 
 - **Dynamic Deployment**: Set ground ID at runtime without modifying configuration files
 - **Container Support**: Perfect for Docker and Kubernetes deployments
 - **CI/CD Integration**: Easily integrate with automated deployment pipelines
 - **Multi-Environment**: Use the same scripts across different environments
+- **Runtime Configuration**: Application receives ground ID directly from OS environment
 
 ## 📋 Prerequisites
 

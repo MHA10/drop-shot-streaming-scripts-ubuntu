@@ -244,9 +244,11 @@ log_message "Package: \$PACKAGE@latest"
 
 while true; do
     log_message "Launching streaming service..."
+    log_message "Ground ID: \${DROPSHOT_GROUND_ID:-'not set'}"
     
     # Run the package with error handling
-    if npx "\$PACKAGE@latest"; then
+    # Pass DROPSHOT_GROUND_ID environment variable to the streaming service
+    if DROPSHOT_GROUND_ID="\${DROPSHOT_GROUND_ID}" npx "\$PACKAGE@latest"; then
         log_message "Streaming service exited normally."
     else
         local exit_code=\$?
@@ -281,14 +283,15 @@ setup_pm2_process() {
         pm2 delete "$process_name" || true
     fi
     
-    # Start new process
+    # Start new process with environment variables
     pm2 start "$script_path" \
         --name "$process_name" \
         --instances "${PM2_INSTANCES:-1}" \
         --max-memory-restart "${PM2_MAX_MEMORY_RESTART:-4G}" \
         --watch false \
         --merge-logs \
-        --log-date-format "YYYY-MM-DD HH:mm:ss Z" || \
+        --log-date-format "YYYY-MM-DD HH:mm:ss Z" \
+        --env DROPSHOT_GROUND_ID="${DROPSHOT_GROUND_ID:-}" || \
         error_exit "Failed to start PM2 process"
     
     log "INFO" "PM2 process $process_name started successfully."
