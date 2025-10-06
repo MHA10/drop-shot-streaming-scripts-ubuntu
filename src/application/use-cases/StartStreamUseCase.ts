@@ -86,12 +86,19 @@ export class StartStreamUseCase {
   ): Promise<ValidationEvent> {
     // Find stream by camera URL and stream key
     const streams = await this.streamRepository.findAll();
+    this.logger.info("All Streams", streams);
 
     // if the stream is in pending state, then we can ignore this event
+    // pending are ignored since they're already in the process of starting up
+    // stopped are ignored since that could be a stale retry
     const pendingStreams = streams.filter(
       (stream) =>
-        stream.courtId === event.courtId && stream.state === StreamState.PENDING
+        stream.streamKey === event.streamKey &&
+        (stream.state === StreamState.PENDING ||
+          stream.state === StreamState.STOPPED)
     );
+
+    this.logger.info("Pending Streams: ", pendingStreams);
 
     if (pendingStreams.length > 0) {
       return {
@@ -107,6 +114,8 @@ export class StartStreamUseCase {
       (stream) =>
         stream.courtId === event.courtId && stream.state === StreamState.RUNNING
     );
+
+    this.logger.info("Running Streams: ", runningStreams);
 
     // check if the stream is already running
     const targetStream = runningStreams.length > 0 ? runningStreams[0] : null;
@@ -227,8 +236,17 @@ export class StartStreamUseCase {
       const onRetryStream = async (event: StartStreamRequest) => {
         this.logger.info("Stream retrying", { event });
 
+        // fetch the updated state from the repository
+        const updatedStream = await this.streamRepository.findById(streamId);
+        if (!updatedStream || updatedStream.state === StreamState.STOPPED) {
+          this.logger.error("Stream can not be retried", {
+            streamId: streamId.value,
+          });
+          return;
+        }
+
         // close the current running stream
-        stream.markAsFailed();
+        updatedStream.markAsFailed();
         await this.streamRepository.save(stream);
 
         // start a new process
@@ -270,11 +288,6 @@ export class StartStreamUseCase {
         hasAudio,
       };
     } catch (error) {
-      // check if the error is retry-able
-
-      // try to restart the process
-      await this.execute(request, stopProcess);
-
       // otherwise just log and move on
       this.logger.error("Failed to start stream", {
         error: error instanceof Error ? error.message : String(error),

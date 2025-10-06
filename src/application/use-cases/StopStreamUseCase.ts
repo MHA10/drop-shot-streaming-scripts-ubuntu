@@ -35,6 +35,9 @@ export class StopStreamUseCase {
         return { streamId: request.streamId, stopped: false };
       }
 
+      stream.stop();
+      await this.streamRepository.save(stream);
+
       // Stop FFmpeg process if it has a PID and the process is actually running
       if (stream.processId) {
         const isProcessRunning = await this.ffmpegService.isProcessRunning(
@@ -83,30 +86,6 @@ export class StopStreamUseCase {
           }
         );
       }
-
-      // Update stream state - handle different states gracefully
-      if (stream.isRunning()) {
-        stream.stop();
-      } else if (stream.isFailed()) {
-        // For failed streams, we've already cleaned up the process above
-        // The stream remains in failed state, but the process is properly terminated
-        this.logger.info(
-          "Stream was in failed state, process cleanup completed",
-          {
-            streamId: request.streamId,
-            currentState: stream.state,
-          }
-        );
-        // Don't change the state - failed streams should remain failed until explicitly restarted
-        // The important part is that we've cleaned up any running processes
-      } else {
-        this.logger.info("Stream already in stopped/pending state", {
-          streamId: request.streamId,
-          currentState: stream.state,
-        });
-      }
-
-      await this.streamRepository.save(stream);
 
       this.logger.info("Stream stopped successfully", {
         streamId: request.streamId,

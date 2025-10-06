@@ -93,16 +93,15 @@ export class Stream {
   }
 
   public stop(): void {
-    if (this.props.state !== StreamState.RUNNING) {
-      throw new Error(`Cannot stop stream in ${this.props.state} state`);
-    }
-
     this.props.state = StreamState.STOPPED;
-    this.props.processId = undefined;
     this.props.updatedAt = new Date();
   }
 
   public markAsFailed(error?: string): void {
+    console.log("mark as failed was called");
+    // ignore if the stream is already stopped
+    if (this.props.state === StreamState.STOPPED) return;
+
     this.props.state = StreamState.FAILED;
     // Keep processId so we can still terminate the process later
     this.props.updatedAt = new Date();

@@ -14,8 +14,6 @@ import { Config } from "../config/Config";
 export class NodeFFmpegService implements FFmpegService {
   private readonly runningProcesses: Map<number, FFmpegProcess> = new Map();
   private readonly clientLogoPath: string;
-  // use this flag to differentiate if we killed the process / processes crashed
-  private stoppedManually: boolean = false;
 
   constructor(
     private readonly logger: Logger,
@@ -68,7 +66,6 @@ export class NodeFFmpegService implements FFmpegService {
       // Monitor stderr for startup confirmation
       process.stderr?.on("data", (data) => {
         const output = data.toString();
-        this.logger.debug("FFmpeg stderr", { pid: process.pid, output });
 
         // Look for successful stream start indicators
         if (
@@ -82,8 +79,6 @@ export class NodeFFmpegService implements FFmpegService {
             resolve(ffmpegProcess);
           }
         }
-
-        if (!this.stoppedManually) retry.onRetryStream(retry.event);
 
         if (
           output.includes("Connection refused") ||
@@ -113,7 +108,7 @@ export class NodeFFmpegService implements FFmpegService {
           this.runningProcesses.delete(process.pid);
         }
 
-        if (!this.stoppedManually) retry.onRetryStream(retry.event);
+        retry.onRetryStream(retry.event);
 
         if (code !== 0) {
           resolved = true;
@@ -124,7 +119,7 @@ export class NodeFFmpegService implements FFmpegService {
 
       // Handle spawn errors
       process.on("error", (error) => {
-        if (!this.stoppedManually) retry.onRetryStream(retry.event);
+        retry.onRetryStream(retry.event);
         this.logger.error("FFmpeg process error", { error: error.message });
         clearTimeout(startupTimeout);
         reject(error);
@@ -140,11 +135,11 @@ export class NodeFFmpegService implements FFmpegService {
       this.logger.warn("Process not found in running processes", { pid });
       // Try to kill the process anyway using Node.js process.kill
       try {
-        this.stoppedManually = process.kill(pid, "SIGTERM");
+        process.kill(pid, "SIGTERM");
         // Wait a bit, then force kill if needed
         setTimeout(() => {
           try {
-            this.stoppedManually = process.kill(pid, "SIGKILL");
+            process.kill(pid, "SIGKILL");
           } catch (error) {
             // Process might already be dead
           }
