@@ -33,7 +33,7 @@ readonly RUNNER_SCRIPT_NAME="run-streamer.sh"
 readonly SERVICE_NAME_PREFIX="streamer"
 
 # Default values
-DEFAULT_GROUND_NAME="ground1"
+DEFAULT_GROUND_NAME="${DROPSHOT_GROUND_ID:-ground1}"
 DEFAULT_PACKAGE_NAME="streamer-node"
 DEFAULT_NODE_VERSION="18"
 
@@ -121,9 +121,9 @@ create_sample_config() {
 # Copy this file and modify the values as needed
 
 # Ground identification
-GROUND_NAME="ground1"
-MACHINE_NAME="ground1-server"
-GROUND_TAG="ground=ground1"
+GROUND_NAME="${DROPSHOT_GROUND_ID:-ground1}"
+MACHINE_NAME="${GROUND_NAME}-server"
+GROUND_TAG="ground=${GROUND_NAME}"
 
 # Package configuration
 PACKAGE_NAME="streamer-node"
