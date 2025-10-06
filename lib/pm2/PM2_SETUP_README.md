@@ -367,6 +367,52 @@ pm2 link <public_key> <private_key> <machine_name>
 
 **Note:** PM2 works perfectly without Keymetrics. The monitoring service is optional.
 
+### Log Rotation Testing & Verification
+
+#### Check Log Rotation Configuration
+```bash
+# View current pm2-logrotate settings
+pm2 conf pm2-logrotate
+
+# Check if pm2-logrotate module is running
+pm2 status | grep logrotate
+```
+
+#### Monitor Log Files
+```bash
+# List current log files with sizes
+ls -la ~/.pm2/logs/
+
+# Check for rotated files (timestamped or compressed)
+ls -la ~/.pm2/logs/ | grep -E "\.(gz|[0-9]{4}-[0-9]{2}-[0-9]{2})"
+
+# Monitor log file sizes
+du -h ~/.pm2/logs/*
+```
+
+#### Test Log Rotation
+```bash
+# Force log rotation (for testing)
+pm2 reloadLogs
+
+# Generate log output to test rotation
+pm2 logs --lines 0
+
+# Watch for rotation activity
+pm2 logs pm2-logrotate
+
+# Monitor logs directory in real-time
+watch -n 5 'ls -la ~/.pm2/logs/'
+```
+
+#### Verify Rotation is Working
+Look for these indicators:
+- **Current logs**: `streamer-*-out.log`, `streamer-*-error.log`
+- **Rotated logs**: `streamer-*-out__YYYY-MM-DD_HH-mm-ss.log.gz`
+- **Size management**: Current logs stay under 10MB
+- **Retention**: Only 30 most recent log files kept
+- **Compression**: Old logs compressed as `.gz` files
+
 ### Validation Commands
 
 ```bash
@@ -378,7 +424,7 @@ systemctl status pm2-$USER
 pm2 status
 pm2 describe streamer-groundA
 
-# Test runner script manually
+```# Test runner script manually
 ./run-streamer.sh
 ```
 
