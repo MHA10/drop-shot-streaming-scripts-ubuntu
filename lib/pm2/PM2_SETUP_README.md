@@ -344,17 +344,28 @@ echo "3. Default fallback: ground1"
 ```
 
 #### 4. Keymetrics Connection Issues
+
+**"Wrong public key" Error:**
+This error occurs when using invalid or demo Keymetrics keys. This is expected behavior and doesn't affect PM2 functionality.
+
 ```bash
+# To fix: Get real keys from https://app.keymetrics.io/
+# Or disable Keymetrics by setting empty keys:
+KEYMETRICS_PUBLIC_KEY=""
+KEYMETRICS_PRIVATE_KEY=""
+
 # Check network connectivity
 curl -I https://app.keymetrics.io
 
 # Verify keys
 pm2 web
 
-# Re-link to Keymetrics
+# Re-link to Keymetrics with valid keys
 pm2 unlink
 pm2 link <public_key> <private_key> <machine_name>
 ```
+
+**Note:** PM2 works perfectly without Keymetrics. The monitoring service is optional.
 
 ### Validation Commands
 
