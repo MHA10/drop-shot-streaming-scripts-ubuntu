@@ -137,8 +137,7 @@ KEYMETRICS_PRIVATE_KEY=""
 
 # Additional PM2 options
 PM2_INSTANCES="1"
-PM2_MAX_MEMORY_RESTART="500M"
-PM2_AUTORESTART="true"
+PM2_MAX_MEMORY_RESTART="4G"
 EOF
     log "INFO" "Sample configuration created at $CONFIG_FILE"
 }
@@ -286,8 +285,7 @@ setup_pm2_process() {
     pm2 start "$script_path" \
         --name "$process_name" \
         --instances "${PM2_INSTANCES:-1}" \
-        --max-memory-restart "${PM2_MAX_MEMORY_RESTART:-500M}" \
-        --autorestart "${PM2_AUTORESTART:-true}" \
+        --max-memory-restart "${PM2_MAX_MEMORY_RESTART:-4G}" \
         --watch false \
         --merge-logs \
         --log-date-format "YYYY-MM-DD HH:mm:ss Z" || \

@@ -60,9 +60,6 @@ PM2_INSTANCES="1"
 # Examples: "100M", "500M", "1G"
 PM2_MAX_MEMORY_RESTART="500M"
 
-# Enable automatic restart on crashes
-PM2_AUTORESTART="true"
-
 #==============================================================================
 # Advanced Configuration (Optional)
 #==============================================================================

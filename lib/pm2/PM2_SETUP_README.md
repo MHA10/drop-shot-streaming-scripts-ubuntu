@@ -132,8 +132,7 @@ KEYMETRICS_PRIVATE_KEY="your_private_key_here"
 
 # Additional PM2 options
 PM2_INSTANCES="1"
-PM2_MAX_MEMORY_RESTART="500M"
-PM2_AUTORESTART="true"
+PM2_MAX_MEMORY_RESTART="4G"
 ```
 
 ## 🏗 Architecture Overview
@@ -473,7 +472,6 @@ KEYMETRICS_PRIVATE_KEY="your_private_key_here"
 # Additional PM2 options
 PM2_INSTANCES="1"
 PM2_MAX_MEMORY_RESTART="500M"
-PM2_AUTORESTART="true"
 ```
 
 ## Command Line Options
@@ -510,7 +508,6 @@ KEYMETRICS_PRIVATE_KEY="your_private_key_here"
 # Additional PM2 options
 PM2_INSTANCES="1"
 PM2_MAX_MEMORY_RESTART="500M"
-PM2_AUTORESTART="true"
 ```
 
 #### Premium Ground
@@ -532,7 +529,6 @@ KEYMETRICS_PRIVATE_KEY="your_private_key_here"
 # Additional PM2 options
 PM2_INSTANCES="1"
 PM2_MAX_MEMORY_RESTART="500M"
-PM2_AUTORESTART="true"
 ```
 
 ## Multi-Server Deployment
@@ -559,7 +555,6 @@ KEYMETRICS_PRIVATE_KEY="your_private_key_here"
 # Additional PM2 options
 PM2_INSTANCES="1"
 PM2_MAX_MEMORY_RESTART="500M"
-PM2_AUTORESTART="true"
 ```
 
 ### Deployment Commands
@@ -583,7 +578,6 @@ KEYMETRICS_PRIVATE_KEY="your_private_key_here"
 # Additional PM2 options
 PM2_INSTANCES="1"
 PM2_MAX_MEMORY_RESTART="500M"
-PM2_AUTORESTART="true"
 ```
 
 ### Monitoring Commands
