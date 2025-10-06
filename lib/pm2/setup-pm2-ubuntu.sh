@@ -199,7 +199,7 @@ install_pm2() {
 
 install_dependencies() {
     log "INFO" "Installing system dependencies..."
-    sudo apt-get install -y curl wget git build-essential || \
+    sudo apt-get install -y build-essential ffmpeg || \
         error_exit "Failed to install system dependencies"
     log "INFO" "System dependencies installed successfully."
 }
@@ -241,10 +241,18 @@ trap cleanup SIGTERM SIGINT
 
 log_message "Starting streaming service runner..."
 log_message "Package: \$PACKAGE@latest"
+log_message "Environment check - DROPSHOT_GROUND_ID: \${DROPSHOT_GROUND_ID:-'NOT SET'}"
+
+# Validate ground ID
+if [[ -z "\${DROPSHOT_GROUND_ID:-}" ]]; then
+    log_message "WARNING: DROPSHOT_GROUND_ID is not set or empty!"
+else
+    log_message "CONFIRMED: Ground ID is set to '\$DROPSHOT_GROUND_ID'"
+fi
 
 while true; do
     log_message "Launching streaming service..."
-    log_message "Ground ID: \${DROPSHOT_GROUND_ID:-'not set'}"
+    log_message "Passing Ground ID to npx command: \${DROPSHOT_GROUND_ID:-'NOT SET'}"
     
     # Run the package with error handling
     # Pass DROPSHOT_GROUND_ID environment variable to the streaming service
