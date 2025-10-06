@@ -1,0 +1,114 @@
+# PM2 Streaming Service Configuration Template
+# Copy this file to pm2-config.conf and modify the values as needed
+# 
+# Usage: cp pm2-config.conf.example pm2-config.conf
+#        export DROPSHOT_GROUND_ID="your-ground-id"
+#        ./setup-pm2-ubuntu.sh
+
+#==============================================================================
+# Ground Identification Settings
+#==============================================================================
+
+# Ground ID from environment variable DROPSHOT_GROUND_ID
+# Set the environment variable before running the setup:
+# export DROPSHOT_GROUND_ID="your-ground-id"
+# If not set, falls back to default value
+GROUND_NAME="${DROPSHOT_GROUND_ID:-ground1}"
+
+# Machine name for Keymetrics dashboard
+# Should be unique across all your streaming servers
+MACHINE_NAME="${DROPSHOT_GROUND_ID:-ground1}-server"
+
+# Tags for filtering in Keymetrics (optional)
+# Format: "key=value,key2=value2" or single "key=value"
+GROUND_TAG="ground=${DROPSHOT_GROUND_ID:-ground1},location=main"
+
+#==============================================================================
+# Package Configuration
+#==============================================================================
+
+# NPM package name for the streaming service
+# This package will be run via npx @latest
+PACKAGE_NAME="streamer-node"
+
+#==============================================================================
+# Node.js Configuration
+#==============================================================================
+
+# Node.js major version to install (18, 20, etc.)
+# The script will install the latest version of this major release
+NODE_VERSION="18"
+
+#==============================================================================
+# Keymetrics Integration (Optional)
+#==============================================================================
+
+# Keymetrics public and private keys for cloud monitoring
+# Leave empty to skip Keymetrics integration
+# Get these keys from: https://app.keymetrics.io/
+KEYMETRICS_PUBLIC_KEY=""
+KEYMETRICS_PRIVATE_KEY=""
+
+#==============================================================================
+# PM2 Process Configuration
+#==============================================================================
+
+# Number of instances to run (usually 1 for streaming services)
+PM2_INSTANCES="1"
+
+# Maximum memory before automatic restart
+# Examples: "100M", "500M", "1G"
+PM2_MAX_MEMORY_RESTART="500M"
+
+# Enable automatic restart on crashes
+PM2_AUTORESTART="true"
+
+#==============================================================================
+# Advanced Configuration (Optional)
+#==============================================================================
+
+# Custom environment variables for the streaming service
+# Uncomment and modify as needed
+# STREAM_QUALITY="1080p"
+# STREAM_BITRATE="5000"
+# YOUTUBE_STREAM_KEY="your-stream-key"
+
+# Custom PM2 options
+# PM2_WATCH="false"
+# PM2_IGNORE_WATCH="node_modules"
+# PM2_MAX_RESTARTS="10"
+# PM2_MIN_UPTIME="10s"
+
+#==============================================================================
+# Example Configurations for Different Grounds
+#==============================================================================
+
+# Environment Variable Usage:
+# Set DROPSHOT_GROUND_ID before running the setup script:
+# export DROPSHOT_GROUND_ID="groundA"
+# ./setup-pm2-ubuntu.sh
+
+# Ground A Configuration (using environment variable):
+# export DROPSHOT_GROUND_ID="groundA"
+# GROUND_NAME="${DROPSHOT_GROUND_ID:-groundA}"
+# MACHINE_NAME="${DROPSHOT_GROUND_ID:-groundA}-server"
+# GROUND_TAG="ground=${DROPSHOT_GROUND_ID:-groundA},location=building1"
+# PACKAGE_NAME="streamer-node"
+# NODE_VERSION="18"
+
+# Ground B Configuration (using environment variable):
+# export DROPSHOT_GROUND_ID="groundB"
+# GROUND_NAME="${DROPSHOT_GROUND_ID:-groundB}"
+# MACHINE_NAME="${DROPSHOT_GROUND_ID:-groundB}-server"
+# GROUND_TAG="ground=${DROPSHOT_GROUND_ID:-groundB},location=building2"
+# PACKAGE_NAME="streamer-node"
+# NODE_VERSION="18"
+
+# Premium Ground Configuration (using environment variable):
+# export DROPSHOT_GROUND_ID="premium-ground"
+# GROUND_NAME="${DROPSHOT_GROUND_ID:-premium-ground}"
+# MACHINE_NAME="${DROPSHOT_GROUND_ID:-premium-ground}-server"
+# GROUND_TAG="ground=${DROPSHOT_GROUND_ID:-premium-ground},location=main,quality=4k"
+# PACKAGE_NAME="streamer-node-premium"
+# NODE_VERSION="20"
+# PM2_MAX_MEMORY_RESTART="1G"
