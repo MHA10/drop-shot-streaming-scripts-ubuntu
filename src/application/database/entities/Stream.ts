@@ -150,18 +150,4 @@ export class StreamEntity implements BaseEntity {
     this.props.hasAudio = hasAudio;
     this.props.updatedAt = new Date();
   }
-
-  public toJSON(): any {
-    return {
-      id: this.props.id,
-      cameraUrl: this.props.cameraUrl,
-      streamKey: this.props.streamKey,
-      courtId: this.props.courtId,
-      state: this.props.state,
-      hasAudio: this.props.hasAudio,
-      processId: this.props.processId,
-      createdAt: this.props.createdAt.toISOString(),
-      updatedAt: this.props.updatedAt.toISOString(),
-    };
-  }
 }
