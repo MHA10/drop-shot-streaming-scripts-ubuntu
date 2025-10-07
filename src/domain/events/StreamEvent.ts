@@ -46,7 +46,7 @@ export interface SSEConnectionEvent extends DomainEvent {
 export interface SSEStreamEvent extends DomainEvent {
   readonly eventType: "SSEStreamEvent";
   readonly courtId: string;
-  readonly action: "start" | "stop";
+  readonly action: "start" | "stop" | "version-update";
   readonly cameraUrl: string;
   readonly streamKey: string;
   readonly reconciliationMode?: boolean;

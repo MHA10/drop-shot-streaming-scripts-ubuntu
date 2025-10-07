@@ -2,7 +2,6 @@
 
 import * as packageJson from "../package.json";
 import { Config } from "./infrastructure/config/Config";
-import { FileSystemStreamRepository } from "./infrastructure/repositories/FileSystemStreamRepository";
 import { NodeFFmpegService } from "./infrastructure/services/NodeFFmpegService";
 import { NodeSSEService } from "./infrastructure/services/NodeSSEService";
 import { StartStreamUseCase } from "./application/use-cases/StartStreamUseCase";
@@ -10,6 +9,7 @@ import { StopStreamUseCase } from "./application/use-cases/StopStreamUseCase";
 import { StreamManagerService } from "./application/services/StreamManagerService";
 import { HttpClient } from "./application/services/HttpClient";
 import { RemoteLogger } from "./infrastructure/logging/RemoteLogger";
+import { StreamRepository } from "./application/database/repositories/StreamRepository";
 
 class Application {
   private streamManager?: StreamManagerService;
@@ -24,8 +24,6 @@ class Application {
 
   public async start(): Promise<void> {
     try {
-
-      
       this.logger.info("Starting Streamer Node Application");
       this.logger.info(`Current version: ${packageJson.version}`);
 
@@ -34,9 +32,8 @@ class Application {
       this.logger.info("Configuration loaded", { config: config.get() });
 
       // Initialize dependencies
-      const streamRepository = new FileSystemStreamRepository(
-        config.get().stream.persistentStateDir,
-        this.logger
+      const streamRepository = new StreamRepository(
+        config.get().stream.persistentStateDir
       );
       const ffmpegService = new NodeFFmpegService(this.logger, config);
       const sseService = new NodeSSEService(this.logger);

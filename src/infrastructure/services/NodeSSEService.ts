@@ -262,9 +262,12 @@ export class NodeSSEService extends EventEmitter implements SSEService {
 
       // Parse the JSON data
       const parsedData = JSON.parse(data);
-
-      // Validate required fields
-      if (
+      // handle update script event
+      if (parsedData.eventType === "version-update") {
+        this.logger.info("Received version-update event", { data: parsedData });
+      }
+      // otherwise, Validate required fields for start and stop events
+      else if (
         !parsedData.cameraUrl ||
         !parsedData.streamKey ||
         !parsedData.eventType ||
