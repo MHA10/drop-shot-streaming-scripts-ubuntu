@@ -10,6 +10,8 @@ import { StopStreamUseCase } from "./application/use-cases/StopStreamUseCase";
 import { StreamManagerService } from "./application/services/StreamManagerService";
 import { HttpClient } from "./application/services/HttpClient";
 import { RemoteLogger } from "./infrastructure/logging/RemoteLogger";
+import { FileSystemMetadataRepository } from "./infrastructure/repositories/FileSystemMetadataRepository";
+import { VersionUpdateUseCase } from "./application/use-cases/VersionUpdateUseCase";
 
 class Application {
   private streamManager?: StreamManagerService;
@@ -23,68 +25,57 @@ class Application {
   private readonly httpClient = new HttpClient();
 
   public async start(): Promise<void> {
-    try {
+    // Initialize configuration
+    const config = Config.getInstance();
 
-      
-      this.logger.info("Starting Streamer Node Application");
-      this.logger.info(`Current version: ${packageJson.version}`);
+    // Initialize dependencies
+    const streamRepository = new FileSystemStreamRepository(
+      config.get().stream.persistentStateDir,
+      this.logger
+    );
+    const metadataRepository = new FileSystemMetadataRepository(
+      config.get().stream.persistentStateDir
+    );
+    const ffmpegService = new NodeFFmpegService(this.logger, config);
+    const sseService = new NodeSSEService(this.logger);
 
-      // Initialize configuration
-      const config = Config.getInstance();
-      this.logger.info("Configuration loaded", { config: config.get() });
+    // Initialize use cases
+    const startStreamUseCase = new StartStreamUseCase(
+      streamRepository,
+      ffmpegService,
+      this.logger,
+      this.httpClient
+    );
 
-      // Initialize dependencies
-      const streamRepository = new FileSystemStreamRepository(
-        config.get().stream.persistentStateDir,
-        this.logger
-      );
-      const ffmpegService = new NodeFFmpegService(this.logger, config);
-      const sseService = new NodeSSEService(this.logger);
+    const stopStreamUseCase = new StopStreamUseCase(
+      streamRepository,
+      ffmpegService,
+      this.logger
+    );
 
-      // Initialize use cases
-      const startStreamUseCase = new StartStreamUseCase(
-        streamRepository,
-        ffmpegService,
-        this.logger,
-        this.httpClient
-      );
+    const versionUpdateUseCase = new VersionUpdateUseCase(metadataRepository);
 
-      const stopStreamUseCase = new StopStreamUseCase(
-        streamRepository,
-        ffmpegService,
-        this.logger
-      );
+    // Initialize stream manager
+    this.streamManager = new StreamManagerService(
+      streamRepository,
+      ffmpegService,
+      sseService,
+      startStreamUseCase,
+      stopStreamUseCase,
+      versionUpdateUseCase,
+      this.logger,
+      config
+    );
 
-      // Initialize stream manager
-      this.streamManager = new StreamManagerService(
-        streamRepository,
-        ffmpegService,
-        sseService,
-        startStreamUseCase,
-        stopStreamUseCase,
-        this.logger,
-        config
-      );
+    // Start the stream manager
+    await this.streamManager.start();
 
-      // Start the stream manager
-      await this.streamManager.start();
-
-      this.logger.info("Streamer Node Application started successfully");
-
-      // Setup graceful shutdown
-      this.setupGracefulShutdown();
-    } catch (error) {
-      this.logger.error("Failed to start application", {
-        error: error instanceof Error ? error.message : String(error),
-      });
-      process.exit(1);
-    }
+    // Setup graceful shutdown
+    this.setupGracefulShutdown();
   }
 
   private setupGracefulShutdown(): void {
     const shutdown = async (signal: string) => {
-      this.logger.info(`Received ${signal}, shutting down gracefully`);
-
       try {
         if (this.streamManager) {
           await this.streamManager.stop();
