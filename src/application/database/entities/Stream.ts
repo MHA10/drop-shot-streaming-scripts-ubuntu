@@ -9,7 +9,7 @@ export enum StreamState {
   RECONCILING = "reconciling",
 }
 
-interface StreamProps extends BaseEntity {
+interface StreamProps {
   cameraUrl: string;
   streamKey: string;
   courtId: string;
@@ -18,8 +18,22 @@ interface StreamProps extends BaseEntity {
   processId?: number;
 }
 
-export class StreamEntity implements BaseEntity {
-  private constructor(private readonly props: StreamProps) {}
+export class StreamEntity extends BaseEntity {
+  cameraUrl: string;
+  streamKey: string;
+  courtId: string;
+  state: StreamState;
+  hasAudio: boolean;
+  processId?: number;
+  private constructor(props: StreamProps) {
+    super();
+    this.cameraUrl = props.cameraUrl;
+    this.streamKey = props.streamKey;
+    this.courtId = props.courtId;
+    this.state = props.state;
+    this.hasAudio = props.hasAudio;
+    this.processId = props.processId;
+  }
 
   public static create(
     cameraUrl: string,
@@ -27,19 +41,12 @@ export class StreamEntity implements BaseEntity {
     courtId: string,
     hasAudio: boolean = false
   ): StreamEntity {
-    const now = new Date();
-    const timestamp = Date.now().toString(36);
-    const random = randomBytes(8).toString("hex");
-    const id = `stream_${timestamp}_${random}`;
     return new StreamEntity({
-      id,
       cameraUrl,
       streamKey,
       courtId,
       state: StreamState.PENDING,
       hasAudio,
-      createdAt: now,
-      updatedAt: now,
     });
   }
 
@@ -47,107 +54,84 @@ export class StreamEntity implements BaseEntity {
     return new StreamEntity(props);
   }
 
-  // Getters
-  public get id(): string {
-    return this.props.id;
-  }
-
-  public get cameraUrl(): string {
-    return this.props.cameraUrl;
-  }
-
-  public get streamKey(): string {
-    return this.props.streamKey;
-  }
-
-  public get courtId(): string {
-    return this.props.courtId;
-  }
-
-  public get state(): StreamState {
-    return this.props.state;
-  }
-
-  public get hasAudio(): boolean {
-    return this.props.hasAudio;
-  }
-
-  public get processId(): number | undefined {
-    return this.props.processId;
-  }
-
-  public get createdAt(): Date {
-    return this.props.createdAt;
-  }
-
-  public get updatedAt(): Date {
-    return this.props.updatedAt;
-  }
-
   // Business methods
   public start(processId: number): void {
     if (
-      this.props.state !== StreamState.PENDING &&
-      this.props.state !== StreamState.STOPPED
+      this.state !== StreamState.PENDING &&
+      this.state !== StreamState.STOPPED
     ) {
-      throw new Error(`Cannot start stream in ${this.props.state} state`);
+      throw new Error(`Cannot start stream in ${this.state} state`);
     }
 
-    this.props.state = StreamState.RUNNING;
-    this.props.processId = processId;
-    this.props.updatedAt = new Date();
+    this.state = StreamState.RUNNING;
+    this.processId = processId;
+    this.updatedAt = new Date();
   }
 
   public stop(): void {
-    this.props.state = StreamState.STOPPED;
-    this.props.updatedAt = new Date();
+    this.state = StreamState.STOPPED;
+    this.updatedAt = new Date();
   }
 
   public markAsFailed(error?: string): void {
     console.log("mark as failed was called");
     // ignore if the stream is already stopped
-    if (this.props.state === StreamState.STOPPED) return;
+    if (this.state === StreamState.STOPPED) return;
 
-    this.props.state = StreamState.FAILED;
+    this.state = StreamState.FAILED;
     // Keep processId so we can still terminate the process later
-    this.props.updatedAt = new Date();
+    this.updatedAt = new Date();
   }
 
   public updateAudioDetection(hasAudio: boolean): void {
-    this.props.hasAudio = hasAudio;
-    this.props.updatedAt = new Date();
+    this.hasAudio = hasAudio;
+    this.updatedAt = new Date();
   }
 
   public clearProcessId(): void {
-    this.props.processId = undefined;
-    this.props.updatedAt = new Date();
+    this.processId = undefined;
+    this.updatedAt = new Date();
   }
 
   public updateProcessId(processId: number): void {
-    if (this.props.state !== StreamState.RUNNING) {
+    if (this.state !== StreamState.RUNNING) {
       throw new Error(
-        `Cannot update processId for stream in ${this.props.state} state`
+        `Cannot update processId for stream in ${this.state} state`
       );
     }
 
-    this.props.processId = processId;
-    this.props.updatedAt = new Date();
+    this.processId = processId;
+    this.updatedAt = new Date();
   }
 
   public isRunning(): boolean {
-    return this.props.state === StreamState.RUNNING;
+    return this.state === StreamState.RUNNING;
   }
 
   public isStopped(): boolean {
-    return this.props.state === StreamState.STOPPED;
+    return this.state === StreamState.STOPPED;
   }
 
   public isFailed(): boolean {
-    return this.props.state === StreamState.FAILED;
+    return this.state === StreamState.FAILED;
   }
 
   public setAudio(hasAudio: boolean): void {
-    this.props.hasAudio = hasAudio;
-    this.props.updatedAt = new Date();
+    this.hasAudio = hasAudio;
+    this.updatedAt = new Date();
+  }
+
+  public toJson() {
+    return {
+      id: this.id,
+      cameraUrl: this.cameraUrl,
+      streamKey: this.streamKey,
+      courtId: this.courtId,
+      state: this.state,
+      hasAudio: this.hasAudio,
+      processId: this.processId,
+      createdAt: this.createdAt,
+      updatedAt: this.updatedAt,
+    };
   }
 }

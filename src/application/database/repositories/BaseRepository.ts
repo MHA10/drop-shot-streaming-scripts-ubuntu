@@ -22,7 +22,11 @@ export class BaseRepository<T extends BaseEntity>
     const filePath = this.getFilePath(entity.id);
     const entityData = entity;
 
-    await fs.writeFile(filePath, JSON.stringify(entityData, null, 2), "utf8");
+    await fs.writeFile(
+      filePath,
+      JSON.stringify(entityData.toJson(), null, 2),
+      "utf8"
+    );
   }
 
   public async findById(id: string): Promise<T | null> {
@@ -37,9 +41,9 @@ export class BaseRepository<T extends BaseEntity>
         return null;
       }
 
-      const streamData = JSON.parse(data);
+      const entityData = JSON.parse(data);
 
-      return streamData as T;
+      return entityData as T;
     } catch (error) {
       // Check if it's a JSON parsing error (corrupted file)
       if (

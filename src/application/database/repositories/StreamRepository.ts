@@ -20,6 +20,10 @@ export class StreamRepository extends BaseRepository<StreamEntity> {
 
   async findAll(): Promise<StreamEntity[]> {
     const list = await super.findAll();
+    console.log(
+      "StreamRepository.findAll",
+      list.map((obj) => obj.state)
+    );
     return list.map((obj) => StreamEntity.fromPersistence(obj));
   }
 }
