@@ -19,6 +19,8 @@ export class BaseRepository<T extends BaseEntity>
   public async save(entity: T): Promise<void> {
     await this.ensureDirectoryExists();
 
+    console.log("BASE REPO - SAVE", entity);
+
     const filePath = this.getFilePath(entity.id);
     const entityData = entity;
 
