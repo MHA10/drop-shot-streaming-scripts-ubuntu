@@ -287,7 +287,7 @@ export class StreamManagerService {
     this.logger.debug("Performing health check");
 
     try {
-      const runningStreams = await this.streamRepository.findRunning();
+      let runningStreams = await this.streamRepository.findRunning();
 
       for (const stream of runningStreams) {
         if (stream.processId) {
@@ -305,6 +305,13 @@ export class StreamManagerService {
             await this.streamRepository.save(stream);
           }
         }
+      }
+
+      // recheck if there is any stream running
+      runningStreams = await this.streamRepository.findRunning();
+      if (runningStreams.length === 0) {
+        // if there is no running, execute version update to install if there is any new version
+        await this.versionUpdateUseCase.execute();
       }
 
       // Check SSE connection health
