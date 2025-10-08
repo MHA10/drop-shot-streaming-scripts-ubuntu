@@ -247,7 +247,7 @@ export class StartStreamUseCase {
 
         // close the current running stream
         updatedStream.markAsFailed();
-        await this.streamRepository.save(stream);
+        await this.streamRepository.save(updatedStream);
 
         // start a new process
         await this.execute(request, stopProcess);
