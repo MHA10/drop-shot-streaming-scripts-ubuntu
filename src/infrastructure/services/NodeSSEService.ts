@@ -294,6 +294,7 @@ export class NodeSSEService extends EventEmitter implements SSEService {
         streamKey: parsedData.streamKey,
         courtId: parsedData.courtId,
         reconciliationMode: parsedData.reconciliation_mode || false,
+        version: parsedData.version || undefined,
       };
 
       this.logger.info("Processing SSE stream event", {
