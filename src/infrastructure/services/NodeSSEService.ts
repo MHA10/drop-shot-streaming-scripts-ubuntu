@@ -264,6 +264,7 @@ export class NodeSSEService extends EventEmitter implements SSEService {
       const parsedData = JSON.parse(data);
       // ignore if there is no eventType
       if (!parsedData.eventType) {
+        this.logger.warn("Invalid SSE event data", { data: parsedData });
         return;
       }
 
