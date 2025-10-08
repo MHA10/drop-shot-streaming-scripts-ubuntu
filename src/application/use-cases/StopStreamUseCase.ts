@@ -1,6 +1,5 @@
-import { StreamId } from "../../domain/value-objects/StreamId";
-import { StreamRepository } from "../../domain/repositories/StreamRepository";
 import { FFmpegService } from "../../domain/services/FFmpegService";
+import { StreamRepository } from "../database/repositories/StreamRepository";
 import { Logger } from "../interfaces/Logger";
 
 export interface StopStreamRequest {
@@ -25,7 +24,7 @@ export class StopStreamUseCase {
     this.logger.info("Stopping stream", { streamId: request.streamId });
 
     try {
-      const streamId = StreamId.fromString(request.streamId);
+      const { streamId } = request;
 
       // Find the stream
       const stream = await this.streamRepository.findById(streamId);

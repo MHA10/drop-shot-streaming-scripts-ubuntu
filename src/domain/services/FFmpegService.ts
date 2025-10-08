@@ -1,5 +1,4 @@
 import { StartStreamRequest } from "../../application/interfaces/StartStreamUseCase.types";
-import { StreamUrl } from "../value-objects/StreamUrl";
 
 export interface FFmpegCommand {
   readonly command: string;
@@ -18,7 +17,7 @@ export interface FFmpegService {
    * Start an FFmpeg stream process
    */
   startStream(
-    cameraUrl: StreamUrl,
+    cameraUrl: string,
     streamKey: string,
     hasAudio: boolean,
     retry: {
@@ -40,13 +39,13 @@ export interface FFmpegService {
   /**
    * Detect if a stream has audio
    */
-  detectAudio(cameraUrl: StreamUrl): Promise<boolean>;
+  detectAudio(cameraUrl: string): Promise<boolean>;
 
   /**
    * Build FFmpeg command for streaming
    */
   buildStreamCommand(
-    cameraUrl: StreamUrl,
+    cameraUrl: string,
     streamKey: string,
     hasAudio: boolean
   ): FFmpegCommand;

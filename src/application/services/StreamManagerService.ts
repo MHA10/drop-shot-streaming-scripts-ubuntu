@@ -1,4 +1,3 @@
-import { StreamRepository } from "../../domain/repositories/StreamRepository";
 import { FFmpegService } from "../../domain/services/FFmpegService";
 import { SSEService } from "../../domain/services/SSEService";
 import { StartStreamUseCase } from "../use-cases/StartStreamUseCase";
@@ -7,6 +6,7 @@ import { SSEStreamEvent } from "../../domain/events/StreamEvent";
 import { Logger } from "../interfaces/Logger";
 import { Config } from "../../infrastructure/config/Config";
 import { StreamState } from "../../domain/value-objects/StreamState";
+import { StreamRepository } from "../database/repositories/StreamRepository";
 
 export class StreamManagerService {
   private healthCheckInterval?: NodeJS.Timeout;
@@ -130,7 +130,7 @@ export class StreamManagerService {
               this.logger.warn(
                 "Stream process not running, marking as failed",
                 {
-                  streamId: stream.id.value,
+                  streamId: stream.id,
                   processId: stream.processId,
                 }
               );
@@ -139,14 +139,14 @@ export class StreamManagerService {
               await this.streamRepository.save(stream);
             } else {
               this.logger.info("Stream process recovered successfully", {
-                streamId: stream.id.value,
+                streamId: stream.id,
                 processId: stream.processId,
               });
             }
           }
         } catch (error) {
           this.logger.error("Failed to recover stream", {
-            streamId: stream.id.value,
+            streamId: stream.id,
             error: error instanceof Error ? error.message : String(error),
           });
 
@@ -218,6 +218,8 @@ export class StreamManagerService {
         await this.handleStartEvent(event);
       } else if (event.action === "stop") {
         await this.handleStopEvent(event);
+      } else if (event.action === "version-update") {
+        await this.handleVersionUpdateEvent(event);
       }
     } catch (error) {
       this.logger.error("Failed to process stream event", {
@@ -227,17 +229,28 @@ export class StreamManagerService {
     }
   }
 
+  private async handleVersionUpdateEvent(event: SSEStreamEvent) {
+    // I want a mechanism to save the streamer metadata in the filing. Know that the streamer data is not related to streams data.
+  }
+
   private async handleStartEvent(event: SSEStreamEvent) {
     this.logger.info("Handling new stream");
-    await this.startStreamUseCase.execute(
-      {
-        cameraUrl: event.cameraUrl,
-        streamKey: event.streamKey,
+    try {
+      await this.startStreamUseCase.execute(
+        {
+          cameraUrl: event.cameraUrl,
+          streamKey: event.streamKey,
+          courtId: event.courtId,
+          detectAudio: true,
+        },
+        this.stopStreamUseCase.execute
+      );
+    } catch (error) {
+      this.logger.error("Failed to start stream", {
+        error: error instanceof Error ? error.message : String(error),
         courtId: event.courtId,
-        detectAudio: true,
-      },
-      this.stopStreamUseCase.execute
-    );
+      });
+    }
   }
 
   private async handleStopEvent(event: SSEStreamEvent) {
@@ -245,14 +258,14 @@ export class StreamManagerService {
     const streams = await this.streamRepository.findAll();
     const targetStream = streams.find(
       (stream) =>
-        stream.cameraUrl.value === event.cameraUrl &&
+        stream.cameraUrl === event.cameraUrl &&
         stream.streamKey === event.streamKey &&
         stream.state === StreamState.RUNNING
     );
 
     if (targetStream) {
       await this.stopStreamUseCase.execute({
-        streamId: targetStream.id.value,
+        streamId: targetStream.id,
       });
     } else {
       this.logger.warn("Stream not found for stop event", {
@@ -298,7 +311,7 @@ export class StreamManagerService {
 
           if (!isRunning) {
             this.logger.warn("Stream process died, marking as failed", {
-              streamId: stream.id.value,
+              streamId: stream.id,
               processId: stream.processId,
             });
 
@@ -329,11 +342,11 @@ export class StreamManagerService {
       for (const stream of runningStreams) {
         try {
           await this.stopStreamUseCase.execute({
-            streamId: stream.id.value,
+            streamId: stream.id,
           });
         } catch (error) {
           this.logger.error("Failed to stop stream during shutdown", {
-            streamId: stream.id.value,
+            streamId: stream.id,
             error: error instanceof Error ? error.message : String(error),
           });
         }

@@ -1,4 +1,4 @@
-import { Stream } from "../../domain/entities/Stream";
+import { StreamEntity } from "../database/entities/Stream";
 
 export interface StartStreamRequest {
   cameraUrl: string;
@@ -24,7 +24,7 @@ export enum StreamAction {
 export type StartStreamEvent =
   | {
       action: StreamAction.MULTIPLE_STREAMS_RUNNING;
-      streamList: Stream[];
+      streamList: StreamEntity[];
     }
   | {
       action:
@@ -32,7 +32,7 @@ export type StartStreamEvent =
         | StreamAction.DUPLICATE_EVENT
         | StreamAction.INVALID_YOUTUBE_STREAM_KEY
         | StreamAction.DEAD_PROCESS_DETECTED;
-      stream: Stream;
+      stream: StreamEntity;
     };
 
 type TrueOrFalse<T> = { isValid: true } | { isValid: false; data: T };

@@ -6,7 +6,6 @@ import {
   FFmpegCommand,
   FFmpegProcess,
 } from "../../domain/services/FFmpegService";
-import { StreamUrl } from "../../domain/value-objects/StreamUrl";
 import { Logger } from "../../application/interfaces/Logger";
 import { StartStreamRequest } from "../../application/interfaces/StartStreamUseCase.types";
 import { Config } from "../config/Config";
@@ -23,7 +22,7 @@ export class NodeFFmpegService implements FFmpegService {
   }
 
   public async startStream(
-    cameraUrl: StreamUrl,
+    cameraUrl: string,
     streamKey: string,
     hasAudio: boolean,
     retry: {
@@ -36,7 +35,7 @@ export class NodeFFmpegService implements FFmpegService {
 
     this.logger.info("Starting FFmpeg process", {
       command: command.fullCommand,
-      cameraUrl: cameraUrl.value,
+      cameraUrl: cameraUrl,
       streamKey,
       hasAudio,
     });
@@ -101,7 +100,7 @@ export class NodeFFmpegService implements FFmpegService {
           pid: process.pid,
           code,
           signal,
-          cameraUrl: cameraUrl.value,
+          cameraUrl: cameraUrl,
         });
 
         if (process.pid) {
@@ -197,15 +196,15 @@ export class NodeFFmpegService implements FFmpegService {
     }
   }
 
-  public async detectAudio(cameraUrl: StreamUrl): Promise<boolean> {
+  public async detectAudio(cameraUrl: string): Promise<boolean> {
     this.logger.info("Detecting audio for stream", {
-      cameraUrl: cameraUrl.value,
+      cameraUrl: cameraUrl,
     });
     const args = [
       "-rtsp_transport",
       "tcp",
       "-i",
-      cameraUrl.value,
+      cameraUrl,
       "-t",
       "5", // Test for 5 seconds
       "-f",
@@ -247,7 +246,7 @@ export class NodeFFmpegService implements FFmpegService {
   }
 
   public buildStreamCommand(
-    cameraUrl: StreamUrl,
+    cameraUrl: string,
     streamKey: string,
     hasAudio: boolean
   ): FFmpegCommand {
@@ -259,7 +258,7 @@ export class NodeFFmpegService implements FFmpegService {
     // Add input parameters
     args.push("-rtsp_transport", "tcp");
 
-    args.push("-i", cameraUrl.value);
+    args.push("-i", cameraUrl);
 
     if (!hasAudio) {
       // Without audio - add null audio source like in bash script

@@ -1,7 +1,3 @@
-import { Stream } from "../../domain/entities/Stream";
-import { StreamId } from "../../domain/value-objects/StreamId";
-import { StreamUrl } from "../../domain/value-objects/StreamUrl";
-import { StreamRepository } from "../../domain/repositories/StreamRepository";
 import { FFmpegService } from "../../domain/services/FFmpegService";
 import { Logger } from "../interfaces/Logger";
 import { HttpClient } from "../services/HttpClient";
@@ -15,6 +11,8 @@ import {
   StreamAction,
   ValidationEvent,
 } from "../interfaces/StartStreamUseCase.types";
+import { StreamRepository } from "../database/repositories/StreamRepository";
+import { StreamEntity } from "../database/entities/Stream";
 
 export class StartStreamUseCase {
   private readonly config = Config.getInstance().get();
@@ -202,13 +200,9 @@ export class StartStreamUseCase {
     });
 
     try {
-      // Create value objects
-      const streamId = StreamId.create();
-      const cameraUrl = StreamUrl.create(request.cameraUrl);
       // Create stream entity
-      const stream = Stream.create(
-        streamId,
-        cameraUrl,
+      const stream = StreamEntity.create(
+        request.cameraUrl,
         request.streamKey,
         request.courtId
       );
@@ -219,42 +213,42 @@ export class StartStreamUseCase {
       let hasAudio = false;
       if (request.detectAudio) {
         this.logger.info("Detecting audio for stream", {
-          streamId: streamId.value,
+          streamId: stream.id,
         });
-        hasAudio = await this.ffmpegService.detectAudio(cameraUrl);
+        hasAudio = await this.ffmpegService.detectAudio(request.cameraUrl);
         this.logger.info("Audio detection result", {
-          streamId: streamId.value,
+          streamId: stream.id,
           hasAudio,
         });
       }
       stream.setAudio(hasAudio);
 
       // Start FFmpeg process
-      this.logger.info("Starting FFmpeg process", { streamId: streamId.value });
+      this.logger.info("Starting FFmpeg process", { streamId: stream.id });
 
       // This will attempt a retry if the stream gives a retryable error
       const onRetryStream = async (event: StartStreamRequest) => {
         this.logger.info("Stream retrying", { event });
 
         // fetch the updated state from the repository
-        const updatedStream = await this.streamRepository.findById(streamId);
+        const updatedStream = await this.streamRepository.findById(stream.id);
         if (!updatedStream || updatedStream.state === StreamState.STOPPED) {
           this.logger.error("Stream can not be retried", {
-            streamId: streamId.value,
+            streamId: stream.id,
           });
           return;
         }
 
         // close the current running stream
         updatedStream.markAsFailed();
-        await this.streamRepository.save(stream);
+        await this.streamRepository.save(updatedStream);
 
         // start a new process
         await this.execute(request, stopProcess);
       };
 
       const ffmpegProcess = await this.ffmpegService.startStream(
-        cameraUrl,
+        request.cameraUrl,
         request.streamKey,
         hasAudio,
         {
@@ -270,7 +264,7 @@ export class StartStreamUseCase {
       await this.streamRepository.save(stream);
 
       this.logger.info("Stream started successfully", {
-        streamId: streamId.value,
+        streamId: stream.id,
         processId: ffmpegProcess.pid,
         hasAudio,
       });
@@ -283,7 +277,7 @@ export class StartStreamUseCase {
       );
 
       return {
-        streamId: streamId.value,
+        streamId: stream.id,
         processId: ffmpegProcess.pid,
         hasAudio,
       };
