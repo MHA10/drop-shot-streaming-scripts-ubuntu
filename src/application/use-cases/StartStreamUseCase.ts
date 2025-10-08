@@ -187,7 +187,7 @@ export class StartStreamUseCase {
   public async execute(
     request: StartStreamRequest,
     stopProcess: (request: StopStreamRequest) => Promise<StopStreamResponse>
-  ): Promise<StartStreamResponse> {
+  ): Promise<StartStreamResponse | undefined> {
     // check if the stream should be started
     const handleResponse = await this.shouldStartNewStream(
       request,
@@ -200,10 +200,10 @@ export class StartStreamUseCase {
       streamKey: request.streamKey,
       courtId: request.courtId,
     });
+    const streamId = StreamId.create();
 
     try {
       // Create value objects
-      const streamId = StreamId.create();
       const cameraUrl = StreamUrl.create(request.cameraUrl);
       // Create stream entity
       const stream = Stream.create(
@@ -289,12 +289,15 @@ export class StartStreamUseCase {
       };
     } catch (error) {
       // otherwise just log and move on
-      this.logger.error("Failed to start stream", {
+      this.logger.error("Stream is not starting", {
         error: error instanceof Error ? error.message : String(error),
         cameraUrl: request.cameraUrl,
         streamKey: request.streamKey,
       });
-      throw error;
+      // in case the process started, we need to clear out the process ID
+      await stopProcess({
+        streamId: streamId.value,
+      });
     }
   }
 }
