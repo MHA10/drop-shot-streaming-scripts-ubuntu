@@ -262,6 +262,10 @@ export class NodeSSEService extends EventEmitter implements SSEService {
 
       // Parse the JSON data
       const parsedData = JSON.parse(data);
+      // ignore if there is no eventType
+      if (!parsedData.eventType) {
+        return;
+      }
 
       // Validate version update event
       if (parsedData.eventType === "version-update" && !parsedData.version) {
