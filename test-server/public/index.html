@@ -159,6 +159,16 @@
         />
       </div>
 
+      <div class="form-group">
+        <label for="version">Version:</label>
+        <input
+          type="text"
+          id="version"
+          value="1.0.1"
+          placeholder="Enter Version"
+        />
+      </div>
+
       <p>Cam 2 Key: `pjzb-r0va-wqcj-uvcq-7gsm`</p>
 
       <div class="button-group">
@@ -252,12 +262,14 @@
         const cameraUrl = document.getElementById("cameraUrl").value;
         const streamKey = document.getElementById("streamKey").value;
         const courtId = document.getElementById("courtId").value;
+        const version = document.getElementById("version").value;
 
         const eventData = {
           eventType,
           cameraUrl,
           streamKey,
           courtId,
+          version,
         };
 
         try {

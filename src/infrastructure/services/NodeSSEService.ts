@@ -184,8 +184,7 @@ export class NodeSSEService extends EventEmitter implements SSEService {
         const { done, value } = await reader.read();
 
         if (done) {
-          this.logger.info("SSE stream ended");
-          break;
+          throw new Error("SSE stream ended");
         }
 
         buffer += decoder.decode(value, { stream: true });
