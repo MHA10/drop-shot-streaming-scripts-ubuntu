@@ -81,13 +81,14 @@ app.post("/api/v1/logs/logs", (req, res) => {
 });
 
 app.post("/send-event", (req, res) => {
-  const { eventType, cameraUrl, streamKey, courtId } = req.body;
+  const { eventType, cameraUrl, streamKey, courtId, version } = req.body;
 
   const eventData = {
     eventType,
     cameraUrl,
     streamKey,
     courtId,
+    version,
   };
 
   console.log("Broadcasting event:", eventData);

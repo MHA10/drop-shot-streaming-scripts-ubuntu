@@ -7,6 +7,7 @@ import { SSEStreamEvent } from "../../domain/events/StreamEvent";
 import { Logger } from "../interfaces/Logger";
 import { Config } from "../../infrastructure/config/Config";
 import { StreamState } from "../../domain/value-objects/StreamState";
+import { VersionUpdateUseCase } from "../use-cases/VersionUpdateUseCase";
 
 export class StreamManagerService {
   private healthCheckInterval?: NodeJS.Timeout;
@@ -18,6 +19,7 @@ export class StreamManagerService {
     private readonly sseService: SSEService,
     private readonly startStreamUseCase: StartStreamUseCase,
     private readonly stopStreamUseCase: StopStreamUseCase,
+    private readonly versionUpdateUseCase: VersionUpdateUseCase,
     private readonly logger: Logger,
     private readonly config: Config
   ) {}
@@ -28,7 +30,6 @@ export class StreamManagerService {
       return;
     }
 
-    this.logger.info("Starting Stream Manager Service");
     this.isRunning = true;
 
     try {
@@ -40,7 +41,7 @@ export class StreamManagerService {
 
       // Start SSE connection
       const sseConfig = this.config.get().sse;
-      await this.sseService.start({
+      this.sseService.start({
         ...sseConfig,
         groundId: this.config.get().groundInfo.groundId,
         baseUrl: this.config.get().server.baseUrl,
@@ -48,8 +49,6 @@ export class StreamManagerService {
 
       // Start health check monitoring
       this.startHealthCheck();
-
-      this.logger.info("Stream Manager Service started successfully");
     } catch (error) {
       this.logger.error("Failed to start Stream Manager Service", {
         error: error instanceof Error ? error.message : String(error),
@@ -64,7 +63,6 @@ export class StreamManagerService {
       return;
     }
 
-    this.logger.info("Stopping Stream Manager Service");
     this.isRunning = false;
 
     try {
@@ -79,8 +77,6 @@ export class StreamManagerService {
 
       // Stop all running streams
       await this.stopAllStreams();
-
-      this.logger.info("Stream Manager Service stopped successfully");
     } catch (error) {
       this.logger.error("Error stopping Stream Manager Service", {
         error: error instanceof Error ? error.message : String(error),
@@ -90,16 +86,12 @@ export class StreamManagerService {
   }
 
   private async initializeSystem(): Promise<void> {
-    this.logger.info("Initializing stream management system");
-
     try {
       // Recover running streams from persistent state
       await this.recoverStreams();
 
       // Clean up orphaned processes
       await this.cleanupOrphanedProcesses();
-
-      this.logger.info("System initialization completed");
     } catch (error) {
       this.logger.error("System initialization failed", {
         error: error instanceof Error ? error.message : String(error),
@@ -109,8 +101,6 @@ export class StreamManagerService {
   }
 
   private async recoverStreams(): Promise<void> {
-    this.logger.info("Recovering streams from persistent state");
-
     try {
       const runningStreams = await this.streamRepository.findRunning();
 
@@ -137,11 +127,6 @@ export class StreamManagerService {
 
               stream.markAsFailed("Process not found during recovery");
               await this.streamRepository.save(stream);
-            } else {
-              this.logger.info("Stream process recovered successfully", {
-                streamId: stream.id.value,
-                processId: stream.processId,
-              });
             }
           }
         } catch (error) {
@@ -156,7 +141,6 @@ export class StreamManagerService {
       }
 
       // Stop all running streams and clear all persistent data
-      this.logger.info("Stopping all streams and clearing data after recovery");
       await this.stopAllStreams();
       await this.streamRepository.clear();
     } catch (error) {
@@ -214,10 +198,21 @@ export class StreamManagerService {
     });
 
     try {
-      if (event.action === "start") {
-        await this.handleStartEvent(event);
-      } else if (event.action === "stop") {
-        await this.handleStopEvent(event);
+      switch (event.action) {
+        case "start":
+          await this.handleStartEvent(event);
+          break;
+        case "stop":
+          await this.handleStopEvent(event);
+          break;
+        case "version-update":
+          await this.handleVersionUpdateEvent(event);
+          break;
+        default:
+          this.logger.warn("Unknown stream action", {
+            action: event.action,
+          });
+          break;
       }
     } catch (error) {
       this.logger.error("Failed to process stream event", {
@@ -225,6 +220,10 @@ export class StreamManagerService {
         error: error instanceof Error ? error.message : String(error),
       });
     }
+  }
+
+  private async handleVersionUpdateEvent(event: SSEStreamEvent) {
+    await this.versionUpdateUseCase.updateVersion(event.version);
   }
 
   private async handleStartEvent(event: SSEStreamEvent) {
@@ -288,7 +287,7 @@ export class StreamManagerService {
     this.logger.debug("Performing health check");
 
     try {
-      const runningStreams = await this.streamRepository.findRunning();
+      let runningStreams = await this.streamRepository.findRunning();
 
       for (const stream of runningStreams) {
         if (stream.processId) {
@@ -306,6 +305,13 @@ export class StreamManagerService {
             await this.streamRepository.save(stream);
           }
         }
+      }
+
+      // recheck if there is any stream running
+      runningStreams = await this.streamRepository.findRunning();
+      if (runningStreams.length === 0) {
+        // if there is no running, execute version update to install if there is any new version
+        await this.versionUpdateUseCase.execute();
       }
 
       // Check SSE connection health

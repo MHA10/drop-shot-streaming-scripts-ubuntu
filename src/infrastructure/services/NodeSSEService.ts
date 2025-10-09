@@ -184,8 +184,7 @@ export class NodeSSEService extends EventEmitter implements SSEService {
         const { done, value } = await reader.read();
 
         if (done) {
-          this.logger.info("SSE stream ended");
-          break;
+          throw new Error("SSE stream ended");
         }
 
         buffer += decoder.decode(value, { stream: true });
@@ -262,13 +261,24 @@ export class NodeSSEService extends EventEmitter implements SSEService {
 
       // Parse the JSON data
       const parsedData = JSON.parse(data);
+      // ignore if there is no eventType
+      if (!parsedData.eventType) {
+        this.logger.warn("Invalid SSE event data", { data: parsedData });
+        return;
+      }
 
-      // Validate required fields
+      // Validate version update event
+      if (parsedData.eventType === "version-update" && !parsedData.version) {
+        this.logger.warn("Invalid SSE event data", { data: parsedData });
+        return;
+      }
+      // Validate required fields for stream events
       if (
-        !parsedData.cameraUrl ||
-        !parsedData.streamKey ||
-        !parsedData.eventType ||
-        !parsedData.courtId
+        (parsedData.eventType === "start" || parsedData.eventType === "stop") &&
+        (!parsedData.cameraUrl ||
+          !parsedData.streamKey ||
+          !parsedData.eventType ||
+          !parsedData.courtId)
       ) {
         this.logger.warn("Invalid SSE event data", { data: parsedData });
         return;
@@ -284,6 +294,7 @@ export class NodeSSEService extends EventEmitter implements SSEService {
         streamKey: parsedData.streamKey,
         courtId: parsedData.courtId,
         reconciliationMode: parsedData.reconciliation_mode || false,
+        version: parsedData.version || undefined,
       };
 
       this.logger.info("Processing SSE stream event", {

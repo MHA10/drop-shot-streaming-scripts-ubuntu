@@ -125,6 +125,7 @@
         <select id="eventType">
           <option value="start">start</option>
           <option value="stop">stop</option>
+          <option value="version-update">version-update</option>
         </select>
       </div>
 
@@ -155,6 +156,16 @@
           id="courtId"
           value="court-001"
           placeholder="Enter Court ID"
+        />
+      </div>
+
+      <div class="form-group">
+        <label for="version">Version:</label>
+        <input
+          type="text"
+          id="version"
+          value="1.0.1"
+          placeholder="Enter Version"
         />
       </div>
 
@@ -251,12 +262,15 @@
         const cameraUrl = document.getElementById("cameraUrl").value;
         const streamKey = document.getElementById("streamKey").value;
         const courtId = document.getElementById("courtId").value;
+        const version = document.getElementById("version").value;
+        console.log(version);
 
         const eventData = {
           eventType,
           cameraUrl,
           streamKey,
           courtId,
+          version,
         };
 
         try {
