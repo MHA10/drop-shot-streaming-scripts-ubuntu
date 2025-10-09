@@ -9,9 +9,12 @@ export class VersionUpdateUseCase {
   async updateVersion(version?: string) {
     if (!version) return;
 
-    const metadata = await this.metadataRepository.find();
-    metadata.version.latest = version;
-    metadata.updatedAt = new Date();
+    const metadata = {
+      version: {
+        latest: version,
+      },
+      updatedAt: new Date(),
+    };
     await this.metadataRepository.save(metadata);
   }
 
