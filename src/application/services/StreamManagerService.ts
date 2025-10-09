@@ -41,7 +41,7 @@ export class StreamManagerService {
 
       // Start SSE connection
       const sseConfig = this.config.get().sse;
-      await this.sseService.start({
+      this.sseService.start({
         ...sseConfig,
         groundId: this.config.get().groundInfo.groundId,
         baseUrl: this.config.get().server.baseUrl,
