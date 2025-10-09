@@ -43,8 +43,12 @@ export class Config {
 
   private constructor() {
     console.log("[CONFIG] Initializing application configuration...");
-    console.log("[CONFIG] Note: dotenv.config() was called at module load time");
-    console.log("[CONFIG] Environment variables from npx command will override .env file values");
+    console.log(
+      "[CONFIG] Note: dotenv.config() was called at module load time"
+    );
+    console.log(
+      "[CONFIG] Environment variables from npx command will override .env file values"
+    );
     this.config = this.loadConfig();
     this.validate();
     console.log("[CONFIG] Configuration loaded successfully");
@@ -67,7 +71,7 @@ export class Config {
         baseUrl: this.getEnvVar("BASE_URL", "https://api.drop-shot.live"),
       },
       images: {
-        clientPath: this.getEnvVar("CLIENT_IMAGES_PATH", ""),
+        clientPath: this.getEnvVar("CLIENT_IMAGES_PATH", "./public/client.png"),
       },
       groundInfo: {
         groundId: this.getEnvVar("DROPSHOT_GROUND_ID", ""),
@@ -115,23 +119,29 @@ export class Config {
 
   private getEnvVar(key: string, defaultValue: string): string {
     const value = process.env[key];
-    
+
     // Special logging for DROPSHOT_GROUND_ID to confirm source
     if (key === "DROPSHOT_GROUND_ID") {
       console.log(`[CONFIG] Checking environment variable: ${key}`);
-      console.log(`[CONFIG] Value from process.env: ${value || 'undefined'}`);
+      console.log(`[CONFIG] Value from process.env: ${value || "undefined"}`);
       console.log(`[CONFIG] Default value: ${defaultValue}`);
-      
+
       if (value === undefined) {
-        console.log(`[CONFIG] WARNING: ${key} not found in environment, using default: ${defaultValue}`);
+        console.log(
+          `[CONFIG] WARNING: ${key} not found in environment, using default: ${defaultValue}`
+        );
         return defaultValue;
       } else {
-        console.log(`[CONFIG] CONFIRMED: ${key} loaded from environment (npx command): '${value}'`);
-        console.log(`[CONFIG] This confirms the value is NOT from .env file but from OS environment`);
+        console.log(
+          `[CONFIG] CONFIRMED: ${key} loaded from environment (npx command): '${value}'`
+        );
+        console.log(
+          `[CONFIG] This confirms the value is NOT from .env file but from OS environment`
+        );
         return value;
       }
     }
-    
+
     if (value === undefined) {
       return defaultValue;
     }
