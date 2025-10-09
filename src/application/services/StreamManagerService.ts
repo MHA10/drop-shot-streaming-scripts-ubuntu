@@ -7,6 +7,9 @@ import { SSEStreamEvent } from "../../domain/events/StreamEvent";
 import { Logger } from "../interfaces/Logger";
 import { Config } from "../../infrastructure/config/Config";
 import { StreamState } from "../../domain/value-objects/StreamState";
+import * as fs from "fs/promises";
+import * as path from "path";
+import * as https from "https";
 
 export class StreamManagerService {
   private healthCheckInterval?: NodeJS.Timeout;
@@ -93,6 +96,9 @@ export class StreamManagerService {
     this.logger.info("Initializing stream management system");
 
     try {
+      // Validate and download required images
+      await this.validateRequiredImages();
+
       // Recover running streams from persistent state
       await this.recoverStreams();
 
@@ -346,6 +352,94 @@ export class StreamManagerService {
         error: error instanceof Error ? error.message : String(error),
       });
     }
+  }
+
+  private async validateRequiredImages(): Promise<void> {
+    this.logger.info("Validating required images");
+
+    const requiredImages = [
+      {
+        name: "DropShot logo",
+        localPath: "public/ds.png",
+        downloadUrl:
+          "https://raw.githubusercontent.com/DropShot-Live/static-images/main/ds-watermark.png",
+      },
+      {
+        name: "Client logo",
+        localPath: "public/client.png",
+        downloadUrl:
+          "https://raw.githubusercontent.com/DropShot-Live/static-images/main/padel-central.png",
+      },
+    ];
+
+    for (const image of requiredImages) {
+      const fullPath = path.resolve(image.localPath);
+
+      try {
+        await fs.access(fullPath);
+        this.logger.info(`${image.name} found at ${image.localPath}`);
+      } catch (error) {
+        this.logger.warn(
+          `${image.name} not found at ${image.localPath}, downloading...`
+        );
+
+        try {
+          // Ensure the public directory exists
+          await fs.mkdir(path.dirname(fullPath), { recursive: true });
+
+          // Download the image
+          await this.downloadFile(image.downloadUrl, fullPath);
+          this.logger.info(
+            `Successfully downloaded ${image.name} to ${image.localPath}`
+          );
+        } catch (downloadError) {
+          this.logger.error(`Failed to download ${image.name}`, {
+            error:
+              downloadError instanceof Error
+                ? downloadError.message
+                : String(downloadError),
+            url: image.downloadUrl,
+            path: image.localPath,
+          });
+          throw new Error(`Failed to download required image: ${image.name}`);
+        }
+      }
+    }
+
+    this.logger.info("Image validation completed");
+  }
+
+  private async downloadFile(url: string, filePath: string): Promise<void> {
+    return new Promise((resolve, reject) => {
+      const file = require("fs").createWriteStream(filePath);
+
+      https
+        .get(url, (response) => {
+          if (response.statusCode !== 200) {
+            reject(
+              new Error(
+                `HTTP ${response.statusCode}: ${response.statusMessage}`
+              )
+            );
+            return;
+          }
+
+          response.pipe(file);
+
+          file.on("finish", () => {
+            file.close();
+            resolve();
+          });
+
+          file.on("error", (error: Error) => {
+            require("fs").unlink(filePath, () => {}); // Delete the file on error
+            reject(error);
+          });
+        })
+        .on("error", (error: Error) => {
+          reject(error);
+        });
+    });
   }
 
   public async getStatus(): Promise<{

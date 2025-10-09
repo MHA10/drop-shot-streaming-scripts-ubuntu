@@ -13,7 +13,7 @@
     "LICENSE"
   ],
   "scripts": {
-    "build": "npx tsc && cp -r public dist/",
+    "build": "npx tsc && mkdir -p public && cp -r public dist/",
     "start": "node dist/src/main.js",
     "dev": "npm run build && npm start",
     "monitor": "bash -c 'npm run dev 2>&1 | tee >(grep -E \"ERROR|WARN|INFO\" > node.logs) >(grep \"DEBUG\" | grep -v \"frame=\" > ffmpeg.logs)'",
