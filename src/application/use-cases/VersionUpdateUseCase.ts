@@ -27,6 +27,6 @@ export class VersionUpdateUseCase {
     }
     // exiting the process since pm2 will auto restart the process.
     // next time the process starts, the version will be updated
-    process.exit(0);
+    process.exit(1);
   }
 }
