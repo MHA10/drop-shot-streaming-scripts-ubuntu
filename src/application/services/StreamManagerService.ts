@@ -7,6 +7,7 @@ import { SSEStreamEvent } from "../../domain/events/StreamEvent";
 import { Logger } from "../interfaces/Logger";
 import { Config } from "../../infrastructure/config/Config";
 import { StreamState } from "../../domain/value-objects/StreamState";
+import { HttpClient } from "./HttpClient";
 import * as fs from "fs/promises";
 import * as path from "path";
 import * as https from "https";
@@ -22,7 +23,8 @@ export class StreamManagerService {
     private readonly startStreamUseCase: StartStreamUseCase,
     private readonly stopStreamUseCase: StopStreamUseCase,
     private readonly logger: Logger,
-    private readonly config: Config
+    private readonly config: Config,
+    private readonly httpClient: HttpClient
   ) {}
 
   public async start(): Promise<void> {
@@ -294,6 +296,22 @@ export class StreamManagerService {
     this.logger.debug("Performing health check");
 
     try {
+      // Send heartbeat to the API
+      const groundId = this.config.get().groundInfo.groundId;
+      if (groundId) {
+        try {
+          await this.httpClient.sendHeartbeat(groundId);
+          this.logger.debug("Heartbeat sent successfully", { groundId });
+        } catch (heartbeatError) {
+          this.logger.warn("Failed to send heartbeat", {
+            groundId,
+            error: heartbeatError instanceof Error ? heartbeatError.message : String(heartbeatError),
+          });
+        }
+      } else {
+        this.logger.warn("Ground ID not configured, skipping heartbeat");
+      }
+
       const runningStreams = await this.streamRepository.findRunning();
 
       for (const stream of runningStreams) {

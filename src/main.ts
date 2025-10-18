@@ -63,7 +63,8 @@ class Application {
         startStreamUseCase,
         stopStreamUseCase,
         this.logger,
-        config
+        config,
+        this.httpClient
       );
 
       // Start the stream manager
