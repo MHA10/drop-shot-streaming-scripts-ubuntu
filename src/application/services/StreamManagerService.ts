@@ -42,6 +42,7 @@ export class StreamManagerService {
 
       // Set up SSE event handlers
       this.setupSSEEventHandlers();
+      console.log("SSE event handlers set up");
 
       // Start SSE connection
       const sseConfig = this.config.get().sse;
@@ -305,7 +306,10 @@ export class StreamManagerService {
         } catch (heartbeatError) {
           this.logger.warn("Failed to send heartbeat", {
             groundId,
-            error: heartbeatError instanceof Error ? heartbeatError.message : String(heartbeatError),
+            error:
+              heartbeatError instanceof Error
+                ? heartbeatError.message
+                : String(heartbeatError),
           });
         }
       } else {
