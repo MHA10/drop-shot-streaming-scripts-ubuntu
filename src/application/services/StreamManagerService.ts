@@ -44,6 +44,9 @@ export class StreamManagerService {
       this.setupSSEEventHandlers();
       console.log("SSE event handlers set up");
 
+      // Start health check monitoring
+      this.startHealthCheck();
+
       // Start SSE connection
       const sseConfig = this.config.get().sse;
       await this.sseService.start({
@@ -51,9 +54,6 @@ export class StreamManagerService {
         groundId: this.config.get().groundInfo.groundId,
         baseUrl: this.config.get().server.baseUrl,
       });
-
-      // Start health check monitoring
-      this.startHealthCheck();
 
       this.logger.info("Stream Manager Service started successfully");
     } catch (error) {
