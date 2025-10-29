@@ -68,13 +68,19 @@ export class NodeFFmpegService implements FFmpegService {
 
       // Monitor stderr for startup confirmation
       process.stderr?.on("data", (data) => {
-        console.log("FFmpeg stderr:", data.toString());
+        const output = data.toString();
+        console.log("FFmpeg stderr:", output);
         // Everytime the frame is received, the interval is updated.
         // If the frame stops coming, we will initiate the kill process after 10 seconds.
         processInterval = setInterval(async () => {
           // check if the process is already running. This is the case to check if the stream has been stopped explicitly
           // This case will stop it from retrying to attempt a start stream.
-          if (!(await this.isProcessRunning(process.pid!))) {
+          const isStreamRunning = this.runningProcesses.has(process.pid!);
+          console.log(
+            "🚀 ~ NodeFFmpegService ~ startStream ~ isStreamRunning:",
+            isStreamRunning
+          );
+          if (!isStreamRunning) {
             clearInterval(processInterval);
             return;
           }
@@ -82,8 +88,6 @@ export class NodeFFmpegService implements FFmpegService {
           process.kill("SIGKILL");
           clearInterval(processInterval);
         }, 10000);
-        const output = data.toString();
-        console.log("FFmpeg stderr output:", output);
 
         // Look for successful stream start indicators
         if (
