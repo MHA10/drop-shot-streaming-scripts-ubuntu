@@ -68,6 +68,7 @@ export class NodeFFmpegService implements FFmpegService {
 
       // Monitor stderr for startup confirmation
       process.stderr?.on("data", (data) => {
+        console.log("FFmpeg stderr:", data.toString());
         // Everytime the frame is received, the interval is updated.
         // If the frame stops coming, we will initiate the kill process after 10 seconds.
         processInterval = setInterval(async () => {
