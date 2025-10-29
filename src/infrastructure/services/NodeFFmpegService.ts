@@ -80,11 +80,9 @@ export class NodeFFmpegService implements FFmpegService {
       // Monitor stderr for startup confirmation
       process.stderr?.on("data", (data) => {
         const output = data.toString();
-        console.log("FFmpeg stderr:", output);
 
         // Extract time value from FFmpeg output
         const timeMatch = output.match(/time=(\d+:\d+:\d+\.\d+)/);
-        console.log("timeMatch value: ", timeMatch);
         if (timeMatch && timeMatch[1]) {
           const currentTimeValue = timeMatch[1];
 
