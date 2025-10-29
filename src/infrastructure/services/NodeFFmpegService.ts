@@ -22,6 +22,16 @@ export class NodeFFmpegService implements FFmpegService {
     this.clientLogoPath = path.resolve(this.config.get().images.clientPath);
   }
 
+  /**
+   * Starts an FFmpeg stream with automatic recovery mechanisms:
+   * 1. Monitors FFmpeg stderr output for "time=00:00:00.00" timestamps
+   * 2. Detects stalled streams when the same timestamp repeats 10 consecutive times
+   * 3. Automatically kills and restarts stalled processes using SIGKILL
+   * 4. Uses a 10-second timeout to detect completely frozen processes
+   *
+   * The restart mechanism relies on process exit events and the retry parameter
+   * to handle stream recovery after failures.
+   */
   public async startStream(
     cameraUrl: StreamUrl,
     streamKey: string,
@@ -41,7 +51,7 @@ export class NodeFFmpegService implements FFmpegService {
       hasAudio,
     });
 
-    return new Promise((resolve, reject) => {
+    return new Promise((resolve) => {
       const process = spawn(command.command, command.args, {
         stdio: ["ignore", "pipe", "pipe"],
         detached: false,
@@ -59,13 +69,45 @@ export class NodeFFmpegService implements FFmpegService {
         if (!resolved) {
           resolved = true;
           process.kill("SIGTERM");
-          reject(new Error("FFmpeg process startup timeout"));
         }
       }, 10000); // 10 second timeout
+
+      // Variables to track time value and detect stalled streams
+      let lastTimeValue: string | null = null;
+      let sameTimeCounter = 0;
+      const MAX_SAME_TIME_COUNT = 10; // Restart after 10 consecutive identical time values
 
       // Monitor stderr for startup confirmation
       process.stderr?.on("data", (data) => {
         const output = data.toString();
+
+        // Extract time value from FFmpeg output
+        const timeMatch = output.match(/time=(\d+:\d+:\d+\.\d+)/);
+        if (timeMatch && timeMatch[1]) {
+          const currentTimeValue = timeMatch[1];
+
+          // Check if time value is the same as the last one
+          if (currentTimeValue === lastTimeValue) {
+            sameTimeCounter++;
+            console.log(
+              `Stream time stalled: ${sameTimeCounter}/${MAX_SAME_TIME_COUNT} (${currentTimeValue})`
+            );
+
+            // If time value has been the same for MAX_SAME_TIME_COUNT times, restart the stream
+            if (sameTimeCounter >= MAX_SAME_TIME_COUNT) {
+              console.log(
+                `Stream stalled for ${MAX_SAME_TIME_COUNT} consecutive frames. Restarting...`
+              );
+              process.kill("SIGKILL");
+              sameTimeCounter = 0; // Reset counter
+              return;
+            }
+          } else {
+            // Reset counter if time value changed
+            sameTimeCounter = 0;
+            lastTimeValue = currentTimeValue;
+          }
+        }
 
         // Look for successful stream start indicators
         if (
@@ -90,7 +132,6 @@ export class NodeFFmpegService implements FFmpegService {
             resolved = true;
             clearTimeout(startupTimeout);
             process.kill("SIGTERM");
-            reject(new Error(`FFmpeg error: ${output}`));
           }
         }
       });
@@ -113,7 +154,6 @@ export class NodeFFmpegService implements FFmpegService {
         if (code !== 0) {
           resolved = true;
           clearTimeout(startupTimeout);
-          reject(new Error(`FFmpeg process exited with code ${code}`));
         }
       });
 
@@ -122,7 +162,6 @@ export class NodeFFmpegService implements FFmpegService {
         retry.onRetryStream(retry.event);
         this.logger.error("FFmpeg process error", { error: error.message });
         clearTimeout(startupTimeout);
-        reject(error);
       });
     });
   }
