@@ -41,9 +41,6 @@ export class NodeFFmpegService implements FFmpegService {
       hasAudio,
     });
 
-    // this is to detect zombie processes that are idle and aren't responding
-    let processInterval: NodeJS.Timeout;
-
     return new Promise((resolve, reject) => {
       const process = spawn(command.command, command.args, {
         stdio: ["ignore", "pipe", "pipe"],
@@ -66,28 +63,44 @@ export class NodeFFmpegService implements FFmpegService {
         }
       }, 10000); // 10 second timeout
 
+      // Variables to track time value and detect stalled streams
+      let lastTimeValue: string | null = null;
+      let sameTimeCounter = 0;
+      const MAX_SAME_TIME_COUNT = 10; // Restart after 10 consecutive identical time values
+
       // Monitor stderr for startup confirmation
       process.stderr?.on("data", (data) => {
         const output = data.toString();
         console.log("FFmpeg stderr:", output);
-        // Everytime the frame is received, the interval is updated.
-        // If the frame stops coming, we will initiate the kill process after 10 seconds.
-        processInterval = setInterval(async () => {
-          // check if the process is already running. This is the case to check if the stream has been stopped explicitly
-          // This case will stop it from retrying to attempt a start stream.
-          const isStreamRunning = this.runningProcesses.has(process.pid!);
-          console.log(
-            "🚀 ~ NodeFFmpegService ~ startStream ~ isStreamRunning:",
-            isStreamRunning
-          );
-          if (!isStreamRunning) {
-            clearInterval(processInterval);
-            return;
+
+        // Extract time value from FFmpeg output
+        const timeMatch = output.match(/time=(\d+:\d+:\d+\.\d+)/);
+        console.log("timeMatch value: ", timeMatch);
+        if (timeMatch && timeMatch[1]) {
+          const currentTimeValue = timeMatch[1];
+
+          // Check if time value is the same as the last one
+          if (currentTimeValue === lastTimeValue) {
+            sameTimeCounter++;
+            console.log(
+              `Stream time stalled: ${sameTimeCounter}/${MAX_SAME_TIME_COUNT} (${currentTimeValue})`
+            );
+
+            // If time value has been the same for MAX_SAME_TIME_COUNT times, restart the stream
+            if (sameTimeCounter >= MAX_SAME_TIME_COUNT) {
+              console.log(
+                `Stream stalled for ${MAX_SAME_TIME_COUNT} consecutive frames. Restarting...`
+              );
+              process.kill("SIGKILL");
+              sameTimeCounter = 0; // Reset counter
+              return;
+            }
+          } else {
+            // Reset counter if time value changed
+            sameTimeCounter = 0;
+            lastTimeValue = currentTimeValue;
           }
-          // kill process if no frame recevied within 10 seconds.
-          process.kill("SIGKILL");
-          clearInterval(processInterval);
-        }, 10000);
+        }
 
         // Look for successful stream start indicators
         if (
