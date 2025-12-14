@@ -245,7 +245,7 @@ export class StreamManagerService {
         courtId: event.courtId,
         detectAudio: true,
       },
-      this.stopStreamUseCase.execute
+      this.stopStreamUseCase
     );
   }
 

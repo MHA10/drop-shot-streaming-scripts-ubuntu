@@ -2,3 +2,5 @@
 **/dist/
 # ignoring all node js modules
 **/node_modules/
+# ignore public data with images
+/public/
