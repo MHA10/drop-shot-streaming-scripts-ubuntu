@@ -7,7 +7,7 @@ import { Logger } from "../interfaces/Logger";
 import { HttpClient } from "../services/HttpClient";
 import { Config } from "../../infrastructure/config/Config";
 import { StreamState } from "../../domain/value-objects/StreamState";
-import { StopStreamRequest, StopStreamResponse } from "./StopStreamUseCase";
+import { StopStreamUseCase } from "./StopStreamUseCase";
 import {
   ShouldStartStream,
   StartStreamRequest,
@@ -28,7 +28,7 @@ export class StartStreamUseCase {
 
   private async shouldStartNewStream(
     event: StartStreamRequest,
-    stopStream: (request: StopStreamRequest) => Promise<StopStreamResponse>
+    stopUseCase: StopStreamUseCase
   ): Promise<ShouldStartStream> {
     const action = await this.validateStreamEvent(event);
     this.logger.info("Stream validation result", { action });
@@ -41,7 +41,7 @@ export class StartStreamUseCase {
       case StreamAction.MULTIPLE_STREAMS_RUNNING:
         await Promise.all(
           streamEvent.streamList.map((stream) =>
-            stopStream({
+            stopUseCase.execute({
               streamId: stream.id.toString(),
             })
           )
@@ -65,7 +65,7 @@ export class StartStreamUseCase {
         };
       // restart the stream since the youtube stream key is no longer valid
       case StreamAction.INVALID_YOUTUBE_STREAM_KEY:
-        await stopStream({
+        await stopUseCase.execute({
           streamId: streamEvent.stream.id.toString(),
         });
         return { isValid: true };
@@ -186,12 +186,12 @@ export class StartStreamUseCase {
 
   public async execute(
     request: StartStreamRequest,
-    stopProcess: (request: StopStreamRequest) => Promise<StopStreamResponse>
+    stopUseCase: StopStreamUseCase
   ): Promise<StartStreamResponse> {
     // check if the stream should be started
     const handleResponse = await this.shouldStartNewStream(
       request,
-      stopProcess
+      stopUseCase
     );
     if (!handleResponse.isValid) return handleResponse.data;
 
@@ -250,7 +250,7 @@ export class StartStreamUseCase {
         await this.streamRepository.save(updatedStream);
 
         // start a new process
-        await this.execute(request, stopProcess);
+        await this.execute(request, stopUseCase);
       };
 
       const ffmpegProcess = await this.ffmpegService.startStream(
