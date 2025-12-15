@@ -30,7 +30,24 @@ jobs:
 
       - name: bump version
         run: |
-          npm version patch -m "Bump version to %s [skip ci]"
+          set -e
+          # Get the current version from package.json
+          CURRENT_VERSION=$(node -p "require('./package.json').version")
+          
+          # Calculate the next patch version as a candidate
+          CANDIDATE_VERSION=$(node -p "const v=require('./package.json').version.split('.'); v[2] = Number(v[2])+1; console.log(v.join('.'))")
+          
+          # Check if a git tag for this version already exists
+          # If it does, keep incrementing the patch version until we find an unused one
+          while git rev-parse "refs/tags/v$CANDIDATE_VERSION" >/dev/null 2>&1; do
+            echo "Tag v$CANDIDATE_VERSION already exists, trying next patch version..."
+            CANDIDATE_VERSION=$(node -p "const v='$CANDIDATE_VERSION'.split('.'); v[2] = Number(v[2])+1; console.log(v.join('.'))")
+          done
+          
+          echo "Bumping version to $CANDIDATE_VERSION"
+          
+          # Update package.json and create the git tag
+          npm version "$CANDIDATE_VERSION" -m "Bump version to %s [skip ci]"
           git push --follow-tags
 
       - name: build
