@@ -4,3 +4,5 @@
 **/node_modules/
 # ignore public data with images
 /public/
+
+.env
