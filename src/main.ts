@@ -10,9 +10,12 @@ import { StopStreamUseCase } from "./application/use-cases/StopStreamUseCase";
 import { StreamManagerService } from "./application/services/StreamManagerService";
 import { HttpClient } from "./application/services/HttpClient";
 import { RemoteLogger } from "./infrastructure/logging/RemoteLogger";
+import { SupabaseService } from "./infrastructure/services/SupabaseService";
+import { SupabaseListener } from "./infrastructure/listeners/SupabaseListener";
 
 class Application {
   private streamManager?: StreamManagerService;
+  private supabaseListener?: SupabaseListener;
   private readonly logger = new RemoteLogger(
     {
       ...Config.getInstance().get().remoteLogging,
@@ -67,10 +70,15 @@ class Application {
         this.httpClient
       );
 
+      // Initialize Supabase (optional feature) - before stream manager to avoid hanging
+      this.initializeSupabase(config);
+
       // Start the stream manager
       await this.streamManager.start();
 
       this.logger.info("Streamer Node Application started successfully");
+
+
 
       // Setup graceful shutdown
       this.setupGracefulShutdown();
@@ -82,6 +90,50 @@ class Application {
     }
   }
 
+  private initializeSupabase(config: Config): void {
+    try {
+      const supabaseConfig = config.get().supabase;
+
+      this.logger.info("Starting Supabase initialization", {
+        enabled: supabaseConfig.enabled,
+        tableName: supabaseConfig.tableName,
+        channelName: supabaseConfig.channelName,
+      });
+
+      // Initialize Supabase service
+      SupabaseService.initialize(
+        supabaseConfig.url,
+        supabaseConfig.anonKey,
+        supabaseConfig.enabled
+      );
+
+      this.logger.info("SupabaseService initialized");
+
+      // Only create and start listener if Supabase is enabled
+      if (supabaseConfig.enabled) {
+        this.logger.info("Initializing Supabase real-time listener");
+        
+        this.supabaseListener = new SupabaseListener(
+          supabaseConfig.channelName,
+          supabaseConfig.tableName
+        );
+        
+        this.logger.info("SupabaseListener created, starting...");
+        
+        this.supabaseListener.start();
+        this.logger.info("Supabase listener started successfully");
+      } else {
+        this.logger.info("Supabase is disabled via configuration");
+      }
+    } catch (error) {
+      this.logger.error("Failed to initialize Supabase listener", {
+        error: error instanceof Error ? error.message : String(error),
+        stack: error instanceof Error ? error.stack : undefined,
+      });
+      this.logger.info("Application will continue without Supabase features");
+    }
+  }
+
   private setupGracefulShutdown(): void {
     const shutdown = async (signal: string) => {
       this.logger.info(`Received ${signal}, shutting down gracefully`);
@@ -89,6 +141,9 @@ class Application {
       try {
         if (this.streamManager) {
           await this.streamManager.stop();
+        }
+        if (this.supabaseListener) {
+          await this.supabaseListener.stop();
         }
         this.logger.info("Application shutdown completed");
         process.exit(0);
