@@ -21,6 +21,7 @@ export interface FFmpegService {
     cameraUrl: StreamUrl,
     streamKey: string,
     hasAudio: boolean,
+    courtId: string,
     retry: {
       event: StartStreamRequest;
       onRetryStream: (event: StartStreamRequest) => Promise<void>;
@@ -48,7 +49,8 @@ export interface FFmpegService {
   buildStreamCommand(
     cameraUrl: StreamUrl,
     streamKey: string,
-    hasAudio: boolean
+    hasAudio: boolean,
+    courtId: string
   ): FFmpegCommand;
 
   /**

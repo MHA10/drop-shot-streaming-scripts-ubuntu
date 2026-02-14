@@ -257,6 +257,7 @@ export class StartStreamUseCase {
         cameraUrl,
         request.streamKey,
         hasAudio,
+        request.courtId,
         {
           event: request,
           onRetryStream,

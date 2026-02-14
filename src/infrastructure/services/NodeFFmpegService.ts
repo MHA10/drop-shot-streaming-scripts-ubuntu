@@ -1,6 +1,7 @@
 import { spawn } from "child_process";
 import * as fs from "fs";
 import * as path from "path";
+import { PNG } from "pngjs";
 import {
   FFmpegService,
   FFmpegCommand,
@@ -14,12 +15,14 @@ import { Config } from "../config/Config";
 export class NodeFFmpegService implements FFmpegService {
   private readonly runningProcesses: Map<number, FFmpegProcess> = new Map();
   private readonly clientLogoPath: string;
+  private readonly scoreOverlayDir: string;
 
   constructor(
     private readonly logger: Logger,
-    private readonly config: Config
+    private readonly config: Config,
   ) {
     this.clientLogoPath = path.resolve(this.config.get().images.clientPath);
+    this.scoreOverlayDir = path.resolve("./public/overlays");
   }
 
   /**
@@ -36,12 +39,18 @@ export class NodeFFmpegService implements FFmpegService {
     cameraUrl: StreamUrl,
     streamKey: string,
     hasAudio: boolean,
+    courtId: string,
     retry: {
       event: StartStreamRequest;
       onRetryStream: (event: StartStreamRequest) => Promise<void>;
-    }
+    },
   ): Promise<FFmpegProcess> {
-    const command = this.buildStreamCommand(cameraUrl, streamKey, hasAudio);
+    const command = this.buildStreamCommand(
+      cameraUrl,
+      streamKey,
+      hasAudio,
+      courtId,
+    );
     this.logger.info("Command full form", command);
 
     this.logger.info("Starting FFmpeg process", {
@@ -49,6 +58,7 @@ export class NodeFFmpegService implements FFmpegService {
       cameraUrl: cameraUrl.value,
       streamKey,
       hasAudio,
+      courtId,
     });
 
     return new Promise((resolve) => {
@@ -247,6 +257,7 @@ export class NodeFFmpegService implements FFmpegService {
       cameraUrl.value,
       "-t",
       "5", // Test for 5 seconds
+      "-vn",
       "-f",
       "null",
       "-",
@@ -288,7 +299,8 @@ export class NodeFFmpegService implements FFmpegService {
   public buildStreamCommand(
     cameraUrl: StreamUrl,
     streamKey: string,
-    hasAudio: boolean
+    hasAudio: boolean,
+    courtId: string,
   ): FFmpegCommand {
     const rtmpUrl = `rtmp://a.rtmp.youtube.com/live2/${streamKey}`;
     let fakeAudioInputCounter = 0;
@@ -309,6 +321,8 @@ export class NodeFFmpegService implements FFmpegService {
 
     // Validate logo files exist before adding them
     this.validateImageFiles();
+    const scoreOverlayPath = this.getScoreOverlayPath(courtId);
+    this.ensureScoreOverlay(scoreOverlayPath);
 
     // logo overlays & their formatting
     // Add logo image inputs
@@ -316,12 +330,19 @@ export class NodeFFmpegService implements FFmpegService {
     const dsInputIndex = 1 + fakeAudioInputCounter;
     args.push("-i", this.clientLogoPath); // Input 2: Client logo
     const clientInputIndex = 2 + fakeAudioInputCounter;
+    args.push("-i", scoreOverlayPath); // Input 3: Score overlay
+    const scoreInputIndex = 3 + fakeAudioInputCounter;
     // position them correctly using filter complex
     const filterComplex = [
-      `[${dsInputIndex}:v] scale=500:-1:force_original_aspect_ratio=decrease [ds];`,
-      `[${clientInputIndex}:v] scale=350:-1:force_original_aspect_ratio=decrease [client];`,
       "[0:v] scale=1920:1080 [base];",
-      "[base][ds] overlay=main_w-overlay_w-10:main_h-overlay_h-10 [tmp1];",
+      // Top-left score overlay - adjusted width to prevent cutoff
+      `[${scoreInputIndex}:v] scale=280:-1:force_original_aspect_ratio=decrease [score];`,
+      // Bottom-right DropShot watermark
+      `[${dsInputIndex}:v] scale=500:-1:force_original_aspect_ratio=decrease [ds];`,
+      // Top-right client logo
+      `[${clientInputIndex}:v] scale=350:-1:force_original_aspect_ratio=decrease [client];`,
+      "[base][score] overlay=10:10 [tmp0];",
+      "[tmp0][ds] overlay=main_w-overlay_w-10:main_h-overlay_h-10 [tmp1];",
       "[tmp1][client] overlay=main_w-overlay_w-10:10",
     ].join(" ");
 
@@ -397,5 +418,176 @@ export class NodeFFmpegService implements FFmpegService {
       dsLogo: dsLogoPath,
       clientLogo: clientLogoPath,
     });
+  }
+
+  private ensureScoreOverlay(scoreOverlayPath: string): void {
+    if (!fs.existsSync(scoreOverlayPath)) {
+      this.createDefaultScoreOverlay(scoreOverlayPath);
+    }
+  }
+
+  private getScoreOverlayPath(courtId: string): string {
+    return path.join(this.scoreOverlayDir, `${courtId}.png`);
+  }
+
+  public regenerateScoreOverlay(courtId: string): void {
+    const scoreOverlayPath = this.getScoreOverlayPath(courtId);
+    this.createDefaultScoreOverlay(scoreOverlayPath);
+    this.logger.info("Score overlay regenerated", {
+      courtId,
+      path: scoreOverlayPath,
+    });
+  }
+
+  public regenerateAllScoreOverlays(): void {
+    if (!fs.existsSync(this.scoreOverlayDir)) {
+      return;
+    }
+
+    const files = fs.readdirSync(this.scoreOverlayDir);
+    files.forEach((file) => {
+      if (file.endsWith(".png")) {
+        const courtId = file.replace(".png", "");
+        this.regenerateScoreOverlay(courtId);
+      }
+    });
+    this.logger.info("All score overlays regenerated");
+  }
+
+  private createDefaultScoreOverlay(scoreOverlayPath: string): void {
+    const width = 280;
+    const height = 80;
+
+    // More visible colors
+    const background = { r: 18, g: 18, b: 24, a: 240 }; // Dark blue-gray, more opaque
+    const accentColor = { r: 0, g: 200, b: 83, a: 255 }; // Bright green
+    const borderColor = { r: 45, g: 45, b: 55, a: 255 }; // Lighter gray border
+    const foreground = { r: 255, g: 255, b: 255, a: 255 }; // White text
+    const shadow = { r: 0, g: 0, b: 0, a: 200 }; // Shadow
+
+    const scale = 5;
+    const text = "15-0 10-8";
+
+    // Improved font with better readability
+    const font: Record<string, string[]> = {
+      "0": ["01110", "11011", "10101", "10101", "10101", "11011", "01110"],
+      "1": ["00100", "01100", "10100", "00100", "00100", "00100", "11111"],
+      "2": ["01110", "10001", "00001", "00110", "01000", "10000", "11111"],
+      "3": ["11110", "00001", "00001", "01110", "00001", "00001", "11110"],
+      "4": ["00010", "00110", "01010", "10010", "11111", "00010", "00010"],
+      "5": ["11111", "10000", "10000", "11110", "00001", "00001", "11110"],
+      "6": ["01110", "10000", "10000", "11110", "10001", "10001", "01110"],
+      "7": ["11111", "00001", "00010", "00100", "01000", "01000", "01000"],
+      "8": ["01110", "10001", "10001", "01110", "10001", "10001", "01110"],
+      "9": ["01110", "10001", "10001", "01111", "00001", "00001", "01110"],
+      "-": ["00000", "00000", "00000", "11111", "00000", "00000", "00000"],
+      " ": ["000", "000", "000", "000", "000", "000", "000"],
+    };
+
+    const image = new PNG({ width, height });
+    image.data.fill(0);
+
+    const setPixel = (x: number, y: number, color: typeof background) => {
+      if (x < 0 || x >= width || y < 0 || y >= height) {
+        return;
+      }
+      const idx = (width * y + x) << 2;
+      image.data[idx] = color.r;
+      image.data[idx + 1] = color.g;
+      image.data[idx + 2] = color.b;
+      image.data[idx + 3] = color.a;
+    };
+
+    const fillRect = (
+      x: number,
+      y: number,
+      rectWidth: number,
+      rectHeight: number,
+      color: typeof background,
+    ) => {
+      const maxX = x + rectWidth;
+      const maxY = y + rectHeight;
+      for (let py = y; py < maxY; py++) {
+        for (let px = x; px < maxX; px++) {
+          setPixel(px, py, color);
+        }
+      }
+    };
+
+    // Draw main background
+    fillRect(0, 0, width, height, background);
+
+    // Draw bright green accent bar at top (very visible)
+    const accentHeight = 5;
+    fillRect(0, 0, width, accentHeight, accentColor);
+
+    // Draw subtle border around the entire overlay
+    const borderWidth = 1;
+    // Top border (after accent bar)
+    fillRect(0, accentHeight, width, borderWidth, borderColor);
+    // Bottom border
+    fillRect(0, height - borderWidth, width, borderWidth, borderColor);
+    // Left border
+    fillRect(0, accentHeight, borderWidth, height - accentHeight, borderColor);
+    // Right border
+    fillRect(
+      width - borderWidth,
+      accentHeight,
+      borderWidth,
+      height - accentHeight,
+      borderColor,
+    );
+
+    // Calculate text positioning
+    const glyphs = Array.from(text).map((char) => font[char] ?? font[" "]);
+    const charSpacing = 5;
+    const totalTextWidth =
+      glyphs.reduce((sum, glyph) => sum + (glyph[0]?.length ?? 0) * scale, 0) +
+      Math.max(0, glyphs.length - 1) * charSpacing;
+
+    const cursorX = Math.floor((width - totalTextWidth) / 2);
+    const cursorY = Math.floor((height - 7 * scale) / 2) + 3; // Adjusted for accent bar
+
+    // Helper function to draw glyphs
+    const drawGlyphs = (
+      offsetX: number,
+      offsetY: number,
+      color: typeof foreground,
+    ) => {
+      let x = offsetX;
+      for (const glyph of glyphs) {
+        const glyphHeight = glyph.length;
+        const glyphWidth = glyph[0]?.length ?? 0;
+
+        for (let row = 0; row < glyphHeight; row++) {
+          const line = glyph[row];
+          for (let col = 0; col < line.length; col++) {
+            if (line[col] === "1") {
+              for (let dy = 0; dy < scale; dy++) {
+                for (let dx = 0; dx < scale; dx++) {
+                  setPixel(
+                    x + col * scale + dx,
+                    offsetY + row * scale + dy,
+                    color,
+                  );
+                }
+              }
+            }
+          }
+        }
+
+        x += glyphWidth * scale + charSpacing;
+      }
+    };
+
+    // Draw shadow
+    drawGlyphs(cursorX + 2, cursorY + 2, shadow);
+    // Draw text
+    drawGlyphs(cursorX, cursorY, foreground);
+
+    // Save image
+    fs.mkdirSync(path.dirname(scoreOverlayPath), { recursive: true });
+    const buffer = PNG.sync.write(image);
+    fs.writeFileSync(scoreOverlayPath, buffer);
   }
 }
