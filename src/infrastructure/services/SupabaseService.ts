@@ -91,30 +91,76 @@ export class SupabaseService {
    * @param callback - Function to call when changes occur
    * @param event - Type of event to listen for ('INSERT', 'UPDATE', 'DELETE', or '*' for all)
    * @param schema - Database schema (default: 'public')
+   * @param retryCount - Current retry attempt (internal use)
    */
   public subscribeToTable(
     channelName: string,
     tableName: string,
     callback: (payload: any) => void,
     event: "INSERT" | "UPDATE" | "DELETE" | "*" = "*",
-    schema: string = "public"
+    schema: string = "public",
+    retryCount: number = 0
   ): RealtimeChannel | null {
     if (!this.isEnabled()) {
       console.warn("⚠️  Supabase is not enabled. Cannot subscribe to table.");
       return null;
     }
 
+    const MAX_RETRIES = 10;
+    const BASE_RETRY_DELAY = 1000; // 1 second
+
     // Check if channel already exists
     if (this.channels.has(channelName)) {
-      console.warn(
-        `⚠️  Channel '${channelName}' already exists. Unsubscribing old channel first.`
-      );
-      this.unsubscribe(channelName);
+      if (retryCount === 0) {
+        console.warn(
+          `⚠️  Channel '${channelName}' already exists. Unsubscribing old channel first.`
+        );
+      }
+      // cleanup previous channel instance before retrying/subscribing
+      const oldChannel = this.channels.get(channelName);
+      if (oldChannel) {
+        this.client!.removeChannel(oldChannel).catch((err) =>
+          console.error("Error removing old channel:", err)
+        );
+        this.channels.delete(channelName);
+      }
     }
 
-    console.log(`🔧 Setting up channel: ${channelName}`);
-    console.log(`   Table: ${schema}.${tableName}`);
-    console.log(`   Event: ${event}`);
+    if (retryCount === 0) {
+      console.log(`🔧 Setting up channel: ${channelName}`);
+      console.log(`   Table: ${schema}.${tableName}`);
+      console.log(`   Event: ${event}`);
+    } else {
+      console.log(
+        `🔄 Retrying subscription for channel: ${channelName} (Attempt ${retryCount}/${MAX_RETRIES})`
+      );
+    }
+
+    const scheduleRetry = () => {
+      if (retryCount >= MAX_RETRIES) {
+        console.error(
+          `❌ Max retries reached for channel: ${channelName}. Giving up.`
+        );
+        return;
+      }
+
+      const delay = Math.min(
+        BASE_RETRY_DELAY * Math.pow(2, retryCount),
+        30000 // Max 30 seconds delay
+      );
+
+      console.log(`⏳ Scheduling retry in ${delay}ms...`);
+      setTimeout(() => {
+        this.subscribeToTable(
+          channelName,
+          tableName,
+          callback,
+          event,
+          schema,
+          retryCount + 1
+        );
+      }, delay);
+    };
 
     // Create new channel
     const channel = this.client!.channel(channelName)
@@ -127,7 +173,7 @@ export class SupabaseService {
           console.log(`   Event Type: ${payload.eventType}`);
           console.log(`   Table: ${payload.table}`);
           console.log(`   Schema: ${payload.schema}`);
-          console.log(`   Full Payload:`, JSON.stringify(payload, null, 2));
+          // console.log(`   Full Payload:`, JSON.stringify(payload, null, 2)); // Reduced noise
           console.log(`========================================\n`);
           callback(payload);
         }
@@ -147,10 +193,12 @@ export class SupabaseService {
           if (err) {
             console.error(`   Error details:`, err);
           }
+          scheduleRetry();
         } else if (status === "TIMED_OUT") {
           console.error(
             `⏱️  Subscription timed out for channel: ${channelName}`
           );
+          scheduleRetry();
         } else if (status === "CLOSED") {
           console.log(`🔌 Channel closed: ${channelName}`);
         } else {
