@@ -93,12 +93,23 @@ export class SupabaseService {
    * @param schema - Database schema (default: 'public')
    * @param retryCount - Current retry attempt (internal use)
    */
+  /**
+   * Subscribe to real-time changes on a table
+   * @param channelName - Unique name for this channel
+   * @param tableName - Name of the table to listen to
+   * @param callback - Function to call when changes occur
+   * @param event - Type of event to listen for ('INSERT', 'UPDATE', 'DELETE', or '*' for all)
+   * @param schema - Database schema (default: 'public')
+   * @param filter - Optional filter string (e.g., 'some_column=eq.some_value')
+   * @param retryCount - Current retry attempt (internal use)
+   */
   public subscribeToTable(
     channelName: string,
     tableName: string,
     callback: (payload: any) => void,
     event: "INSERT" | "UPDATE" | "DELETE" | "*" = "*",
     schema: string = "public",
+    filter?: string,
     retryCount: number = 0
   ): RealtimeChannel | null {
     if (!this.isEnabled()) {
@@ -130,6 +141,9 @@ export class SupabaseService {
       console.log(`🔧 Setting up channel: ${channelName}`);
       console.log(`   Table: ${schema}.${tableName}`);
       console.log(`   Event: ${event}`);
+      if (filter) {
+        console.log(`   Filter: ${filter}`);
+      }
     } else {
       console.log(
         `🔄 Retrying subscription for channel: ${channelName} (Attempt ${retryCount}/${MAX_RETRIES})`
@@ -157,6 +171,7 @@ export class SupabaseService {
           callback,
           event,
           schema,
+          filter,
           retryCount + 1
         );
       }, delay);
@@ -166,7 +181,7 @@ export class SupabaseService {
     const channel = this.client!.channel(channelName)
       .on(
         "postgres_changes" as any,
-        { event, schema, table: tableName },
+        { event, schema, table: tableName, filter },
         (payload: any) => {
           console.log(`\n📡 [${channelName}] ===== CHANGE RECEIVED =====`);
           console.log(`   Timestamp: ${new Date().toISOString()}`);
@@ -188,6 +203,9 @@ export class SupabaseService {
           console.log(
             `   Listening for: ${event} events on ${schema}.${tableName}`
           );
+          if (filter) {
+            console.log(`   Applied Filter: ${filter}`);
+          }
         } else if (status === "CHANNEL_ERROR") {
           console.error(`❌ Error subscribing to channel: ${channelName}`);
           if (err) {

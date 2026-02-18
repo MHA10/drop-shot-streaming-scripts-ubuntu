@@ -11,6 +11,7 @@ import { HttpClient } from "./HttpClient";
 import * as fs from "fs/promises";
 import * as path from "path";
 import * as https from "https";
+import { SupabaseListener } from "../../infrastructure/listeners/SupabaseListener";
 
 export class StreamManagerService {
   private healthCheckInterval?: NodeJS.Timeout;
@@ -24,7 +25,8 @@ export class StreamManagerService {
     private readonly stopStreamUseCase: StopStreamUseCase,
     private readonly logger: Logger,
     private readonly config: Config,
-    private readonly httpClient: HttpClient
+    private readonly httpClient: HttpClient,
+    private readonly supabaseListener?: SupabaseListener
   ) {}
 
   public async start(): Promise<void> {
@@ -238,7 +240,7 @@ export class StreamManagerService {
 
   private async handleStartEvent(event: SSEStreamEvent) {
     this.logger.info("Handling new stream");
-    await this.startStreamUseCase.execute(
+    const result = await this.startStreamUseCase.execute(
       {
         cameraUrl: event.cameraUrl,
         streamKey: event.streamKey,
@@ -247,6 +249,14 @@ export class StreamManagerService {
       },
       this.stopStreamUseCase
     );
+
+    // If stream started successfully (has a streamId), subscribe to updates
+    if (result && result.streamId && this.supabaseListener) {
+      this.logger.info("Subscribing to realtime updates for court", {
+        courtId: event.courtId,
+      });
+      this.supabaseListener.subscribeToCourt(event.courtId);
+    }
   }
 
   private async handleStopEvent(event: SSEStreamEvent) {
@@ -263,6 +273,14 @@ export class StreamManagerService {
       await this.stopStreamUseCase.execute({
         streamId: targetStream.id.value,
       });
+
+      // Unsubscribe from updates
+      if (this.supabaseListener) {
+        this.logger.info("Unsubscribing from realtime updates for court", {
+          courtId: event.courtId,
+        });
+        await this.supabaseListener.unsubscribeFromCourt(event.courtId);
+      }
     } else {
       this.logger.warn("Stream not found for stop event", {
         cameraUrl: event.cameraUrl,
@@ -359,6 +377,11 @@ export class StreamManagerService {
           await this.stopStreamUseCase.execute({
             streamId: stream.id.value,
           });
+
+          // Unsubscribe from updates using the courtId from the stream
+          if (this.supabaseListener && stream.courtId) {
+            await this.supabaseListener.unsubscribeFromCourt(stream.courtId);
+          }
         } catch (error) {
           this.logger.error("Failed to stop stream during shutdown", {
             streamId: stream.id.value,

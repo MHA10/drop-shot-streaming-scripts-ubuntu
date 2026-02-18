@@ -47,6 +47,10 @@ export class SupabaseListener {
   /**
    * Start listening to table changes
    */
+  /**
+   * Start listening to table changes
+   * @deprecated Global subscription is no longer used. Use subscribeToCourt instead.
+   */
   public start(): void {
     if (!this.enabled) {
       console.log(
@@ -54,22 +58,39 @@ export class SupabaseListener {
       );
       return;
     }
+    console.log("ℹ️  SupabaseListener initialized (waiting for stream start events)");
+  }
 
-    console.log("🎯 Starting Supabase real-time listener...\n");
-    console.log(`   Table: ${this.tableName}`);
-    console.log(`   Channel: ${this.channelName}`);
-    console.log(`   Event: UPDATE only\n`);
+  /**
+   * Subscribe to score updates for a specific court
+   */
+  public subscribeToCourt(courtId: string): void {
+    if (!this.enabled) return;
 
-    // Single channel listening to UPDATE events only
+    const channelName = `${this.channelName}-${courtId}`;
+    const filter = `court_id=eq.${courtId}`;
+
+    console.log(`🎯 Subscribing to Supabase updates for court: ${courtId}`);
+
     this.supabaseService.subscribeToTable(
-      this.channelName,
+      channelName,
       this.tableName,
       this.handleAllEvents.bind(this),
-      "UPDATE", // Listen to UPDATE events only
+      "UPDATE",
       "public",
+      filter
     );
+  }
 
-    console.log("✨ Real-time channel configured\n");
+  /**
+   * Unsubscribe from score updates for a specific court
+   */
+  public async unsubscribeFromCourt(courtId: string): Promise<void> {
+    if (!this.enabled) return;
+
+    const channelName = `${this.channelName}-${courtId}`;
+    console.log(`🛑 Unsubscribing from Supabase updates for court: ${courtId}`);
+    await this.supabaseService.unsubscribe(channelName);
   }
 
   /**
@@ -354,7 +375,7 @@ export class SupabaseListener {
     }
 
     console.log("🛑 Stopping Supabase listener...");
-    await this.supabaseService.unsubscribe(this.channelName);
-    console.log("✅ Channel unsubscribed");
+    await this.supabaseService.unsubscribeAll();
+    console.log("✅ All channels unsubscribed");
   }
 }
