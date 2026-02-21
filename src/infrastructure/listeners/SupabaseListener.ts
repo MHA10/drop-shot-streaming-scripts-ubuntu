@@ -323,7 +323,13 @@ export class SupabaseListener {
     const scoreImagePath = this.getScoreImagePath(courtId);
     await fs.mkdir(path.dirname(scoreImagePath), { recursive: true });
     const buffer = PNG.sync.write(image);
-    await fs.writeFile(scoreImagePath, buffer);
+    
+    // Write to a temporary file first, then atomically rename it
+    // This prevents FFmpeg from reading a partially written image file
+    const tempPath = `${scoreImagePath}.tmp`;
+    await fs.writeFile(tempPath, buffer);
+    await fs.rename(tempPath, scoreImagePath);
+    
     this.lastRenderedTextByCourt.set(courtId, text);
   }
 

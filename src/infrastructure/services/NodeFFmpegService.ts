@@ -330,7 +330,10 @@ export class NodeFFmpegService implements FFmpegService {
     const dsInputIndex = 1 + fakeAudioInputCounter;
     args.push("-i", this.clientLogoPath); // Input 2: Client logo
     const clientInputIndex = 2 + fakeAudioInputCounter;
-    args.push("-i", scoreOverlayPath); // Input 3: Score overlay
+    
+    // Treat the overlay PNG as a continuously looping sequence of images
+    // This allows FFmpeg to reflect file updates cleanly as they are overwritten
+    args.push("-f", "image2", "-loop", "1", "-i", scoreOverlayPath); 
     const scoreInputIndex = 3 + fakeAudioInputCounter;
     // position them correctly using filter complex
     const filterComplex = [
@@ -585,9 +588,12 @@ export class NodeFFmpegService implements FFmpegService {
     // Draw text
     drawGlyphs(cursorX, cursorY, foreground);
 
-    // Save image
+    // Save image atomically to prevent streaming glitches
     fs.mkdirSync(path.dirname(scoreOverlayPath), { recursive: true });
     const buffer = PNG.sync.write(image);
-    fs.writeFileSync(scoreOverlayPath, buffer);
+    
+    const tempPath = `${scoreOverlayPath}.tmp`;
+    fs.writeFileSync(tempPath, buffer);
+    fs.renameSync(tempPath, scoreOverlayPath);
   }
 }
