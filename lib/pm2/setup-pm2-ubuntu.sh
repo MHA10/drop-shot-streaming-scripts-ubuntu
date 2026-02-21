@@ -35,7 +35,7 @@ readonly SERVICE_NAME_PREFIX="streamer"
 # Default values
 DEFAULT_GROUND_NAME="${DROPSHOT_GROUND_ID:-ground1}"
 DEFAULT_PACKAGE_NAME="streamer-node"
-DEFAULT_NODE_VERSION="18"
+DEFAULT_NODE_VERSION="22"
 
 #==============================================================================
 # Utility Functions
