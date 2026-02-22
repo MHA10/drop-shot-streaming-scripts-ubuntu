@@ -251,7 +251,7 @@ export class SupabaseListener {
     ctx.stroke();
 
     // Measurements for columns
-    const hasGames = leftGames !== "" && rightGames !== "";
+    const hasGames = leftGames !== "|";
     const namesWidth = 240;
     let pointsWidth = 90;
     let gamesWidth = 0;
