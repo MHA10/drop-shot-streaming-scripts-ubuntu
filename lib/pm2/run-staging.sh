@@ -9,4 +9,5 @@ export NVM_DIR="$HOME/.nvm"
 
 # Run the project
 nvm use 22
+npm install
 npm run dev
