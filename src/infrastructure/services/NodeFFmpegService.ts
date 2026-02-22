@@ -459,138 +459,169 @@ export class NodeFFmpegService implements FFmpegService {
 
   private createDefaultScoreOverlay(scoreOverlayPath: string): void {
     const width = 280;
-    const height = 80;
+    const height = 160;
 
-    // More visible colors
-    const background = { r: 18, g: 18, b: 24, a: 240 }; // Dark blue-gray, more opaque
-    const accentColor = { r: 0, g: 200, b: 83, a: 255 }; // Bright green
-    const borderColor = { r: 45, g: 45, b: 55, a: 255 }; // Lighter gray border
-    const foreground = { r: 255, g: 255, b: 255, a: 255 }; // White text
-    const shadow = { r: 0, g: 0, b: 0, a: 200 }; // Shadow
+    const FONT: Record<string, string[]> = {
+        "0": ["01110", "10001", "10011", "10101", "11001", "10001", "01110"],
+        "1": ["00100", "01100", "00100", "00100", "00100", "00100", "01110"],
+        "2": ["01110", "10001", "00001", "00110", "01000", "10000", "11111"],
+        "3": ["01110", "10001", "00001", "00110", "00001", "10001", "01110"],
+        "4": ["00010", "00110", "01010", "10010", "11111", "00010", "00010"],
+        "5": ["11111", "10000", "11110", "00001", "00001", "10001", "01110"],
+        "6": ["00110", "01000", "10000", "11110", "10001", "10001", "01110"],
+        "7": ["11111", "00001", "00010", "00100", "01000", "01000", "01000"],
+        "8": ["01110", "10001", "10001", "01110", "10001", "10001", "01110"],
+        "9": ["01110", "10001", "10001", "01111", "00001", "00010", "01100"],
+        "A": ["01110", "10001", "10001", "11111", "10001", "10001", "10001"],
+        "D": ["11110", "10011", "10001", "10001", "10001", "10011", "11110"],
+        "V": ["10001", "10001", "10001", "10001", "10001", "01010", "00100"],
+        "-": ["00000", "00000", "00000", "11111", "00000", "00000", "00000"],
+        ":": ["00000", "00100", "00000", "00000", "00100", "00000", "00000"],
+        " ": ["00000", "00000", "00000", "00000", "00000", "00000", "00000"],
+    };
 
-    const scale = 5;
-    const text = "15-0 10-8";
-
-    // Improved font with better readability
-    const font: Record<string, string[]> = {
-      "0": ["01110", "11011", "10101", "10101", "10101", "11011", "01110"],
-      "1": ["00100", "01100", "10100", "00100", "00100", "00100", "11111"],
-      "2": ["01110", "10001", "00001", "00110", "01000", "10000", "11111"],
-      "3": ["11110", "00001", "00001", "01110", "00001", "00001", "11110"],
-      "4": ["00010", "00110", "01010", "10010", "11111", "00010", "00010"],
-      "5": ["11111", "10000", "10000", "11110", "00001", "00001", "11110"],
-      "6": ["01110", "10000", "10000", "11110", "10001", "10001", "01110"],
-      "7": ["11111", "00001", "00010", "00100", "01000", "01000", "01000"],
-      "8": ["01110", "10001", "10001", "01110", "10001", "10001", "01110"],
-      "9": ["01110", "10001", "10001", "01111", "00001", "00001", "01110"],
-      "A": ["01110", "10001", "10001", "11111", "10001", "10001", "10001"],
-      "D": ["11110", "10011", "10001", "10001", "10001", "10011", "11110"],
-      "-": ["00000", "00000", "00000", "11111", "00000", "00000", "00000"],
-      " ": ["000", "000", "000", "000", "000", "000", "000"],
+    const B_FONT: Record<string, string[]> = {
+        "B": ["11110", "10001", "11110", "10001", "11110"],
+        "L": ["10000", "10000", "10000", "10000", "11111"],
+        "U": ["10001", "10001", "10001", "10001", "01110"],
+        "E": ["11111", "10000", "11110", "10000", "11111"],
+        "R": ["11110", "10001", "11110", "10100", "10011"],
+        "D": ["11110", "10011", "10001", "10011", "11110"],
+        "H": ["10001", "10001", "11111", "10001", "10001"],
+        "O": ["01110", "10001", "10001", "10001", "01110"],
+        "M": ["10001", "11011", "10101", "10001", "10001"],
+        "G": ["01110", "10000", "10111", "10001", "01110"],
+        "S": ["01111", "10000", "01110", "00001", "11110"],
+        "T": ["11111", "00100", "00100", "00100", "00100"],
+        " ": ["00000", "00000", "00000", "00000", "00000"],
+        "A": ["01110", "10001", "11111", "10001", "10001"],
+        "C": ["01111", "10000", "10000", "10000", "01111"],
     };
 
     const image = new PNG({ width, height });
     image.data.fill(0);
 
-    const setPixel = (x: number, y: number, color: typeof background) => {
-      if (x < 0 || x >= width || y < 0 || y >= height) {
-        return;
-      }
-      const idx = (width * y + x) << 2;
-      image.data[idx] = color.r;
-      image.data[idx + 1] = color.g;
-      image.data[idx + 2] = color.b;
-      image.data[idx + 3] = color.a;
+    const setPixel = (x: number, y: number, color: any) => {
+        if (x < 0 || x >= width || y < 0 || y >= height) return;
+        const idx = (width * y + x) << 2;
+        image.data[idx] = color.r;
+        image.data[idx + 1] = color.g;
+        image.data[idx + 2] = color.b;
+        image.data[idx + 3] = color.a;
     };
 
-    const fillRect = (
-      x: number,
-      y: number,
-      rectWidth: number,
-      rectHeight: number,
-      color: typeof background,
-    ) => {
-      const maxX = x + rectWidth;
-      const maxY = y + rectHeight;
-      for (let py = y; py < maxY; py++) {
-        for (let px = x; px < maxX; px++) {
-          setPixel(px, py, color);
-        }
-      }
-    };
-
-    // Draw main background
-    fillRect(0, 0, width, height, background);
-
-    // Draw bright green accent bar at top (very visible)
-    const accentHeight = 5;
-    fillRect(0, 0, width, accentHeight, accentColor);
-
-    // Draw subtle border around the entire overlay
-    const borderWidth = 1;
-    // Top border (after accent bar)
-    fillRect(0, accentHeight, width, borderWidth, borderColor);
-    // Bottom border
-    fillRect(0, height - borderWidth, width, borderWidth, borderColor);
-    // Left border
-    fillRect(0, accentHeight, borderWidth, height - accentHeight, borderColor);
-    // Right border
-    fillRect(
-      width - borderWidth,
-      accentHeight,
-      borderWidth,
-      height - accentHeight,
-      borderColor,
-    );
-
-    // Calculate text positioning
-    const glyphs = Array.from(text).map((char) => font[char] ?? font[" "]);
-    const charSpacing = 5;
-    const totalTextWidth =
-      glyphs.reduce((sum, glyph) => sum + (glyph[0]?.length ?? 0) * scale, 0) +
-      Math.max(0, glyphs.length - 1) * charSpacing;
-
-    const cursorX = Math.floor((width - totalTextWidth) / 2);
-    const cursorY = Math.floor((height - 7 * scale) / 2) + 3; // Adjusted for accent bar
-
-    // Helper function to draw glyphs
-    const drawGlyphs = (
-      offsetX: number,
-      offsetY: number,
-      color: typeof foreground,
-    ) => {
-      let x = offsetX;
-      for (const glyph of glyphs) {
-        const glyphHeight = glyph.length;
-        const glyphWidth = glyph[0]?.length ?? 0;
-
-        for (let row = 0; row < glyphHeight; row++) {
-          const line = glyph[row];
-          for (let col = 0; col < line.length; col++) {
-            if (line[col] === "1") {
-              for (let dy = 0; dy < scale; dy++) {
-                for (let dx = 0; dx < scale; dx++) {
-                  setPixel(
-                    x + col * scale + dx,
-                    offsetY + row * scale + dy,
-                    color,
-                  );
-                }
-              }
+    const fillRect = (x: number, y: number, w: number, h: number, color: any) => {
+        for (let py = y; py < y + h; py++) {
+            for (let px = x; px < x + w; px++) {
+                setPixel(px, py, color);
             }
-          }
         }
-
-        x += glyphWidth * scale + charSpacing;
-      }
     };
 
-    // Draw shadow
-    drawGlyphs(cursorX + 2, cursorY + 2, shadow);
-    // Draw text
-    drawGlyphs(cursorX, cursorY, foreground);
+    // Colors matching the original display
+    const bg = { r: 18, g: 18, b: 24, a: 240 };
+    const border = { r: 240, g: 240, b: 240, a: 255 };
+    const headerBg = { r: 25, g: 25, b: 35, a: 240 };
+    const ledBg = { r: 15, g: 15, b: 20, a: 240 };
 
-    // Save image atomically to prevent streaming glitches
+    const ledOn = { r: 255, g: 10, b: 10, a: 255 };
+    const ledOff = { r: 60, g: 20, b: 20, a: 200 };
+    const textWhite = { r: 255, g: 255, b: 255, a: 255 };
+
+    const drawLedDigit = (char: string, ox: number, oy: number, size: number) => {
+        const glyph = FONT[char] || FONT[" "];
+        const dotSize = size;
+        const gap = 1;
+        for (let row = 0; row < 7; row++) {
+            for (let col = 0; col < 5; col++) {
+                const isOn = glyph[row] && glyph[row][col] === "1";
+                fillRect(ox + col * (dotSize + gap), oy + row * (dotSize + gap), dotSize, dotSize, isOn ? ledOn : ledOff);
+            }
+        }
+        return 5 * (size + gap);
+    };
+
+    const drawLedText = (text: string, x: number, y: number, size: number, spacing: number) => {
+        let currX = x;
+        for (const char of text) {
+            drawLedDigit(char, currX, y, size);
+            currX += 5 * (size + 1) + spacing;
+        }
+        return currX - x;
+    };
+
+    const measureLedText = (text: string, size: number, spacing: number) => {
+        return text.length * 5 * (size + 1) + Math.max(0, text.length - 1) * spacing;
+    };
+
+    const drawTitleText = (text: string, x: number, y: number, size: number, spacing: number) => {
+        let currX = x;
+        for (const char of text) {
+            const glyph = B_FONT[char] || B_FONT[" "];
+            const dotSize = size;
+            for (let row = 0; row < 5; row++) {
+                for (let col = 0; col < 5; col++) {
+                    const isOn = glyph[row] && glyph[row][col] === "1";
+                    if(isOn) fillRect(currX + col * dotSize, y + row * dotSize, dotSize, dotSize, textWhite);
+                }
+            }
+            currX += 5 * dotSize + spacing;
+        }
+        return currX - x;
+    };
+
+    const measureTitleText = (text: string, size: number, spacing: number) => {
+        return text.length * 5 * size + Math.max(0, text.length - 1) * spacing;
+    };
+
+    // Draw base board
+    fillRect(0, 0, width, height, bg);
+    
+    // Outer Border
+    fillRect(2, 2, width - 4, height - 4, border);
+    
+    // Inner margins
+    const pad = 5;
+    fillRect(pad, pad, width - pad * 2, height - pad * 2, headerBg);
+
+    // Separators
+    fillRect(pad, 42, width - pad * 2, 2, border); // Headers vs Scores
+    fillRect(pad, 115, width - pad * 2, 2, border); // Scores vs Bottom Timer
+    fillRect(width / 2 - 1, pad, 2, 42 - pad, border); // Home vs Guest Header Divider
+
+    // LED Background Areas
+    fillRect(pad, 44, width - pad * 2, 115 - 44, ledBg);
+    fillRect(pad, 117, width - pad * 2, height - pad - 117, ledBg);
+
+    // Draw Titles (BLUE / RED)
+    const titleY = 14;
+    const titleS = 4;
+    const hw = measureTitleText("BLUE", titleS, 3);
+    const gw = measureTitleText("RED", titleS, 3);
+    
+    drawTitleText("BLUE", Math.floor(width / 4 - hw / 2), titleY, titleS, 3);
+    drawTitleText("RED", Math.floor(3 * width / 4 - gw / 2), titleY, titleS, 3);
+
+    // Default Scores Placeholder
+    const bScore = "00";
+    const rScore = "00";
+    const sSize = 6;
+    const lw = measureLedText(bScore, sSize, 6);
+    const rw = measureLedText(rScore, sSize, 6);
+    const cw = measureLedText(":", sSize, 6);
+
+    const scoreY = 56;
+    drawLedText(bScore, Math.floor(width / 4 - lw / 2) + 5, scoreY, sSize, 6);
+    drawLedText(":", Math.floor(width / 2 - cw / 2), scoreY, sSize, 6);
+    drawLedText(rScore, Math.floor(3 * width / 4 - rw / 2) - 5, scoreY, sSize, 6);
+
+    // Default Timer / Games Placeholder
+    const gamesStr = "00:00";
+    const gSize = 3;
+    const gbW = measureLedText(gamesStr, gSize, 4);
+    drawLedText(gamesStr, Math.floor(width / 2 - gbW / 2), 125, gSize, 4);
+
+    // Ensure temp directory exists and write final overlay
     fs.mkdirSync(path.dirname(scoreOverlayPath), { recursive: true });
     const buffer = PNG.sync.write(image);
     
