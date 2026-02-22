@@ -206,8 +206,8 @@ export class SupabaseListener {
     ctx.clearRect(0, 0, width, height);
 
     // Color definitions
-    const bgMain = "rgba(42, 40, 85, 0.95)";
-    const redAccent = "#E62E2D";
+    const bgMain = "#010211"; // Dropshot black
+    const redAccent = "#f8041d"; // Dropshot red
     const whiteBorder = "#FFFFFF";
 
     // Parallelogram properties
@@ -251,9 +251,17 @@ export class SupabaseListener {
     ctx.stroke();
 
     // Measurements for columns
+    const hasGames = leftGames !== "" && rightGames !== "";
     const namesWidth = 240;
-    const pointsWidth = 90;
-    const gamesWidth = width - namesWidth - pointsWidth;
+    let pointsWidth = 90;
+    let gamesWidth = 0;
+    
+    if (hasGames) {
+        gamesWidth = width - namesWidth - pointsWidth;
+    } else {
+        // Distribute remaining space to points if no games
+        pointsWidth = width - namesWidth;
+    }
 
     // Draw vertical separators matching the slant
     const drawSlantedLine = (xOffset: number) => {
@@ -264,7 +272,9 @@ export class SupabaseListener {
     };
 
     drawSlantedLine(namesWidth);
-    drawSlantedLine(namesWidth + pointsWidth);
+    if (hasGames) {
+        drawSlantedLine(namesWidth + pointsWidth);
+    }
 
     // Typography
     ctx.fillStyle = "#FFFFFF";
@@ -286,11 +296,13 @@ export class SupabaseListener {
     ctx.fillText(rightScore, p2CenterX, 3 * height / 4 + 4);
 
     // Games
-    ctx.font = "400 36px sans-serif";
-    const g1CenterX = namesWidth + pointsWidth + gamesWidth / 2 + slantX / 2;
-    const g2CenterX = namesWidth + pointsWidth + gamesWidth / 2;
-    ctx.fillText(leftGames, g1CenterX, height / 4 + 2);
-    ctx.fillText(rightGames, g2CenterX, 3 * height / 4 + 2);
+    if (hasGames) {
+        ctx.font = "400 36px sans-serif";
+        const g1CenterX = namesWidth + pointsWidth + gamesWidth / 2 + slantX / 2;
+        const g2CenterX = namesWidth + pointsWidth + gamesWidth / 2;
+        ctx.fillText(leftGames, g1CenterX, height / 4 + 2);
+        ctx.fillText(rightGames, g2CenterX, 3 * height / 4 + 2);
+    }
 
     const scoreImagePath = this.getScoreImagePath(courtId);
     await fs.mkdir(path.dirname(scoreImagePath), { recursive: true });

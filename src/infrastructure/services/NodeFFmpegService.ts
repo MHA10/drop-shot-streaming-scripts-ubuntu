@@ -339,13 +339,13 @@ export class NodeFFmpegService implements FFmpegService {
     // position them correctly using filter complex
     const filterComplex = [
       "[0:v] scale=1920:1080 [base];",
-      // Bottom-left score overlay
+      // Top-left score overlay
       `[${scoreInputIndex}:v] scale=420:-1:force_original_aspect_ratio=decrease [score];`,
       // Bottom-right DropShot watermark
       `[${dsInputIndex}:v] scale=500:-1:force_original_aspect_ratio=decrease [ds];`,
       // Top-right client logo
       `[${clientInputIndex}:v] scale=350:-1:force_original_aspect_ratio=decrease [client];`,
-      "[base][score] overlay=30:main_h-overlay_h-30 [tmp0];",
+      "[base][score] overlay=30:30 [tmp0];",
       "[tmp0][ds] overlay=main_w-overlay_w-10:main_h-overlay_h-10 [tmp1];",
       "[tmp1][client] overlay=main_w-overlay_w-10:10",
     ].join(" ");
@@ -469,8 +469,8 @@ export class NodeFFmpegService implements FFmpegService {
     ctx.clearRect(0, 0, width, height);
 
     // Color definitions
-    const bgMain = "rgba(42, 40, 85, 0.95)";
-    const redAccent = "#E62E2D";
+    const bgMain = "#010211"; // Dropshot black
+    const redAccent = "#f8041d"; // Dropshot red
     const whiteBorder = "#FFFFFF";
 
     // Parallelogram properties
@@ -514,9 +514,16 @@ export class NodeFFmpegService implements FFmpegService {
     ctx.stroke();
 
     // Measurements for columns
+    const hasGames = true; // default overlay has mock games count "0"
     const namesWidth = 240;
-    const pointsWidth = 90;
-    const gamesWidth = width - namesWidth - pointsWidth;
+    let pointsWidth = 90;
+    let gamesWidth = 0;
+    
+    if (hasGames) {
+        gamesWidth = width - namesWidth - pointsWidth;
+    } else {
+        pointsWidth = width - namesWidth;
+    }
 
     // Draw vertical separators matching the slant
     const drawSlantedLine = (xOffset: number) => {
@@ -527,7 +534,9 @@ export class NodeFFmpegService implements FFmpegService {
     };
 
     drawSlantedLine(namesWidth);
-    drawSlantedLine(namesWidth + pointsWidth);
+    if (hasGames) {
+        drawSlantedLine(namesWidth + pointsWidth);
+    }
 
     // Typography
     ctx.fillStyle = "#FFFFFF";
@@ -549,11 +558,13 @@ export class NodeFFmpegService implements FFmpegService {
     ctx.fillText("00", p2CenterX, 3 * height / 4 + 4);
 
     // Games
-    ctx.font = "400 36px sans-serif";
-    const g1CenterX = namesWidth + pointsWidth + gamesWidth / 2 + slantX / 2;
-    const g2CenterX = namesWidth + pointsWidth + gamesWidth / 2;
-    ctx.fillText("0", g1CenterX, height / 4 + 2);
-    ctx.fillText("0", g2CenterX, 3 * height / 4 + 2);
+    if (hasGames) {
+        ctx.font = "400 36px sans-serif";
+        const g1CenterX = namesWidth + pointsWidth + gamesWidth / 2 + slantX / 2;
+        const g2CenterX = namesWidth + pointsWidth + gamesWidth / 2;
+        ctx.fillText("0", g1CenterX, height / 4 + 2);
+        ctx.fillText("0", g2CenterX, 3 * height / 4 + 2);
+    }
 
     // Ensure temp directory exists and write final overlay
     fs.mkdirSync(path.dirname(scoreOverlayPath), { recursive: true });
