@@ -468,110 +468,14 @@ export class NodeFFmpegService implements FFmpegService {
     // Make transparent background
     ctx.clearRect(0, 0, width, height);
 
-    // Color definitions
-    const bgMain = "#010211"; // Dropshot black
-    const redAccent = "#f8041d"; // Dropshot red
-    const whiteBorder = "#FFFFFF";
-
-    // Parallelogram properties
-    const slantX = 12; // Amount of horizontal shift
-    const redWidth = 8;
-    
-    // Draw red accent left border
-    ctx.beginPath();
-    ctx.moveTo(slantX, 0);
-    ctx.lineTo(slantX + redWidth, 0);
-    ctx.lineTo(redWidth, height);
-    ctx.lineTo(0, height);
-    ctx.closePath();
-    ctx.fillStyle = redAccent;
-    ctx.fill();
-
-    // Draw main background
-    const bgStartX = slantX + redWidth;
-    const bgEndX = width;
-    const bgBotStartX = redWidth;
-    const bgBotEndX = width - slantX;
-    
-    ctx.beginPath();
-    ctx.moveTo(bgStartX, 0);
-    ctx.lineTo(bgEndX, 0);
-    ctx.lineTo(bgBotEndX, height);
-    ctx.lineTo(bgBotStartX, height);
-    ctx.closePath();
-    ctx.fillStyle = bgMain;
-    ctx.fill();
-
-    // The line widths
-    const lineWidth = 2;
-    ctx.strokeStyle = whiteBorder;
-    ctx.lineWidth = lineWidth;
-
-    // Draw horizontal separator
-    ctx.beginPath();
-    ctx.moveTo(slantX / 2 + redWidth, height / 2); // Middle roughly aligned to slant
-    ctx.lineTo(width - slantX / 2, height / 2);
-    ctx.stroke();
-
-    // Measurements for columns
-    const hasGames = true; // default overlay has mock games count "0"
-    const namesWidth = 240;
-    let pointsWidth = 90;
-    let gamesWidth = 0;
-    
-    if (hasGames) {
-        gamesWidth = width - namesWidth - pointsWidth;
-    } else {
-        pointsWidth = width - namesWidth;
-    }
-
-    // Draw vertical separators matching the slant
-    const drawSlantedLine = (xOffset: number) => {
-        ctx.beginPath();
-        ctx.moveTo(slantX + xOffset, 0);
-        ctx.lineTo(xOffset, height);
-        ctx.stroke();
-    };
-
-    drawSlantedLine(namesWidth);
-    if (hasGames) {
-        drawSlantedLine(namesWidth + pointsWidth);
-    }
-
-    // Typography
-    ctx.fillStyle = "#FFFFFF";
-    ctx.textAlign = "left";
-    ctx.textBaseline = "middle";
-
-    // Team Names
-    ctx.font = "300 28px sans-serif";
-    const namePad = 40;
-    ctx.fillText("TEAM A", namePad, height / 4 + 2);
-    ctx.fillText("TEAM B", namePad - (slantX / 2), 3 * height / 4 + 2);
-
-    // Points
-    ctx.textAlign = "center";
-    ctx.font = "500 42px sans-serif";
-    const p1CenterX = namesWidth + pointsWidth / 2 + slantX / 2;
-    const p2CenterX = namesWidth + pointsWidth / 2;
-    ctx.fillText("00", p1CenterX, height / 4 + 4);
-    ctx.fillText("00", p2CenterX, 3 * height / 4 + 4);
-
-    // Games
-    if (hasGames) {
-        ctx.font = "400 36px sans-serif";
-        const g1CenterX = namesWidth + pointsWidth + gamesWidth / 2 + slantX / 2;
-        const g2CenterX = namesWidth + pointsWidth + gamesWidth / 2;
-        ctx.fillText("0", g1CenterX, height / 4 + 2);
-        ctx.fillText("0", g2CenterX, 3 * height / 4 + 2);
-    }
+    // Initial scoreboard starts completely invisible (transparent PNG).
+    // The SupabaseListener will overwrite this file with actual shapes
+    // and text once real game score data is received.
 
     // Ensure temp directory exists and write final overlay
     fs.mkdirSync(path.dirname(scoreOverlayPath), { recursive: true });
-    const buffer = canvas.encodeSync('png');
     
-    const tempPath = `${scoreOverlayPath}.tmp`;
-    fs.writeFileSync(tempPath, buffer);
-    fs.renameSync(tempPath, scoreOverlayPath);
+    const buffer = canvas.encodeSync('png');
+    fs.writeFileSync(scoreOverlayPath, buffer);
   }
 }
