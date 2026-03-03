@@ -284,6 +284,7 @@ export class NodeSSEService extends EventEmitter implements SSEService {
         streamKey: parsedData.streamKey,
         courtId: parsedData.courtId,
         reconciliationMode: parsedData.reconciliation_mode || false,
+        isScorecardActivated: parsedData.isScorecardActivated,
       };
 
       this.logger.info("Processing SSE stream event", {
@@ -291,6 +292,7 @@ export class NodeSSEService extends EventEmitter implements SSEService {
         cameraUrl: streamEvent.cameraUrl,
         streamKey: streamEvent.streamKey,
         reconciliationMode: streamEvent.reconciliationMode,
+        isScorecardActivated: streamEvent.isScorecardActivated,
       });
 
       this.emit("streamEvent", streamEvent);
