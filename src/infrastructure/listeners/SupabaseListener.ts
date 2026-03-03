@@ -70,6 +70,11 @@ export class SupabaseListener {
     if (!this.enabled) return;
 
     const channelName = `${this.channelName}-${courtId}`;
+    
+    if (!this.supabaseService.isChannelActive(channelName)) {
+      return;
+    }
+
     console.log(`🛑 Unsubscribing from Supabase updates for court: ${courtId}`);
     await this.supabaseService.unsubscribe(channelName);
   }
