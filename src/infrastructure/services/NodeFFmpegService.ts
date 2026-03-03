@@ -45,12 +45,14 @@ export class NodeFFmpegService implements FFmpegService {
       event: StartStreamRequest;
       onRetryStream: (event: StartStreamRequest) => Promise<void>;
     },
+    isScorecardActivated?: boolean
   ): Promise<FFmpegProcess> {
     const command = this.buildStreamCommand(
       cameraUrl,
       streamKey,
       hasAudio,
       courtId,
+      isScorecardActivated
     );
     this.logger.info("Command full form", command);
 
@@ -302,6 +304,7 @@ export class NodeFFmpegService implements FFmpegService {
     streamKey: string,
     hasAudio: boolean,
     courtId: string,
+    isScorecardActivated?: boolean
   ): FFmpegCommand {
     const rtmpUrl = `rtmp://a.rtmp.youtube.com/live2/${streamKey}`;
     let fakeAudioInputCounter = 0;
@@ -322,8 +325,6 @@ export class NodeFFmpegService implements FFmpegService {
 
     // Validate logo files exist before adding them
     this.validateImageFiles();
-    const scoreOverlayPath = this.getScoreOverlayPath(courtId);
-    this.ensureScoreOverlay(scoreOverlayPath);
 
     // logo overlays & their formatting
     // Add logo image inputs
@@ -332,23 +333,41 @@ export class NodeFFmpegService implements FFmpegService {
     args.push("-i", this.clientLogoPath); // Input 2: Client logo
     const clientInputIndex = 2 + fakeAudioInputCounter;
     
-    // Treat the overlay PNG as a continuously looping sequence of images
-    // This allows FFmpeg to reflect file updates cleanly as they are overwritten
-    args.push("-f", "image2", "-loop", "1", "-i", scoreOverlayPath); 
-    const scoreInputIndex = 3 + fakeAudioInputCounter;
-    // position them correctly using filter complex
-    const filterComplex = [
-      "[0:v] scale=1920:1080 [base];",
-      // Top-left score overlay
-      `[${scoreInputIndex}:v] scale=420:-1:force_original_aspect_ratio=decrease [score];`,
-      // Bottom-right DropShot watermark
-      `[${dsInputIndex}:v] scale=500:-1:force_original_aspect_ratio=decrease [ds];`,
-      // Top-right client logo
-      `[${clientInputIndex}:v] scale=350:-1:force_original_aspect_ratio=decrease [client];`,
-      "[base][score] overlay=30:30 [tmp0];",
-      "[tmp0][ds] overlay=main_w-overlay_w-10:main_h-overlay_h-10 [tmp1];",
-      "[tmp1][client] overlay=main_w-overlay_w-10:10",
-    ].join(" ");
+    let filterComplex = "";
+    
+    if (isScorecardActivated) {
+      const scoreOverlayPath = this.getScoreOverlayPath(courtId);
+      this.ensureScoreOverlay(scoreOverlayPath);
+
+      // Treat the overlay PNG as a continuously looping sequence of images
+      // This allows FFmpeg to reflect file updates cleanly as they are overwritten
+      args.push("-f", "image2", "-loop", "1", "-i", scoreOverlayPath); 
+      const scoreInputIndex = 3 + fakeAudioInputCounter;
+
+      // position them correctly using filter complex
+      filterComplex = [
+        "[0:v] scale=1920:1080 [base];",
+        // Top-left score overlay
+        `[${scoreInputIndex}:v] scale=420:-1:force_original_aspect_ratio=decrease [score];`,
+        // Bottom-right DropShot watermark
+        `[${dsInputIndex}:v] scale=500:-1:force_original_aspect_ratio=decrease [ds];`,
+        // Top-right client logo
+        `[${clientInputIndex}:v] scale=350:-1:force_original_aspect_ratio=decrease [client];`,
+        "[base][score] overlay=30:30 [tmp0];",
+        "[tmp0][ds] overlay=main_w-overlay_w-10:main_h-overlay_h-10 [tmp1];",
+        "[tmp1][client] overlay=main_w-overlay_w-10:10",
+      ].join(" ");
+    } else {
+      filterComplex = [
+        "[0:v] scale=1920:1080 [base];",
+        // Bottom-right DropShot watermark
+        `[${dsInputIndex}:v] scale=500:-1:force_original_aspect_ratio=decrease [ds];`,
+        // Top-right client logo
+        `[${clientInputIndex}:v] scale=350:-1:force_original_aspect_ratio=decrease [client];`,
+        "[base][ds] overlay=main_w-overlay_w-10:main_h-overlay_h-10 [tmp1];",
+        "[tmp1][client] overlay=main_w-overlay_w-10:10",
+      ].join(" ");
+    }
 
     args.push("-filter_complex", filterComplex);
 

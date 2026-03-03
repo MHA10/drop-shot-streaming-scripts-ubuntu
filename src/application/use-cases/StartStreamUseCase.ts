@@ -261,7 +261,8 @@ export class StartStreamUseCase {
         {
           event: request,
           onRetryStream,
-        }
+        },
+        request.isScorecardActivated
       );
 
       // Update stream with process ID

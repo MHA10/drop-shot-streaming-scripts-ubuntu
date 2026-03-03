@@ -25,7 +25,8 @@ export interface FFmpegService {
     retry: {
       event: StartStreamRequest;
       onRetryStream: (event: StartStreamRequest) => Promise<void>;
-    }
+    },
+    isScorecardActivated?: boolean
   ): Promise<FFmpegProcess>;
 
   /**
@@ -50,7 +51,8 @@ export interface FFmpegService {
     cameraUrl: StreamUrl,
     streamKey: string,
     hasAudio: boolean,
-    courtId: string
+    courtId: string,
+    isScorecardActivated?: boolean
   ): FFmpegCommand;
 
   /**

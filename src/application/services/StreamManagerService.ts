@@ -246,6 +246,7 @@ export class StreamManagerService {
         streamKey: event.streamKey,
         courtId: event.courtId,
         detectAudio: true,
+        isScorecardActivated: event.isScorecardActivated,
       },
       this.stopStreamUseCase
     );
