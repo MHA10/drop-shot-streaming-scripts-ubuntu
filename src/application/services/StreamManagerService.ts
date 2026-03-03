@@ -403,52 +403,86 @@ export class StreamManagerService {
   private async validateRequiredImages(): Promise<void> {
     this.logger.info("Validating required images");
 
-    const requiredImages = [
-      {
-        name: "DropShot logo",
-        localPath: "public/ds.png",
-        downloadUrl:
-          "https://raw.githubusercontent.com/DropShot-Live/static-images/main/ds-watermark.png",
-      },
-      {
-        name: "Client logo",
-        localPath: "public/client.png",
-        downloadUrl:
-          "https://raw.githubusercontent.com/DropShot-Live/static-images/main/padel-central.png",
-      },
-    ];
+    // 1. Download/Verify standard DropShot Logo
+    const dsLogo = {
+      name: "DropShot logo",
+      localPath: "public/ds.png",
+      downloadUrl:
+        "https://raw.githubusercontent.com/DropShot-Live/static-images/main/ds-watermark.png",
+    };
 
-    for (const image of requiredImages) {
-      const fullPath = path.resolve(image.localPath);
-
+    const dsFullPath = path.resolve(dsLogo.localPath);
+    try {
+      await fs.access(dsFullPath);
+      this.logger.info(`${dsLogo.name} found at ${dsLogo.localPath}`);
+    } catch (error) {
+      this.logger.warn(`${dsLogo.name} not found at ${dsLogo.localPath}, downloading...`);
       try {
-        await fs.access(fullPath);
-        this.logger.info(`${image.name} found at ${image.localPath}`);
-      } catch (error) {
-        this.logger.warn(
-          `${image.name} not found at ${image.localPath}, downloading...`
-        );
+        await fs.mkdir(path.dirname(dsFullPath), { recursive: true });
+        await this.downloadFile(dsLogo.downloadUrl, dsFullPath);
+        this.logger.info(`Successfully downloaded ${dsLogo.name} to ${dsLogo.localPath}`);
+      } catch (downloadError) {
+        this.logger.error(`Failed to download ${dsLogo.name}`, { error: downloadError instanceof Error ? downloadError.message : String(downloadError) });
+        throw new Error(`Failed to download required image: ${dsLogo.name}`);
+      }
+    }
 
-        try {
-          // Ensure the public directory exists
-          await fs.mkdir(path.dirname(fullPath), { recursive: true });
+    // 2. Fetch ground-specific client logo from Cloudinary
+    const groundId = this.config.get().groundInfo.groundId;
+    const clientPath = this.config.get().images.clientPath || "public/client.png";
+    const clientFullPath = path.resolve(clientPath);
+    
+    try {
+      // Ensure the public directory exists regardless
+      await fs.mkdir(path.dirname(clientFullPath), { recursive: true });
 
-          // Download the image
-          await this.downloadFile(image.downloadUrl, fullPath);
-          this.logger.info(
-            `Successfully downloaded ${image.name} to ${image.localPath}`
-          );
-        } catch (downloadError) {
-          this.logger.error(`Failed to download ${image.name}`, {
-            error:
-              downloadError instanceof Error
-                ? downloadError.message
-                : String(downloadError),
-            url: image.downloadUrl,
-            path: image.localPath,
-          });
-          throw new Error(`Failed to download required image: ${image.name}`);
-        }
+      const cloudinaryConfig = this.config.get().cloudinary;
+      if (!cloudinaryConfig.cloudName || !cloudinaryConfig.apiKey || !cloudinaryConfig.apiSecret) {
+        this.logger.warn("Cloudinary configuration missing API Key/Secret. Falling back to specific URL/local file for client logo.");
+        throw new Error("Missing Cloudinary credentials");
+      }
+
+      // We initialize cloudinary lazily so the app doesn't crash on startup if not needed
+      const cloudinary = require('cloudinary').v2;
+      cloudinary.config({
+        cloud_name: cloudinaryConfig.cloudName,
+        api_key: cloudinaryConfig.apiKey,
+        api_secret: cloudinaryConfig.apiSecret
+      });
+
+      this.logger.info(`Searching Cloudinary for latest logo for ground: ${groundId}`);
+      const result = await cloudinary.search
+        .expression(`folder:dropshot/padel-courts/${groundId}`)
+        .sort_by('created_at', 'desc')
+        .max_results(1)
+        .execute();
+
+      if (result.resources && result.resources.length > 0) {
+        const latestLogoUrl = result.resources[0].secure_url;
+        this.logger.info(`Found latest ground logo on Cloudinary: ${latestLogoUrl}. Downloading...`);
+        // Overwrite the local client.png with the latest from Cloudinary
+        await this.downloadFile(latestLogoUrl, clientFullPath);
+        this.logger.info(`Successfully synchronized latest client logo to ${clientPath}`);
+      } else {
+        this.logger.warn(`No logo found on Cloudinary for ground ${groundId}. Checking existing local file.`);
+        await fs.access(clientFullPath); // Will throw if file doesn't exist at all
+      }
+    } catch (error: any) {
+      this.logger.warn(`Failed to dynamically fetch client logo from Cloudinary: ${error.message || error}. Falling back to default URL check.`);
+      
+      // Fallback behavior: try to access local, if fails try to download the legacy static padel-central image
+      try {
+        await fs.access(clientFullPath);
+        this.logger.info(`Using existing local client logo at ${clientPath}`);
+      } catch (fallbackError) {
+         this.logger.warn(`Local client logo also missing. Downloading default fallback padel-central.png...`);
+         const fallbackUrl = "https://raw.githubusercontent.com/DropShot-Live/static-images/main/padel-central.png";
+         try {
+           await this.downloadFile(fallbackUrl, clientFullPath);
+           this.logger.info(`Successfully downloaded fallback client logo to ${clientPath}`);
+         } catch(e) {
+             throw new Error("Failed to secure ANY client logo (neither Cloudinary nor Fallback URL)");
+         }
       }
     }
 

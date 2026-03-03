@@ -41,6 +41,11 @@ export interface AppConfig {
     tableName: string;
     channelName: string;
   };
+  cloudinary: {
+    cloudName: string;
+    apiKey: string;
+    apiSecret: string;
+  };
   environment: string;
 }
 
@@ -126,6 +131,11 @@ export class Config {
         anonKey: this.getEnvVar("SUPABASE_ANON_KEY", ""),
         tableName: this.getEnvVar("SUPABASE_TABLE_NAME", "score_board"),
         channelName: this.getEnvVar("SUPABASE_CHANNEL_NAME", "score_board_channel"),
+      },
+      cloudinary: {
+        cloudName: this.getEnvVar("REACT_APP_CLOUDINARY_CLOUD_NAME", "duca7omur"),
+        apiKey: this.getEnvVar("CLOUDINARY_API_KEY", ""),
+        apiSecret: this.getEnvVar("CLOUDINARY_API_SECRET", ""),
       },
       environment: this.getEnvVar("NODE_ENV", "development"),
     };
