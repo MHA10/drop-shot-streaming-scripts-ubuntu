@@ -252,7 +252,7 @@ export class StreamManagerService {
     );
 
     // If stream started successfully (has a streamId), subscribe to updates
-    if (result && result.streamId && this.supabaseListener) {
+    if (result && result.streamId && this.supabaseListener && event.isScorecardActivated) {
       this.logger.info("Subscribing to realtime updates for court", {
         courtId: event.courtId,
       });
