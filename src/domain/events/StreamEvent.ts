@@ -50,6 +50,7 @@ export interface SSEStreamEvent extends DomainEvent {
   readonly cameraUrl: string;
   readonly streamKey: string;
   readonly reconciliationMode?: boolean;
+  readonly isScorecardActivated?: boolean;
 }
 
 export type StreamDomainEvent =

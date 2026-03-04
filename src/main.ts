@@ -10,9 +10,12 @@ import { StopStreamUseCase } from "./application/use-cases/StopStreamUseCase";
 import { StreamManagerService } from "./application/services/StreamManagerService";
 import { HttpClient } from "./application/services/HttpClient";
 import { RemoteLogger } from "./infrastructure/logging/RemoteLogger";
+import { SupabaseService } from "./infrastructure/services/SupabaseService";
+import { SupabaseListener } from "./infrastructure/listeners/SupabaseListener";
 
 class Application {
   private streamManager?: StreamManagerService;
+  private supabaseListener?: SupabaseListener;
   private readonly logger = new RemoteLogger(
     {
       ...Config.getInstance().get().remoteLogging,
@@ -55,6 +58,28 @@ class Application {
         this.logger
       );
 
+      // Initialize Supabase Listener (if enabled)
+      const supabaseConfig = config.get().supabase;
+      let supabaseListener: SupabaseListener | undefined;
+
+      if (supabaseConfig.enabled) {
+        this.logger.info("Initializing Supabase services...");
+        
+        SupabaseService.initialize(
+          supabaseConfig.url,
+          supabaseConfig.anonKey,
+          supabaseConfig.enabled
+        );
+
+        supabaseListener = new SupabaseListener(
+          supabaseConfig.channelName,
+          supabaseConfig.tableName
+        );
+        this.logger.info("SupabaseListener initialized");
+      } else {
+        this.logger.info("Supabase is disabled via configuration");
+      }
+
       // Initialize stream manager
       this.streamManager = new StreamManagerService(
         streamRepository,
@@ -64,7 +89,8 @@ class Application {
         stopStreamUseCase,
         this.logger,
         config,
-        this.httpClient
+        this.httpClient,
+        supabaseListener
       );
 
       // Start the stream manager
@@ -89,6 +115,9 @@ class Application {
       try {
         if (this.streamManager) {
           await this.streamManager.stop();
+        }
+        if (this.supabaseListener) { // Keep this just in case, though StreamManager handles unsub
+          await this.supabaseListener.stop();
         }
         this.logger.info("Application shutdown completed");
         process.exit(0);
