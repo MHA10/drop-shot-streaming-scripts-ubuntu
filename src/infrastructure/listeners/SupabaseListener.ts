@@ -1,7 +1,7 @@
 import { SupabaseService } from "../services/SupabaseService";
 import * as fs from "fs/promises";
 import * as path from "path";
-import { PNG } from "pngjs";
+
 import { createCanvas } from "@napi-rs/canvas";
 
 /**
@@ -23,23 +23,6 @@ export class SupabaseListener {
     this.tableName = tableName;
     this.enabled = this.supabaseService.isEnabled();
     this.scoreImageDir = path.resolve("./public/overlays");
-  }
-
-  /**
-   * Start listening to table changes
-   */
-  /**
-   * Start listening to table changes
-   * @deprecated Global subscription is no longer used. Use subscribeToCourt instead.
-   */
-  public start(): void {
-    if (!this.enabled) {
-      console.log(
-        "⚠️  Supabase listener is disabled. Skipping initialization.",
-      );
-      return;
-    }
-    console.log("ℹ️  SupabaseListener initialized (waiting for stream start events)");
   }
 
   /**
@@ -80,74 +63,14 @@ export class SupabaseListener {
   }
 
   /**
-   * Handle all events and route them accordingly
+   * Handle UPDATE events from Supabase
    */
   private handleAllEvents(payload: any): void {
-    console.log("📡 Event received:", payload.eventType);
-
-    switch (payload.eventType) {
-      case "INSERT":
-        this.handleInsertEvent(payload);
-        break;
-      case "UPDATE":
-        this.handleUpdateEvent(payload);
-        break;
-      case "DELETE":
-        this.handleDeleteEvent(payload);
-        break;
-      default:
-        console.log("❓ Unknown event type:", payload.eventType);
-    }
-  }
-
-  /**
-   * Handle INSERT events
-   */
-  private handleInsertEvent(payload: any): void {
-    console.log("➕ INSERT event");
-    console.log("   New record:", payload.new);
-    this.handleInsert(payload.new);
-  }
-
-  /**
-   * Handle UPDATE events
-   */
-  private handleUpdateEvent(payload: any): void {
-    console.log("✏️  UPDATE event");
-    console.log("   Old:", payload.old);
-    console.log("   New:", payload.new);
-    this.handleUpdate(payload.old, payload.new);
-  }
-
-  /**
-   * Handle DELETE events
-   */
-  private handleDeleteEvent(payload: any): void {
-    console.log("🗑️  DELETE event");
-    console.log("   Deleted:", payload.old);
-    this.handleDelete(payload.old);
-  }
-
-  /**
-   * Business logic for INSERT events
-   */
-  private handleInsert(record: any): void {
-    // Add your custom logic here
-    // For example: send notification, update local cache, trigger webhook, etc.
-    console.log("Processing new record...");
-    // TODO: Implement your business logic
-  }
-
-  /**
-   * Business logic for UPDATE events
-   */
-  private handleUpdate(oldRecord: any, newRecord: any): void {
-    console.log("Processing record update...");
-    const score = this.extractScore(newRecord);
+    console.log("✏️  UPDATE event received");
+    const score = this.extractScore(payload.new);
     if (!score) {
       return;
     }
-    // Render the updated score overlay asynchronously
     void this.writeScoreImage(
       score.courtId,
       score.left,
@@ -322,16 +245,6 @@ export class SupabaseListener {
 
   private getScoreImagePath(courtId: string): string {
     return path.join(this.scoreImageDir, `${courtId}.png`);
-  }
-
-  /**
-   * Business logic for DELETE events
-   */
-  private handleDelete(record: any): void {
-    // Add your custom logic here
-    // For example: cleanup related data, send notifications, etc.
-    console.log("Processing record deletion...");
-    // TODO: Implement your business logic
   }
 
   /**

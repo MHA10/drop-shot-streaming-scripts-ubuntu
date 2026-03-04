@@ -12,6 +12,7 @@ import * as fs from "fs/promises";
 import * as path from "path";
 import * as https from "https";
 import { SupabaseListener } from "../../infrastructure/listeners/SupabaseListener";
+import { v2 as cloudinaryClient } from "cloudinary";
 
 export class StreamManagerService {
   private healthCheckInterval?: NodeJS.Timeout;
@@ -412,10 +413,11 @@ export class StreamManagerService {
     };
 
     const dsFullPath = path.resolve(dsLogo.localPath);
-    try {
-      await fs.access(dsFullPath);
+    const dsExists = await fs.access(dsFullPath).then(() => true).catch(() => false);
+
+    if (dsExists) {
       this.logger.info(`${dsLogo.name} found at ${dsLogo.localPath}`);
-    } catch (error) {
+    } else {
       this.logger.warn(`${dsLogo.name} not found at ${dsLogo.localPath}, downloading...`);
       try {
         await fs.mkdir(path.dirname(dsFullPath), { recursive: true });
@@ -442,16 +444,14 @@ export class StreamManagerService {
         throw new Error("Missing Cloudinary credentials");
       }
 
-      // We initialize cloudinary lazily so the app doesn't crash on startup if not needed
-      const cloudinary = require('cloudinary').v2;
-      cloudinary.config({
+      cloudinaryClient.config({
         cloud_name: cloudinaryConfig.cloudName,
         api_key: cloudinaryConfig.apiKey,
         api_secret: cloudinaryConfig.apiSecret
       });
 
       this.logger.info(`Searching Cloudinary for latest logo for ground: ${groundId}`);
-      const result = await cloudinary.search
+      const result = await cloudinaryClient.search
         .expression(`folder:dropshot/padel-courts/${groundId}`)
         .sort_by('created_at', 'desc')
         .max_results(1)
@@ -470,18 +470,18 @@ export class StreamManagerService {
     } catch (error: any) {
       this.logger.warn(`Failed to dynamically fetch client logo from Cloudinary: ${error.message || error}. Falling back to default URL check.`);
       
-      // Fallback behavior: try to access local, if fails try to download the legacy static padel-central image
+      // Fallback: use existing local file, or copy the DS logo as the client logo
       try {
         await fs.access(clientFullPath);
         this.logger.info(`Using existing local client logo at ${clientPath}`);
       } catch (fallbackError) {
-         this.logger.warn(`Local client logo also missing. Downloading default fallback padel-central.png...`);
-         const fallbackUrl = "https://raw.githubusercontent.com/DropShot-Live/static-images/main/padel-central.png";
+         this.logger.warn(`Local client logo also missing. Falling back to DS logo.`);
+         const dsLogoSource = path.resolve("public/ds.png");
          try {
-           await this.downloadFile(fallbackUrl, clientFullPath);
-           this.logger.info(`Successfully downloaded fallback client logo to ${clientPath}`);
+           await fs.copyFile(dsLogoSource, clientFullPath);
+           this.logger.info(`Copied DS logo as fallback client logo to ${clientPath}`);
          } catch(e) {
-             throw new Error("Failed to secure ANY client logo (neither Cloudinary nor Fallback URL)");
+             throw new Error("Failed to secure ANY client logo (neither Cloudinary nor DS logo fallback)");
          }
       }
     }

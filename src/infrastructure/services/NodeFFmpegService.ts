@@ -453,30 +453,6 @@ export class NodeFFmpegService implements FFmpegService {
     return path.join(this.scoreOverlayDir, `${courtId}.png`);
   }
 
-  public regenerateScoreOverlay(courtId: string): void {
-    const scoreOverlayPath = this.getScoreOverlayPath(courtId);
-    this.createDefaultScoreOverlay(scoreOverlayPath);
-    this.logger.info("Score overlay regenerated", {
-      courtId,
-      path: scoreOverlayPath,
-    });
-  }
-
-  public regenerateAllScoreOverlays(): void {
-    if (!fs.existsSync(this.scoreOverlayDir)) {
-      return;
-    }
-
-    const files = fs.readdirSync(this.scoreOverlayDir);
-    files.forEach((file) => {
-      if (file.endsWith(".png")) {
-        const courtId = file.replace(".png", "");
-        this.regenerateScoreOverlay(courtId);
-      }
-    });
-    this.logger.info("All score overlays regenerated");
-  }
-
   private createDefaultScoreOverlay(scoreOverlayPath: string): void {
     const width = 420;
     const height = 120;
