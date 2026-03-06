@@ -88,10 +88,10 @@ export class SupabaseListener {
     rightGames: string;
   } | null {
     const courtId = record["court_id"];
-    const leftValue = record["blue_score"];
-    const rightValue = record["red_score"];
-    const leftGamesValue = record["blue_games"];
-    const rightGamesValue = record["red_games"];
+    const leftValue = record["red_score"];
+    const rightValue = record["blue_score"];
+    const leftGamesValue = record["red_games"];
+    const rightGamesValue = record["blue_games"];
 
     if (
       typeof courtId !== "string" ||
