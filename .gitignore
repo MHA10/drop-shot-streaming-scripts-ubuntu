@@ -6,3 +6,5 @@
 /public/
 
 .env
+
+.claude
