@@ -47,7 +47,7 @@ log_success() {
 
 log_header "Streamer Setup Script - Starting..."
 log_info "This script will set up a complete Ubuntu streamer machine."
-log_info "Estimated time: 5-10 minutes depending on internet speed."
+log_info "Estimated time: 5-15 minutes depending on internet speed."
 echo ""
 
 # =============================================================================
@@ -274,9 +274,27 @@ systemctl is-enabled pm2-$USER && echo "    - pm2-$USER: enabled (will start on 
 log_success "PM2 will auto-start on every boot/restart."
 
 # =============================================================================
-# STEP 10: Install Tailscale
+# STEP 10: Install OpenSSH Server
+# Description: Enable remote SSH access via Tailscale
 # =============================================================================
-log_step "10/10" "Install Tailscale"
+log_step "10/11" "Install OpenSSH Server"
+
+if ! systemctl is-active --quiet ssh; then
+    sudo apt install -y openssh-server
+    sudo systemctl enable ssh
+    sudo systemctl start ssh
+    log_success "OpenSSH server installed and enabled."
+else
+    log_info "OpenSSH server already running. Skipping..."
+fi
+
+log_info "SSH status: $(systemctl is-active ssh)"
+log_success "SSH server ready. Connect via: ssh $USER@<tailscale-ip>"
+
+# =============================================================================
+# STEP 11: Install Tailscale
+# =============================================================================
+log_step "11/11" "Install Tailscale"
 
 if ! command -v tailscale &> /dev/null; then
     log_info "Installing Tailscale..."
@@ -317,12 +335,18 @@ echo "       Open the printed URL in a browser"
 echo "       Login:  streamer.ds.01@gmail.com"
 echo "       Verify: tailscale status"
 echo ""
-echo "  2. VERIFY STREAMER IS RUNNING"
+echo "  2. DISABLE TAILSCALE KEY EXPIRY"
+echo "       Go to:  https://login.tailscale.com/admin/machines"
+echo "       Find:   this machine in the list"
+echo "       Click:  three dots menu → Disable key expiry"
+echo "       Why:    Prevents Tailscale disconnecting after key expires"
+echo ""
+echo "  3. VERIFY STREAMER IS RUNNING"
 echo "       Run:    pm2 status"
 echo "       Expect: streamer-$DROPSHOT_GROUND_ID shown as 'online'"
 echo "       Logs:   pm2 logs streamer-$DROPSHOT_GROUND_ID"
 echo ""
-echo "  3. TEST AUTO-START ON REBOOT"
+echo "  4. TEST AUTO-START ON REBOOT"
 echo "       Reboot the machine, then confirm:"
 echo "       - pm2 status       → streamer is online"
 echo "       - tailscale status → connected"
@@ -365,6 +389,7 @@ check "PM2 installed"                  "command -v pm2"
 check "PM2 process running"            "pm2 status | grep -q streamer-$DROPSHOT_GROUND_ID"
 check "PM2 logrotate installed"        "pm2 describe pm2-logrotate"
 check "PM2 startup configured"         "systemctl is-enabled pm2-$USER"
+check "OpenSSH server running"         "systemctl is-active ssh"
 check "Tailscale installed"            "command -v tailscale"
 check "Repo cloned"                    "[ -d $HOME/Documents/drop-shot-streaming-scripts-ubuntu ]"
 check ".env file created"               "[ -f $HOME/Documents/drop-shot-streaming-scripts-ubuntu/.env ]"

@@ -61,7 +61,8 @@ bash setup.sh
 | 7 | Create .env + pm2-config.conf + start streamer service |
 | 8 | Configure PM2 log rotation |
 | 9 | Configure PM2 auto-start on boot |
-| 10 | Install Tailscale |
+| 10 | Install OpenSSH server (for remote SSH access) |
+| 11 | Install Tailscale |
 
 ### Verification
 Script runs 14 automatic checks at the end. All should show ✓ PASS:
@@ -69,6 +70,7 @@ Script runs 14 automatic checks at the end. All should show ✓ PASS:
 - PM2 process running
 - PM2 logrotate installed
 - PM2 startup configured (enabled)
+- OpenSSH server running
 - Tailscale installed
 - Repo cloned
 - .env file created
@@ -87,13 +89,20 @@ sudo tailscale up
 tailscale status  # verify connected
 ```
 
-### 2. Verify Streamer is Running
+### 2. Disable Tailscale Key Expiry
+1. Go to **https://login.tailscale.com/admin/machines**
+2. Find this machine in the list
+3. Click the **three dots** menu → **"Disable key expiry"**
+
+> Without this, Tailscale will disconnect after the key expires and require manual re-authentication — breaking remote access.
+
+### 3. Verify Streamer is Running
 ```bash
 pm2 status  # should show streamer-<GROUND_ID> as 'online'
 pm2 logs streamer-<GROUND_ID>  # check for errors
 ```
 
-### 3. Test Auto-start on Reboot
+### 4. Test Auto-start on Reboot
 ```bash
 sudo reboot
 # After reboot:
@@ -159,6 +168,15 @@ Located at: `~/Documents/drop-shot-streaming-scripts-ubuntu/.env`
 | Max file size | 10MB |
 | Rotation schedule | Daily at midnight |
 | Compression | Enabled |
+
+---
+
+## SSH Access
+- **Install:** Automated via script (`openssh-server`)
+- **Connect:** `ssh <username>@<tailscale-ip>`
+- **Streamer A:** `ssh ds@100.70.130.105`
+- **Streamer B:** `ssh padel-bridge@100.100.94.17`
+- **Auto-start:** Enabled as systemd service on boot
 
 ---
 
