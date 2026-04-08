@@ -81,7 +81,21 @@ Script runs 14 automatic checks at the end. All should show ✓ PASS:
 
 ## Manual Steps After Script
 
-### 1. Tailscale Authentication
+These steps require human interaction and must be done after the script completes.
+
+### 1. BIOS Auto Power-On (AC Recovery)
+Enter BIOS at startup and enable auto boot on power restore:
+
+| Machine | BIOS Key | Setting Location |
+|---------|----------|-----------------|
+| Lenovo ThinkCentre | F1 | Power → After Power Loss → Power On |
+| Dell OptiPlex | F2 | Power Management → AC Recovery → Power On |
+
+Save with **F10**.
+
+> This ensures the machine boots automatically when power is connected or restored.
+
+### 2. Tailscale Authentication
 ```bash
 sudo tailscale up
 # Open the printed URL in a browser
@@ -89,20 +103,20 @@ sudo tailscale up
 tailscale status  # verify connected
 ```
 
-### 2. Disable Tailscale Key Expiry
+### 3. Disable Tailscale Key Expiry
 1. Go to **https://login.tailscale.com/admin/machines**
 2. Find this machine in the list
 3. Click the **three dots** menu → **"Disable key expiry"**
 
 > Without this, Tailscale will disconnect after the key expires and require manual re-authentication — breaking remote access.
 
-### 3. Verify Streamer is Running
+### 4. Verify Streamer is Running
 ```bash
 pm2 status  # should show streamer-<GROUND_ID> as 'online'
 pm2 logs streamer-<GROUND_ID>  # check for errors
 ```
 
-### 4. Test Auto-start on Reboot
+### 5. Test Auto-start on Reboot
 ```bash
 sudo reboot
 # After reboot:
