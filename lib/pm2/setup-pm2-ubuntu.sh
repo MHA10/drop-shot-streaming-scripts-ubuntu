@@ -250,19 +250,30 @@ else
     log_message "CONFIRMED: Ground ID is set to '\$DROPSHOT_GROUND_ID'"
 fi
 
+# Load .env from repo root (two levels up from lib/pm2)
+ENV_FILE="\$(cd "\$(dirname "\$0")/../.." && pwd)/.env"
+if [ -f "\$ENV_FILE" ]; then
+    set -a
+    source "\$ENV_FILE"
+    set +a
+    log_message "Loaded environment from \$ENV_FILE"
+else
+    log_message "WARNING: .env file not found at \$ENV_FILE"
+fi
+
 while true; do
     log_message "Launching streaming service..."
     log_message "Passing Ground ID to npx command: \${DROPSHOT_GROUND_ID:-'NOT SET'}"
-    
+
     # Run the package with error handling
     # Pass DROPSHOT_GROUND_ID environment variable to the streaming service
     if DROPSHOT_GROUND_ID="\${DROPSHOT_GROUND_ID}" npx "\$PACKAGE@latest"; then
         log_message "Streaming service exited normally."
     else
-        local exit_code=\$?
+        exit_code=\$?
         log_message "Streaming service exited with code \$exit_code"
     fi
-    
+
     log_message "Restarting in 5 seconds..."
     sleep 5
 done
