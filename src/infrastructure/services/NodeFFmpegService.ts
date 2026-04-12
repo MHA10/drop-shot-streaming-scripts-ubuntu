@@ -1,6 +1,8 @@
 import { spawn } from "child_process";
 import * as fs from "fs";
 import * as path from "path";
+import { PNG } from "pngjs";
+import { createCanvas } from "@napi-rs/canvas";
 import {
   FFmpegService,
   FFmpegCommand,
@@ -14,12 +16,14 @@ import { Config } from "../config/Config";
 export class NodeFFmpegService implements FFmpegService {
   private readonly runningProcesses: Map<number, FFmpegProcess> = new Map();
   private readonly clientLogoPath: string;
+  private readonly scoreOverlayDir: string;
 
   constructor(
     private readonly logger: Logger,
-    private readonly config: Config
+    private readonly config: Config,
   ) {
     this.clientLogoPath = path.resolve(this.config.get().images.clientPath);
+    this.scoreOverlayDir = path.resolve("./public/overlays");
   }
 
   /**
@@ -36,12 +40,20 @@ export class NodeFFmpegService implements FFmpegService {
     cameraUrl: StreamUrl,
     streamKey: string,
     hasAudio: boolean,
+    courtId: string,
     retry: {
       event: StartStreamRequest;
       onRetryStream: (event: StartStreamRequest) => Promise<void>;
-    }
+    },
+    isScorecardActivated?: boolean
   ): Promise<FFmpegProcess> {
-    const command = this.buildStreamCommand(cameraUrl, streamKey, hasAudio);
+    const command = this.buildStreamCommand(
+      cameraUrl,
+      streamKey,
+      hasAudio,
+      courtId,
+      isScorecardActivated
+    );
     this.logger.info("Command full form", command);
 
     this.logger.info("Starting FFmpeg process", {
@@ -49,6 +61,7 @@ export class NodeFFmpegService implements FFmpegService {
       cameraUrl: cameraUrl.value,
       streamKey,
       hasAudio,
+      courtId,
     });
 
     return new Promise((resolve) => {
@@ -247,6 +260,7 @@ export class NodeFFmpegService implements FFmpegService {
       cameraUrl.value,
       "-t",
       "5", // Test for 5 seconds
+      "-vn",
       "-f",
       "null",
       "-",
@@ -288,7 +302,9 @@ export class NodeFFmpegService implements FFmpegService {
   public buildStreamCommand(
     cameraUrl: StreamUrl,
     streamKey: string,
-    hasAudio: boolean
+    hasAudio: boolean,
+    courtId: string,
+    isScorecardActivated?: boolean
   ): FFmpegCommand {
     const rtmpUrl = `rtmp://a.rtmp.youtube.com/live2/${streamKey}`;
     let fakeAudioInputCounter = 0;
@@ -316,14 +332,42 @@ export class NodeFFmpegService implements FFmpegService {
     const dsInputIndex = 1 + fakeAudioInputCounter;
     args.push("-i", this.clientLogoPath); // Input 2: Client logo
     const clientInputIndex = 2 + fakeAudioInputCounter;
-    // position them correctly using filter complex
-    const filterComplex = [
-      `[${dsInputIndex}:v] scale=500:-1:force_original_aspect_ratio=decrease [ds];`,
-      `[${clientInputIndex}:v] scale=350:-1:force_original_aspect_ratio=decrease [client];`,
-      "[0:v] scale=1920:1080 [base];",
-      "[base][ds] overlay=main_w-overlay_w-10:main_h-overlay_h-10 [tmp1];",
-      "[tmp1][client] overlay=main_w-overlay_w-10:10",
-    ].join(" ");
+    
+    let filterComplex = "";
+    
+    if (isScorecardActivated) {
+      const scoreOverlayPath = this.getScoreOverlayPath(courtId);
+      this.ensureScoreOverlay(scoreOverlayPath);
+
+      // Treat the overlay PNG as a continuously looping sequence of images
+      // This allows FFmpeg to reflect file updates cleanly as they are overwritten
+      args.push("-f", "image2", "-loop", "1", "-i", scoreOverlayPath); 
+      const scoreInputIndex = 3 + fakeAudioInputCounter;
+
+      // position them correctly using filter complex
+      filterComplex = [
+        "[0:v] scale=1920:1080 [base];",
+        // Top-left score overlay
+        `[${scoreInputIndex}:v] scale=420:-1:force_original_aspect_ratio=decrease [score];`,
+        // Bottom-right DropShot watermark
+        `[${dsInputIndex}:v] scale=500:-1:force_original_aspect_ratio=decrease [ds];`,
+        // Top-right client logo
+        `[${clientInputIndex}:v] scale=350:-1:force_original_aspect_ratio=decrease [client];`,
+        "[base][score] overlay=30:30 [tmp0];",
+        "[tmp0][ds] overlay=main_w-overlay_w-10:main_h-overlay_h-10 [tmp1];",
+        "[tmp1][client] overlay=main_w-overlay_w-10:10",
+      ].join(" ");
+    } else {
+      filterComplex = [
+        "[0:v] scale=1920:1080 [base];",
+        // Bottom-right DropShot watermark
+        `[${dsInputIndex}:v] scale=500:-1:force_original_aspect_ratio=decrease [ds];`,
+        // Top-right client logo
+        `[${clientInputIndex}:v] scale=350:-1:force_original_aspect_ratio=decrease [client];`,
+        "[base][ds] overlay=main_w-overlay_w-10:main_h-overlay_h-10 [tmp1];",
+        "[tmp1][client] overlay=main_w-overlay_w-10:10",
+      ].join(" ");
+    }
 
     args.push("-filter_complex", filterComplex);
 
@@ -397,5 +441,36 @@ export class NodeFFmpegService implements FFmpegService {
       dsLogo: dsLogoPath,
       clientLogo: clientLogoPath,
     });
+  }
+
+  private ensureScoreOverlay(scoreOverlayPath: string): void {
+    if (!fs.existsSync(scoreOverlayPath)) {
+      this.createDefaultScoreOverlay(scoreOverlayPath);
+    }
+  }
+
+  private getScoreOverlayPath(courtId: string): string {
+    return path.join(this.scoreOverlayDir, `${courtId}.png`);
+  }
+
+  private createDefaultScoreOverlay(scoreOverlayPath: string): void {
+    const width = 420;
+    const height = 120;
+    
+    const canvas = createCanvas(width, height);
+    const ctx = canvas.getContext('2d');
+
+    // Make transparent background
+    ctx.clearRect(0, 0, width, height);
+
+    // Initial scoreboard starts completely invisible (transparent PNG).
+    // The SupabaseListener will overwrite this file with actual shapes
+    // and text once real game score data is received.
+
+    // Ensure temp directory exists and write final overlay
+    fs.mkdirSync(path.dirname(scoreOverlayPath), { recursive: true });
+    
+    const buffer = canvas.encodeSync('png');
+    fs.writeFileSync(scoreOverlayPath, buffer);
   }
 }

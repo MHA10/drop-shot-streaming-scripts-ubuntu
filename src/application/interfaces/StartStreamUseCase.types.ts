@@ -5,6 +5,7 @@ export interface StartStreamRequest {
   streamKey: string;
   courtId: string;
   detectAudio?: boolean;
+  isScorecardActivated?: boolean;
 }
 
 export interface StartStreamResponse {

@@ -11,6 +11,8 @@ import { HttpClient } from "./HttpClient";
 import * as fs from "fs/promises";
 import * as path from "path";
 import * as https from "https";
+import { SupabaseListener } from "../../infrastructure/listeners/SupabaseListener";
+import { v2 as cloudinaryClient } from "cloudinary";
 
 export class StreamManagerService {
   private healthCheckInterval?: NodeJS.Timeout;
@@ -24,7 +26,8 @@ export class StreamManagerService {
     private readonly stopStreamUseCase: StopStreamUseCase,
     private readonly logger: Logger,
     private readonly config: Config,
-    private readonly httpClient: HttpClient
+    private readonly httpClient: HttpClient,
+    private readonly supabaseListener?: SupabaseListener
   ) {}
 
   public async start(): Promise<void> {
@@ -238,15 +241,24 @@ export class StreamManagerService {
 
   private async handleStartEvent(event: SSEStreamEvent) {
     this.logger.info("Handling new stream");
-    await this.startStreamUseCase.execute(
+    const result = await this.startStreamUseCase.execute(
       {
         cameraUrl: event.cameraUrl,
         streamKey: event.streamKey,
         courtId: event.courtId,
         detectAudio: true,
+        isScorecardActivated: event.isScorecardActivated,
       },
       this.stopStreamUseCase
     );
+
+    // If stream started successfully (has a streamId), subscribe to updates
+    if (result && result.streamId && this.supabaseListener && event.isScorecardActivated) {
+      this.logger.info("Subscribing to realtime updates for court", {
+        courtId: event.courtId,
+      });
+      this.supabaseListener.subscribeToCourt(event.courtId);
+    }
   }
 
   private async handleStopEvent(event: SSEStreamEvent) {
@@ -263,6 +275,14 @@ export class StreamManagerService {
       await this.stopStreamUseCase.execute({
         streamId: targetStream.id.value,
       });
+
+      // Unsubscribe from updates
+      if (this.supabaseListener) {
+        this.logger.info("Unsubscribing from realtime updates for court", {
+          courtId: event.courtId,
+        });
+        await this.supabaseListener.unsubscribeFromCourt(event.courtId);
+      }
     } else {
       this.logger.warn("Stream not found for stop event", {
         cameraUrl: event.cameraUrl,
@@ -359,6 +379,11 @@ export class StreamManagerService {
           await this.stopStreamUseCase.execute({
             streamId: stream.id.value,
           });
+
+          // Unsubscribe from updates using the courtId from the stream
+          if (this.supabaseListener && stream.courtId) {
+            await this.supabaseListener.unsubscribeFromCourt(stream.courtId);
+          }
         } catch (error) {
           this.logger.error("Failed to stop stream during shutdown", {
             streamId: stream.id.value,
@@ -379,52 +404,85 @@ export class StreamManagerService {
   private async validateRequiredImages(): Promise<void> {
     this.logger.info("Validating required images");
 
-    const requiredImages = [
-      {
-        name: "DropShot logo",
-        localPath: "public/ds.png",
-        downloadUrl:
-          "https://raw.githubusercontent.com/DropShot-Live/static-images/main/ds-watermark.png",
-      },
-      {
-        name: "Client logo",
-        localPath: "public/client.png",
-        downloadUrl:
-          "https://raw.githubusercontent.com/DropShot-Live/static-images/main/padel-central.png",
-      },
-    ];
+    // 1. Download/Verify standard DropShot Logo
+    const dsLogo = {
+      name: "DropShot logo",
+      localPath: "public/ds.png",
+      downloadUrl:
+        "https://raw.githubusercontent.com/DropShot-Live/static-images/main/ds-watermark.png",
+    };
 
-    for (const image of requiredImages) {
-      const fullPath = path.resolve(image.localPath);
+    const dsFullPath = path.resolve(dsLogo.localPath);
+    const dsExists = await fs.access(dsFullPath).then(() => true).catch(() => false);
 
+    if (dsExists) {
+      this.logger.info(`${dsLogo.name} found at ${dsLogo.localPath}`);
+    } else {
+      this.logger.warn(`${dsLogo.name} not found at ${dsLogo.localPath}, downloading...`);
       try {
-        await fs.access(fullPath);
-        this.logger.info(`${image.name} found at ${image.localPath}`);
-      } catch (error) {
-        this.logger.warn(
-          `${image.name} not found at ${image.localPath}, downloading...`
-        );
+        await fs.mkdir(path.dirname(dsFullPath), { recursive: true });
+        await this.downloadFile(dsLogo.downloadUrl, dsFullPath);
+        this.logger.info(`Successfully downloaded ${dsLogo.name} to ${dsLogo.localPath}`);
+      } catch (downloadError) {
+        this.logger.error(`Failed to download ${dsLogo.name}`, { error: downloadError instanceof Error ? downloadError.message : String(downloadError) });
+        throw new Error(`Failed to download required image: ${dsLogo.name}`);
+      }
+    }
 
-        try {
-          // Ensure the public directory exists
-          await fs.mkdir(path.dirname(fullPath), { recursive: true });
+    // 2. Fetch ground-specific client logo from Cloudinary
+    const groundId = this.config.get().groundInfo.groundId;
+    const clientPath = this.config.get().images.clientPath || "public/client.png";
+    const clientFullPath = path.resolve(clientPath);
+    
+    try {
+      // Ensure the public directory exists regardless
+      await fs.mkdir(path.dirname(clientFullPath), { recursive: true });
 
-          // Download the image
-          await this.downloadFile(image.downloadUrl, fullPath);
-          this.logger.info(
-            `Successfully downloaded ${image.name} to ${image.localPath}`
-          );
-        } catch (downloadError) {
-          this.logger.error(`Failed to download ${image.name}`, {
-            error:
-              downloadError instanceof Error
-                ? downloadError.message
-                : String(downloadError),
-            url: image.downloadUrl,
-            path: image.localPath,
-          });
-          throw new Error(`Failed to download required image: ${image.name}`);
-        }
+      const cloudinaryConfig = this.config.get().cloudinary;
+      if (!cloudinaryConfig.cloudName || !cloudinaryConfig.apiKey || !cloudinaryConfig.apiSecret) {
+        this.logger.warn("Cloudinary configuration missing API Key/Secret. Falling back to specific URL/local file for client logo.");
+        throw new Error("Missing Cloudinary credentials");
+      }
+
+      cloudinaryClient.config({
+        cloud_name: cloudinaryConfig.cloudName,
+        api_key: cloudinaryConfig.apiKey,
+        api_secret: cloudinaryConfig.apiSecret
+      });
+
+      this.logger.info(`Searching Cloudinary for latest logo for ground: ${groundId}`);
+      const result = await cloudinaryClient.search
+        .expression(`folder:dropshot/padel-courts/${groundId}`)
+        .sort_by('created_at', 'desc')
+        .max_results(1)
+        .execute();
+
+      if (result.resources && result.resources.length > 0) {
+        const latestLogoUrl = result.resources[0].secure_url;
+        this.logger.info(`Found latest ground logo on Cloudinary: ${latestLogoUrl}. Downloading...`);
+        // Overwrite the local client.png with the latest from Cloudinary
+        await this.downloadFile(latestLogoUrl, clientFullPath);
+        this.logger.info(`Successfully synchronized latest client logo to ${clientPath}`);
+      } else {
+        this.logger.warn(`No logo found on Cloudinary for ground ${groundId}. Checking existing local file.`);
+        await fs.access(clientFullPath); // Will throw if file doesn't exist at all
+      }
+    } catch (error: any) {
+      this.logger.warn(`Failed to dynamically fetch client logo from Cloudinary: ${error.message || error}. Falling back to default URL check.`);
+      
+      // Fallback: use existing local file, or copy the DS logo as the client logo
+      try {
+        await fs.access(clientFullPath);
+        this.logger.info(`Using existing local client logo at ${clientPath}`);
+      } catch (fallbackError) {
+         this.logger.warn(`Local client logo also missing. Falling back to DS logo.`);
+         const dsLogoSource = path.resolve("public/ds.png");
+         try {
+           await fs.copyFile(dsLogoSource, clientFullPath);
+           this.logger.info(`Copied DS logo as fallback client logo to ${clientPath}`);
+         } catch(e) {
+             throw new Error("Failed to secure ANY client logo (neither Cloudinary nor DS logo fallback)");
+         }
       }
     }
 

@@ -34,6 +34,18 @@ export interface AppConfig {
     retryAttempts: number;
     retryDelay: number;
   };
+  supabase: {
+    enabled: boolean;
+    url: string;
+    anonKey: string;
+    tableName: string;
+    channelName: string;
+  };
+  cloudinary: {
+    cloudName: string;
+    apiKey: string;
+    apiSecret: string;
+  };
   environment: string;
 }
 
@@ -112,6 +124,18 @@ export class Config {
         retryDelay: parseInt(
           this.getEnvVar("REMOTE_LOGGING_RETRY_DELAY", "5000")
         ), // 5 seconds
+      },
+      supabase: {
+        enabled: this.getEnvVar("SUPABASE_ENABLED", "false") === "true",
+        url: this.getEnvVar("SUPABASE_URL", ""),
+        anonKey: this.getEnvVar("SUPABASE_ANON_KEY", ""),
+        tableName: this.getEnvVar("SUPABASE_TABLE_NAME", "score_board"),
+        channelName: this.getEnvVar("SUPABASE_CHANNEL_NAME", "score_board_channel"),
+      },
+      cloudinary: {
+        cloudName: this.getEnvVar("REACT_APP_CLOUDINARY_CLOUD_NAME", "duca7omur"),
+        apiKey: this.getEnvVar("CLOUDINARY_API_KEY", ""),
+        apiSecret: this.getEnvVar("CLOUDINARY_API_SECRET", ""),
       },
       environment: this.getEnvVar("NODE_ENV", "development"),
     };
