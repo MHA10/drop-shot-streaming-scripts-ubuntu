@@ -202,6 +202,46 @@ Located at: `~/Documents/drop-shot-streaming-scripts-ubuntu/.env`
 
 ---
 
+## Updating Streamers with New npm Package
+
+When a new version is published to npm via the GitHub workflow, existing streamers need to be restarted to pick up the latest version.
+
+### Steps after a new npm publish:
+
+```bash
+# SSH into the streamer
+ssh padel-bridge@100.100.94.17
+
+# Restart the streamer
+pm2 restart streamer-<GROUND_ID>
+
+# Verify new version is running
+pm2 logs streamer-<GROUND_ID> --lines 10 --nostream | grep "version"
+```
+
+### Verify .env is loaded correctly after restart:
+```bash
+pm2 logs streamer-<GROUND_ID> --lines 50 --nostream | grep -E "Loaded environment|Supabase|cloudinary|version"
+```
+
+Expected output:
+```
+[STREAMER] Loaded environment from .../drop-shot-streaming-scripts-ubuntu/.env
+[CONFIG] Configuration loaded successfully
+INFO: Current version: x.x.x
+INFO: Supabase client initialized
+INFO: Found latest ground logo on Cloudinary
+```
+
+### Verify correct client logo:
+```bash
+ls -lh ~/Documents/drop-shot-streaming-scripts-ubuntu/public/client.png
+file ~/Documents/drop-shot-streaming-scripts-ubuntu/public/client.png
+```
+Cross-check dimensions with Cloudinary admin console for the ground's folder.
+
+---
+
 ## Troubleshooting
 
 ### PM2 not found after reboot
