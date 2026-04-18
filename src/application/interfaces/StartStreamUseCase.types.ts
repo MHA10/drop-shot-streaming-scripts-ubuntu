@@ -6,6 +6,10 @@ export interface StartStreamRequest {
   courtId: string;
   detectAudio?: boolean;
   isScorecardActivated?: boolean;
+  ads?: {
+    left?: string | null;
+    right?: string | null;
+  };
 }
 
 export interface StartStreamResponse {

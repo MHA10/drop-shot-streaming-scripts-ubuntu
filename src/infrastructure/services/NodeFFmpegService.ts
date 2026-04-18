@@ -7,6 +7,7 @@ import {
   FFmpegService,
   FFmpegCommand,
   FFmpegProcess,
+  AdOverlayPaths,
 } from "../../domain/services/FFmpegService";
 import { StreamUrl } from "../../domain/value-objects/StreamUrl";
 import { Logger } from "../../application/interfaces/Logger";
@@ -45,14 +46,16 @@ export class NodeFFmpegService implements FFmpegService {
       event: StartStreamRequest;
       onRetryStream: (event: StartStreamRequest) => Promise<void>;
     },
-    isScorecardActivated?: boolean
+    isScorecardActivated?: boolean,
+    adPaths?: AdOverlayPaths
   ): Promise<FFmpegProcess> {
     const command = this.buildStreamCommand(
       cameraUrl,
       streamKey,
       hasAudio,
       courtId,
-      isScorecardActivated
+      isScorecardActivated,
+      adPaths
     );
     this.logger.info("Command full form", command);
 
@@ -304,7 +307,8 @@ export class NodeFFmpegService implements FFmpegService {
     streamKey: string,
     hasAudio: boolean,
     courtId: string,
-    isScorecardActivated?: boolean
+    isScorecardActivated?: boolean,
+    adPaths?: AdOverlayPaths
   ): FFmpegCommand {
     const rtmpUrl = `rtmp://a.rtmp.youtube.com/live2/${streamKey}`;
     let fakeAudioInputCounter = 0;
@@ -333,76 +337,101 @@ export class NodeFFmpegService implements FFmpegService {
     args.push("-i", this.clientLogoPath); // Input 2: Client logo
     const clientInputIndex = 2 + fakeAudioInputCounter;
 
-    // Optional looping ad overlay (bottom-left). Enabled only when ./ad/ad.gif exists.
-    const adPath = path.resolve("./ad/ad.gif");
-    const hasAd = fs.existsSync(adPath);
+    let nextInputIndex = 3 + fakeAudioInputCounter;
 
     let filterComplex = "";
 
+    // Optional scorecard overlay (top-left). Adds one input before any ads.
+    let scoreInputIndex: number | null = null;
     if (isScorecardActivated) {
       const scoreOverlayPath = this.getScoreOverlayPath(courtId);
       this.ensureScoreOverlay(scoreOverlayPath);
-
       // Treat the overlay PNG as a continuously looping sequence of images
       // This allows FFmpeg to reflect file updates cleanly as they are overwritten
       args.push("-f", "image2", "-loop", "1", "-i", scoreOverlayPath);
-      const scoreInputIndex = 3 + fakeAudioInputCounter;
-
-      const steps = [
-        "[0:v] scale=1920:1080 [base];",
-        // Top-left score overlay
-        `[${scoreInputIndex}:v] scale=420:-1:force_original_aspect_ratio=decrease [score];`,
-        // Bottom-right DropShot watermark
-        `[${dsInputIndex}:v] scale=500:140:force_original_aspect_ratio=decrease [ds];`,
-        // Top-right client logo
-        `[${clientInputIndex}:v] scale=400:140:force_original_aspect_ratio=decrease [client];`,
-        "[base][score] overlay=30:30 [tmp0];",
-        "[tmp0][ds] overlay=main_w-overlay_w-10:main_h-overlay_h-10 [tmp1];",
-      ];
-
-      if (hasAd) {
-        args.push("-stream_loop", "-1", "-re", "-i", adPath);
-        const adInputIndex = 4 + fakeAudioInputCounter;
-        steps.push(
-          "[tmp1][client] overlay=main_w-overlay_w-10:10 [tmp2];",
-          `[${adInputIndex}:v] scale=220:500:force_original_aspect_ratio=decrease [ad];`,
-          "[tmp2][ad] overlay=main_w-overlay_w-10:(main_h-overlay_h)/2 [vout]"
-        );
-      } else {
-        steps.push("[tmp1][client] overlay=main_w-overlay_w-10:10");
-      }
-
-      filterComplex = steps.join(" ");
-    } else {
-      const steps = [
-        "[0:v] scale=1920:1080 [base];",
-        // Bottom-right DropShot watermark
-        `[${dsInputIndex}:v] scale=500:140:force_original_aspect_ratio=decrease [ds];`,
-        // Top-right client logo
-        `[${clientInputIndex}:v] scale=400:140:force_original_aspect_ratio=decrease [client];`,
-        "[base][ds] overlay=main_w-overlay_w-10:main_h-overlay_h-10 [tmp1];",
-      ];
-
-      if (hasAd) {
-        args.push("-stream_loop", "-1", "-re", "-i", adPath);
-        const adInputIndex = 3 + fakeAudioInputCounter;
-        steps.push(
-          "[tmp1][client] overlay=main_w-overlay_w-10:10 [tmp2];",
-          `[${adInputIndex}:v] scale=220:500:force_original_aspect_ratio=decrease [ad];`,
-          "[tmp2][ad] overlay=main_w-overlay_w-10:(main_h-overlay_h)/2 [vout]"
-        );
-      } else {
-        steps.push("[tmp1][client] overlay=main_w-overlay_w-10:10");
-      }
-
-      filterComplex = steps.join(" ");
+      scoreInputIndex = nextInputIndex++;
     }
+
+    // Resolve left/right ad paths and push each as a new input if present.
+    const leftAdPath =
+      adPaths?.left && fs.existsSync(adPaths.left) ? adPaths.left : null;
+    const rightAdPath =
+      adPaths?.right && fs.existsSync(adPaths.right) ? adPaths.right : null;
+
+    let leftAdInputIndex: number | null = null;
+    let rightAdInputIndex: number | null = null;
+
+    if (leftAdPath) {
+      args.push(...this.buildAdInputFlags(leftAdPath));
+      leftAdInputIndex = nextInputIndex++;
+    }
+    if (rightAdPath) {
+      args.push(...this.buildAdInputFlags(rightAdPath));
+      rightAdInputIndex = nextInputIndex++;
+    }
+
+    const hasAnyAd = leftAdInputIndex !== null || rightAdInputIndex !== null;
+
+    // Build filter graph
+    const steps: string[] = ["[0:v] scale=1920:1080 [base];"];
+
+    if (scoreInputIndex !== null) {
+      steps.push(
+        `[${scoreInputIndex}:v] scale=420:-1:force_original_aspect_ratio=decrease [score];`
+      );
+    }
+    steps.push(
+      `[${dsInputIndex}:v] scale=500:140:force_original_aspect_ratio=decrease [ds];`,
+      `[${clientInputIndex}:v] scale=400:140:force_original_aspect_ratio=decrease [client];`
+    );
+    if (leftAdInputIndex !== null) {
+      steps.push(
+        `[${leftAdInputIndex}:v] scale=220:500:force_original_aspect_ratio=decrease [leftAd];`
+      );
+    }
+    if (rightAdInputIndex !== null) {
+      steps.push(
+        `[${rightAdInputIndex}:v] scale=220:500:force_original_aspect_ratio=decrease [rightAd];`
+      );
+    }
+
+    // Overlay chain: base → (score) → ds → client → (leftAd) → (rightAd)
+    if (scoreInputIndex !== null) {
+      steps.push(
+        "[base][score] overlay=30:30 [tmp0];",
+        "[tmp0][ds] overlay=main_w-overlay_w-10:main_h-overlay_h-10 [tmp1];"
+      );
+    } else {
+      steps.push("[base][ds] overlay=main_w-overlay_w-10:main_h-overlay_h-10 [tmp1];");
+    }
+
+    // After client overlay: label output [tmp2] if ads follow, else leave unlabeled (final output)
+    if (hasAnyAd) {
+      steps.push("[tmp1][client] overlay=main_w-overlay_w-10:10 [tmp2];");
+
+      if (leftAdInputIndex !== null && rightAdInputIndex !== null) {
+        steps.push(
+          "[tmp2][leftAd] overlay=10:(main_h-overlay_h)/2 [tmp3];",
+          "[tmp3][rightAd] overlay=main_w-overlay_w-10:(main_h-overlay_h)/2 [vout]"
+        );
+      } else if (leftAdInputIndex !== null) {
+        steps.push("[tmp2][leftAd] overlay=10:(main_h-overlay_h)/2 [vout]");
+      } else {
+        steps.push(
+          "[tmp2][rightAd] overlay=main_w-overlay_w-10:(main_h-overlay_h)/2 [vout]"
+        );
+      }
+    } else {
+      steps.push("[tmp1][client] overlay=main_w-overlay_w-10:10");
+    }
+
+    filterComplex = steps.join(" ");
 
     args.push("-filter_complex", filterComplex);
 
-    // When ad input is present its audio track would otherwise confuse
-    // ffmpeg's default stream selection — map video/audio explicitly.
-    if (hasAd) {
+    // When any ad input is present, map video/audio explicitly so ffmpeg
+    // doesn't auto-select an ad's audio stream.
+    if (hasAnyAd) {
       args.push("-map", "[vout]");
       args.push("-map", `${fakeAudioInputCounter}:a`);
     }
@@ -459,6 +488,17 @@ export class NodeFFmpegService implements FFmpegService {
 
     await Promise.all(killPromises);
     this.runningProcesses.clear();
+  }
+
+  // Pick the right ffmpeg input flags for an ad file based on its extension.
+  // Animated formats (mp4/gif/webm/mov) loop via stream_loop; stills via image2 loop.
+  private buildAdInputFlags(adPath: string): string[] {
+    const ext = path.extname(adPath).slice(1).toLowerCase();
+    const videoExts = new Set(["mp4", "gif", "webm", "mov", "avi", "mkv"]);
+    if (videoExts.has(ext)) {
+      return ["-stream_loop", "-1", "-re", "-i", adPath];
+    }
+    return ["-f", "image2", "-loop", "1", "-i", adPath];
   }
 
   private validateImageFiles(): void {

@@ -4,6 +4,8 @@
 **/node_modules/
 # ignore public data with images
 /public/
+# ignore runtime-downloaded ad files
+/ad/
 
 .env
 

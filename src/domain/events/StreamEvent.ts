@@ -51,6 +51,10 @@ export interface SSEStreamEvent extends DomainEvent {
   readonly streamKey: string;
   readonly reconciliationMode?: boolean;
   readonly isScorecardActivated?: boolean;
+  readonly ads?: {
+    readonly left?: string | null;
+    readonly right?: string | null;
+  };
 }
 
 export type StreamDomainEvent =

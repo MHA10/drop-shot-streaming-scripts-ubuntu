@@ -5,6 +5,7 @@ import { Config } from "./infrastructure/config/Config";
 import { FileSystemStreamRepository } from "./infrastructure/repositories/FileSystemStreamRepository";
 import { NodeFFmpegService } from "./infrastructure/services/NodeFFmpegService";
 import { NodeSSEService } from "./infrastructure/services/NodeSSEService";
+import { AdDownloaderService } from "./infrastructure/services/AdDownloaderService";
 import { StartStreamUseCase } from "./application/use-cases/StartStreamUseCase";
 import { StopStreamUseCase } from "./application/use-cases/StopStreamUseCase";
 import { StreamManagerService } from "./application/services/StreamManagerService";
@@ -43,13 +44,15 @@ class Application {
       );
       const ffmpegService = new NodeFFmpegService(this.logger, config);
       const sseService = new NodeSSEService(this.logger);
+      const adDownloader = new AdDownloaderService(this.logger);
 
       // Initialize use cases
       const startStreamUseCase = new StartStreamUseCase(
         streamRepository,
         ffmpegService,
         this.logger,
-        this.httpClient
+        this.httpClient,
+        adDownloader
       );
 
       const stopStreamUseCase = new StopStreamUseCase(

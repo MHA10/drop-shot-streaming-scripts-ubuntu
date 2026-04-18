@@ -7,6 +7,7 @@ import { Logger } from "../interfaces/Logger";
 import { HttpClient } from "../services/HttpClient";
 import { Config } from "../../infrastructure/config/Config";
 import { StreamState } from "../../domain/value-objects/StreamState";
+import { AdDownloaderService } from "../../infrastructure/services/AdDownloaderService";
 import { StopStreamUseCase } from "./StopStreamUseCase";
 import {
   ShouldStartStream,
@@ -23,7 +24,8 @@ export class StartStreamUseCase {
     private readonly streamRepository: StreamRepository,
     private readonly ffmpegService: FFmpegService,
     private readonly logger: Logger,
-    private readonly httpClient: HttpClient
+    private readonly httpClient: HttpClient,
+    private readonly adDownloader: AdDownloaderService
   ) {}
 
   private async shouldStartNewStream(
@@ -253,6 +255,12 @@ export class StartStreamUseCase {
         await this.execute(request, stopUseCase);
       };
 
+      // Resolve ad URLs to local paths (null if missing or download fails — stream continues without them)
+      const [leftAdPath, rightAdPath] = await Promise.all([
+        this.adDownloader.download(request.ads?.left, request.courtId, "left"),
+        this.adDownloader.download(request.ads?.right, request.courtId, "right"),
+      ]);
+
       const ffmpegProcess = await this.ffmpegService.startStream(
         cameraUrl,
         request.streamKey,
@@ -262,7 +270,8 @@ export class StartStreamUseCase {
           event: request,
           onRetryStream,
         },
-        request.isScorecardActivated
+        request.isScorecardActivated,
+        { left: leftAdPath, right: rightAdPath }
       );
 
       // Update stream with process ID
