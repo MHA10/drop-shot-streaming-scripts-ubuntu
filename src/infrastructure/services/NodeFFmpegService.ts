@@ -332,20 +332,23 @@ export class NodeFFmpegService implements FFmpegService {
     const dsInputIndex = 1 + fakeAudioInputCounter;
     args.push("-i", this.clientLogoPath); // Input 2: Client logo
     const clientInputIndex = 2 + fakeAudioInputCounter;
-    
+
+    // Optional looping ad overlay (bottom-left). Enabled only when ./ad/ad.gif exists.
+    const adPath = path.resolve("./ad/ad.gif");
+    const hasAd = fs.existsSync(adPath);
+
     let filterComplex = "";
-    
+
     if (isScorecardActivated) {
       const scoreOverlayPath = this.getScoreOverlayPath(courtId);
       this.ensureScoreOverlay(scoreOverlayPath);
 
       // Treat the overlay PNG as a continuously looping sequence of images
       // This allows FFmpeg to reflect file updates cleanly as they are overwritten
-      args.push("-f", "image2", "-loop", "1", "-i", scoreOverlayPath); 
+      args.push("-f", "image2", "-loop", "1", "-i", scoreOverlayPath);
       const scoreInputIndex = 3 + fakeAudioInputCounter;
 
-      // position them correctly using filter complex
-      filterComplex = [
+      const steps = [
         "[0:v] scale=1920:1080 [base];",
         // Top-left score overlay
         `[${scoreInputIndex}:v] scale=420:-1:force_original_aspect_ratio=decrease [score];`,
@@ -355,21 +358,54 @@ export class NodeFFmpegService implements FFmpegService {
         `[${clientInputIndex}:v] scale=350:-1:force_original_aspect_ratio=decrease [client];`,
         "[base][score] overlay=30:30 [tmp0];",
         "[tmp0][ds] overlay=main_w-overlay_w-10:main_h-overlay_h-10 [tmp1];",
-        "[tmp1][client] overlay=main_w-overlay_w-10:10",
-      ].join(" ");
+      ];
+
+      if (hasAd) {
+        args.push("-stream_loop", "-1", "-re", "-i", adPath);
+        const adInputIndex = 4 + fakeAudioInputCounter;
+        steps.push(
+          "[tmp1][client] overlay=main_w-overlay_w-10:10 [tmp2];",
+          `[${adInputIndex}:v] scale=400:-1:force_original_aspect_ratio=decrease [ad];`,
+          "[tmp2][ad] overlay=10:main_h-overlay_h-10 [vout]"
+        );
+      } else {
+        steps.push("[tmp1][client] overlay=main_w-overlay_w-10:10");
+      }
+
+      filterComplex = steps.join(" ");
     } else {
-      filterComplex = [
+      const steps = [
         "[0:v] scale=1920:1080 [base];",
         // Bottom-right DropShot watermark
         `[${dsInputIndex}:v] scale=500:-1:force_original_aspect_ratio=decrease [ds];`,
         // Top-right client logo
         `[${clientInputIndex}:v] scale=350:-1:force_original_aspect_ratio=decrease [client];`,
         "[base][ds] overlay=main_w-overlay_w-10:main_h-overlay_h-10 [tmp1];",
-        "[tmp1][client] overlay=main_w-overlay_w-10:10",
-      ].join(" ");
+      ];
+
+      if (hasAd) {
+        args.push("-stream_loop", "-1", "-re", "-i", adPath);
+        const adInputIndex = 3 + fakeAudioInputCounter;
+        steps.push(
+          "[tmp1][client] overlay=main_w-overlay_w-10:10 [tmp2];",
+          `[${adInputIndex}:v] scale=400:-1:force_original_aspect_ratio=decrease [ad];`,
+          "[tmp2][ad] overlay=10:main_h-overlay_h-10 [vout]"
+        );
+      } else {
+        steps.push("[tmp1][client] overlay=main_w-overlay_w-10:10");
+      }
+
+      filterComplex = steps.join(" ");
     }
 
     args.push("-filter_complex", filterComplex);
+
+    // When ad input is present its audio track would otherwise confuse
+    // ffmpeg's default stream selection — map video/audio explicitly.
+    if (hasAd) {
+      args.push("-map", "[vout]");
+      args.push("-map", `${fakeAudioInputCounter}:a`);
+    }
 
     // audio & video output configurations
     args.push(
