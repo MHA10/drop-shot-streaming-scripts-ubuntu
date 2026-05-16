@@ -372,12 +372,12 @@ echo "       - tailscale status → connected"
 echo ""
 echo -e "${YELLOW}=============================================${NC}"
 echo ""
-echo "  1. BIOS AUTO POWER-ON (AC RECOVERY)
-       Go to:  BIOS settings at startup (F1 for Lenovo, F2 for Dell)
-       Find:   Power → After Power Loss (or AC Recovery)
-       Set to: Power On
-       Save:   F10
-       Why:    Machine will auto boot when power is connected/restored
+echo "  1. BIOS AUTO POWER-ON (AC RECOVERY)"
+echo "       Go to:  BIOS at startup (F1 Lenovo / F2 Dell)"
+echo "       Find:   Power → After Power Loss (or AC Recovery)"
+echo "       Set to: Power On"
+echo "       Save:   F10"
+echo "       Why:    Machine auto boots when power is connected/restored"
 echo ""
 echo "  2. TAILSCALE AUTHENTICATION"
 echo "       Run:    sudo tailscale up"
@@ -442,13 +442,13 @@ check "PM2 startup configured"         "systemctl is-enabled pm2-$USER"
 check "OpenSSH server running"         "systemctl is-active ssh"
 check "Tailscale installed"            "command -v tailscale"
 check "Repo cloned"                    "[ -d $HOME/Documents/drop-shot-streaming-scripts-ubuntu ]"
-check ".env file created"               "[ -f $HOME/Documents/drop-shot-streaming-scripts-ubuntu/.env ]"
+check ".env file created"              "[ -f $HOME/Documents/drop-shot-streaming-scripts-ubuntu/.env ]"
 check "Screen lock disabled"           "gsettings get org.gnome.desktop.screensaver lock-enabled | grep -q false"
 check "Auto sleep disabled"            "gsettings get org.gnome.settings-daemon.plugins.power sleep-inactive-ac-type | grep -q nothing"
 echo ""
 
 if [ "$FAIL" -eq 0 ]; then
-    echo -e "  \033[0;32mAll $PASS checks passed! Streamer B is ready.\033[0m"
+    echo -e "  \033[0;32mAll $PASS checks passed! Streamer is ready.\033[0m"
 else
     echo -e "  Results: \033[0;32m$PASS passed\033[0m  /  \033[0;31m$FAIL failed\033[0m"
     echo -e "  \033[0;31mPlease review the failed steps above.\033[0m"
