@@ -350,9 +350,9 @@ export class NodeFFmpegService implements FFmpegService {
         // Top-left score overlay
         `[${scoreInputIndex}:v] scale=420:-1:force_original_aspect_ratio=decrease [score];`,
         // Bottom-right DropShot watermark
-        `[${dsInputIndex}:v] scale=500:-1:force_original_aspect_ratio=decrease [ds];`,
+        `[${dsInputIndex}:v] scale=500:140:force_original_aspect_ratio=decrease [ds];`,
         // Top-right client logo
-        `[${clientInputIndex}:v] scale=350:-1:force_original_aspect_ratio=decrease [client];`,
+        `[${clientInputIndex}:v] scale=400:140:force_original_aspect_ratio=decrease [client];`,
         "[base][score] overlay=30:30 [tmp0];",
         "[tmp0][ds] overlay=main_w-overlay_w-10:main_h-overlay_h-10 [tmp1];",
         "[tmp1][client] overlay=main_w-overlay_w-10:10",
@@ -361,9 +361,9 @@ export class NodeFFmpegService implements FFmpegService {
       filterComplex = [
         "[0:v] scale=1920:1080 [base];",
         // Bottom-right DropShot watermark
-        `[${dsInputIndex}:v] scale=500:-1:force_original_aspect_ratio=decrease [ds];`,
+        `[${dsInputIndex}:v] scale=500:140:force_original_aspect_ratio=decrease [ds];`,
         // Top-right client logo
-        `[${clientInputIndex}:v] scale=350:-1:force_original_aspect_ratio=decrease [client];`,
+        `[${clientInputIndex}:v] scale=400:140:force_original_aspect_ratio=decrease [client];`,
         "[base][ds] overlay=main_w-overlay_w-10:main_h-overlay_h-10 [tmp1];",
         "[tmp1][client] overlay=main_w-overlay_w-10:10",
       ].join(" ");
