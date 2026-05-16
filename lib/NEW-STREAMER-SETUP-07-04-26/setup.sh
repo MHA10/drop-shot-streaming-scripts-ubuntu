@@ -3,7 +3,8 @@
 # Streamer Setup Script
 # Description: Complete automated setup for a new Ubuntu streamer machine
 # Usage: bash setup.sh
-# Or with ground ID preset: export DROPSHOT_GROUND_ID="your-id" && bash setup.sh
+# Or with presets: export DROPSHOT_GROUND_ID="your-id" BASE_URL="https://api.drop-shot.live" && bash setup.sh
+# BASE_URL defaults to staging if not provided
 # =============================================================================
 
 set -e  # Exit on any error
@@ -65,6 +66,16 @@ if [ -z "${DROPSHOT_GROUND_ID:-}" ]; then
 fi
 
 log_info "Ground ID: $DROPSHOT_GROUND_ID"
+
+# BASE_URL — optional, defaults to staging
+if [ -z "${BASE_URL:-}" ]; then
+    echo ""
+    read -p "  Enter BASE_URL [https://api.staging.drop-shot.live]: " BASE_URL
+    BASE_URL=${BASE_URL:-https://api.staging.drop-shot.live}
+    export BASE_URL
+fi
+
+log_info "Base URL: $BASE_URL"
 echo ""
 
 # =============================================================================
@@ -192,7 +203,7 @@ fi
 log_info "Creating .env file..."
 cat > "$REPO_DIR/.env" << ENVEOF
 # Server Configuration
-BASE_URL=https://api.staging.drop-shot.live
+BASE_URL=$BASE_URL
 
 # Streamer Ground ID
 DROPSHOT_GROUND_ID=$DROPSHOT_GROUND_ID
@@ -316,6 +327,7 @@ echo -e "${GREEN}  Automated Setup Complete!${NC}"
 echo -e "${GREEN}=============================================${NC}"
 echo ""
 echo "  Ground ID : $DROPSHOT_GROUND_ID"
+echo "  Base URL  : $BASE_URL"
 echo "  Service   : streamer-$DROPSHOT_GROUND_ID"
 echo "  Repo      : $REPO_DIR"
 echo ""
