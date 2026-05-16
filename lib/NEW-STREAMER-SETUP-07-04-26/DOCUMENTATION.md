@@ -41,12 +41,21 @@ sudo update-grub
 
 ### Usage
 ```bash
-# Option 1: Preset ground ID
+# Option 1: Preset both (recommended for prod)
+export DROPSHOT_GROUND_ID="your-ground-id" BASE_URL="https://api.drop-shot.live" && bash setup.sh
+
+# Option 2: Preset ground ID only (will prompt for BASE_URL, defaults to staging)
 export DROPSHOT_GROUND_ID="your-ground-id" && bash setup.sh
 
-# Option 2: Script will prompt for it
+# Option 3: Script will prompt for both
 bash setup.sh
 ```
+
+### BASE_URL values
+| Environment | URL |
+|-------------|-----|
+| Staging (default) | `https://api.staging.drop-shot.live` |
+| Production | `https://api.drop-shot.live` |
 
 ### What the script does (10 steps):
 
@@ -141,7 +150,7 @@ Located at: `~/Documents/drop-shot-streaming-scripts-ubuntu/.env`
 
 | Variable | Description |
 |----------|-------------|
-| `BASE_URL` | API server URL |
+| `BASE_URL` | API server URL (staging: `https://api.staging.drop-shot.live` / prod: `https://api.drop-shot.live`) |
 | `DROPSHOT_GROUND_ID` | Unique ground ID (set per machine) |
 | `NODE_ENV` | Environment (development/production) |
 | `SUPABASE_ENABLED` | Enable Supabase real-time listener |
@@ -199,6 +208,49 @@ Located at: `~/Documents/drop-shot-streaming-scripts-ubuntu/.env`
 - **Install:** Automated via script
 - **Auth:** Manual after script (requires browser login)
 - **Verify:** `tailscale status`
+
+---
+
+## Updating Streamers with New npm Package
+
+When a new version is published to npm via the GitHub workflow, existing streamers need to be restarted to pick up the latest version.
+
+### Steps after a new npm publish:
+
+> **Note:** There is no automatic trigger yet — pm2 restart must be done manually via SSH after each publish.
+
+```bash
+# 1. SSH into the streamer
+ssh padel-bridge@100.100.94.17        # Padel Bridge (Streamer B)
+ssh ds@100.70.130.105                  # Staging Streamer (Streamer A)
+
+# 2. Restart the streamer
+pm2 restart streamer-<GROUND_ID>
+
+# 3. Verify new version is running
+pm2 logs streamer-<GROUND_ID> --lines 10 --nostream | grep "version"
+```
+
+### Verify .env is loaded correctly after restart:
+```bash
+pm2 logs streamer-<GROUND_ID> --lines 50 --nostream | grep -E "Loaded environment|Supabase|cloudinary|version"
+```
+
+Expected output:
+```
+[STREAMER] Loaded environment from .../drop-shot-streaming-scripts-ubuntu/.env
+[CONFIG] Configuration loaded successfully
+INFO: Current version: x.x.x
+INFO: Supabase client initialized
+INFO: Found latest ground logo on Cloudinary
+```
+
+### Verify correct client logo:
+```bash
+ls -lh ~/Documents/drop-shot-streaming-scripts-ubuntu/public/client.png
+file ~/Documents/drop-shot-streaming-scripts-ubuntu/public/client.png
+```
+Cross-check dimensions with Cloudinary admin console for the ground's folder.
 
 ---
 
