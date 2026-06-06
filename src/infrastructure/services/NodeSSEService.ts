@@ -4,6 +4,7 @@ import {
   SSEConnectionConfig,
 } from "../../domain/services/SSEService";
 import { SSEStreamEvent } from "../../domain/events/StreamEvent";
+import { AdSpec } from "../../domain/events/StreamEvent";
 import { Logger } from "../../application/interfaces/Logger";
 
 export class NodeSSEService extends EventEmitter implements SSEService {
@@ -285,12 +286,7 @@ export class NodeSSEService extends EventEmitter implements SSEService {
         courtId: parsedData.courtId,
         reconciliationMode: parsedData.reconciliation_mode || false,
         isScorecardActivated: parsedData.isScorecardActivated,
-        ads: parsedData.ads
-          ? {
-              left: parsedData.ads.left ?? null,
-              right: parsedData.ads.right ?? null,
-            }
-          : undefined,
+        ads: this.parseAds(parsedData.ads),
       };
 
       this.logger.info("Processing SSE stream event", {
@@ -309,6 +305,46 @@ export class NodeSSEService extends EventEmitter implements SSEService {
         eventData,
       });
     }
+  }
+
+  /**
+   * Normalize the `ads` field from an SSE payload into an AdSpec[].
+   *
+   * Accepts the new rolling-pool shape (array of { url, duration } or bare URL
+   * strings) and the legacy static shape ({ left, right }) for backward
+   * compatibility during rollout. Returns undefined when no ads are present.
+   */
+  private parseAds(raw: unknown): AdSpec[] | undefined {
+    if (!raw) return undefined;
+
+    const toSpec = (entry: unknown): AdSpec | null => {
+      if (typeof entry === "string") {
+        return entry.trim() ? { url: entry } : null;
+      }
+      if (entry && typeof entry === "object") {
+        const obj = entry as { url?: unknown; duration?: unknown };
+        if (typeof obj.url === "string" && obj.url.trim()) {
+          const duration =
+            typeof obj.duration === "number" && isFinite(obj.duration)
+              ? obj.duration
+              : undefined;
+          return { url: obj.url, durationSec: duration };
+        }
+      }
+      return null;
+    };
+
+    // Normalize both shapes to an entries array, then run the shared pipeline once.
+    // New shape: array of { url, duration } objects or bare URL strings.
+    // Legacy shape: { left, right } static slot object (backward compat during rollout).
+    const entries: unknown[] = Array.isArray(raw)
+      ? raw
+      : typeof raw === "object" && raw !== null
+        ? [(raw as { left?: unknown }).left, (raw as { right?: unknown }).right]
+        : [];
+
+    const specs = entries.map(toSpec).filter((s): s is AdSpec => s !== null);
+    return specs.length > 0 ? specs : undefined;
   }
 
   private scheduleRetry(): void {

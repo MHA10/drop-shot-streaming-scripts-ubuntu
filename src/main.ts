@@ -6,6 +6,7 @@ import { FileSystemStreamRepository } from "./infrastructure/repositories/FileSy
 import { NodeFFmpegService } from "./infrastructure/services/NodeFFmpegService";
 import { NodeSSEService } from "./infrastructure/services/NodeSSEService";
 import { AdDownloaderService } from "./infrastructure/services/AdDownloaderService";
+import { AdRotationRegistry } from "./infrastructure/services/AdRotator";
 import { StartStreamUseCase } from "./application/use-cases/StartStreamUseCase";
 import { StopStreamUseCase } from "./application/use-cases/StopStreamUseCase";
 import { StreamManagerService } from "./application/services/StreamManagerService";
@@ -17,6 +18,7 @@ import { SupabaseListener } from "./infrastructure/listeners/SupabaseListener";
 class Application {
   private streamManager?: StreamManagerService;
   private supabaseListener?: SupabaseListener;
+  private readonly adRotationRegistry = new AdRotationRegistry();
   private readonly logger = new RemoteLogger(
     {
       ...Config.getInstance().get().remoteLogging,
@@ -52,13 +54,15 @@ class Application {
         ffmpegService,
         this.logger,
         this.httpClient,
-        adDownloader
+        adDownloader,
+        this.adRotationRegistry
       );
 
       const stopStreamUseCase = new StopStreamUseCase(
         streamRepository,
         ffmpegService,
-        this.logger
+        this.logger,
+        this.adRotationRegistry
       );
 
       // Initialize Supabase Listener (if enabled)
@@ -116,6 +120,8 @@ class Application {
       this.logger.info(`Received ${signal}, shutting down gracefully`);
 
       try {
+        // Stop all ad rotation timers before tearing down streams.
+        this.adRotationRegistry.stopAll();
         if (this.streamManager) {
           await this.streamManager.stop();
         }

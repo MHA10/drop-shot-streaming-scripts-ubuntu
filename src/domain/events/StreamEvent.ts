@@ -1,5 +1,10 @@
 import { StreamId } from "../value-objects/StreamId";
 
+export interface AdSpec {
+  url: string;
+  durationSec?: number;
+}
+
 export interface DomainEvent {
   readonly eventId: string;
   readonly occurredOn: Date;
@@ -51,10 +56,7 @@ export interface SSEStreamEvent extends DomainEvent {
   readonly streamKey: string;
   readonly reconciliationMode?: boolean;
   readonly isScorecardActivated?: boolean;
-  readonly ads?: {
-    readonly left?: string | null;
-    readonly right?: string | null;
-  };
+  readonly ads?: AdSpec[];
 }
 
 export type StreamDomainEvent =

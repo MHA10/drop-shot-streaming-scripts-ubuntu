@@ -15,6 +15,8 @@ import { StartStreamRequest } from "../../application/interfaces/StartStreamUseC
 import { Config } from "../config/Config";
 
 export class NodeFFmpegService implements FFmpegService {
+  private static readonly VIDEO_EXTS = new Set(["mp4", "gif", "webm", "mov", "avi", "mkv"]);
+
   private readonly runningProcesses: Map<number, FFmpegProcess> = new Map();
   private readonly clientLogoPath: string;
   private readonly scoreOverlayDir: string;
@@ -353,6 +355,10 @@ export class NodeFFmpegService implements FFmpegService {
     }
 
     // Resolve left/right ad paths and push each as a new input if present.
+    // These are fixed PNG "slot" files managed by AdRotator: it overwrites them
+    // on a timer to rotate the pool, and ffmpeg reflects each new file via the
+    // image2 loop below (same live-reload trick as the score overlay). A missing
+    // slot file simply means that side has no ad this session.
     const leftAdPath =
       adPaths?.left && fs.existsSync(adPaths.left) ? adPaths.left : null;
     const rightAdPath =
@@ -409,18 +415,18 @@ export class NodeFFmpegService implements FFmpegService {
     if (hasAnyAd) {
       steps.push("[tmp1][client] overlay=main_w-overlay_w-10:10 [tmp2];");
 
-      if (leftAdInputIndex !== null && rightAdInputIndex !== null) {
-        steps.push(
-          "[tmp2][leftAd] overlay=10:(main_h-overlay_h)/2 [tmp3];",
-          "[tmp3][rightAd] overlay=main_w-overlay_w-10:(main_h-overlay_h)/2 [vout]"
-        );
-      } else if (leftAdInputIndex !== null) {
-        steps.push("[tmp2][leftAd] overlay=10:(main_h-overlay_h)/2 [vout]");
-      } else {
-        steps.push(
-          "[tmp2][rightAd] overlay=main_w-overlay_w-10:(main_h-overlay_h)/2 [vout]"
-        );
-      }
+      const adSlots: Array<{ label: string; pos: string }> = [
+        leftAdInputIndex !== null ? { label: "leftAd", pos: "10:(main_h-overlay_h)/2" } : null,
+        rightAdInputIndex !== null ? { label: "rightAd", pos: "main_w-overlay_w-10:(main_h-overlay_h)/2" } : null,
+      ].filter((x): x is { label: string; pos: string } => x !== null);
+
+      let cur = "tmp2";
+      adSlots.forEach(({ label, pos }, i) => {
+        const isLast = i === adSlots.length - 1;
+        const next = isLast ? "vout" : `tmp${3 + i}`;
+        steps.push(`[${cur}][${label}] overlay=${pos} [${next}]${isLast ? "" : ";"}`);
+        cur = next;
+      });
     } else {
       steps.push("[tmp1][client] overlay=main_w-overlay_w-10:10");
     }
@@ -491,12 +497,14 @@ export class NodeFFmpegService implements FFmpegService {
   }
 
   // Pick the right ffmpeg input flags for an ad file based on its extension.
-  // Animated formats (mp4/gif/webm/mov) loop via stream_loop; stills via image2 loop.
+  // Animated formats loop via stream_loop; stills via image2 loop.
+  // For the looping concat slot video, "-stream_loop -1" makes the input
+  // infinite (it never EOFs, so the main encoder's clock never stalls), and
+  // "-fflags +genpts" smooths the PTS reset at each loop wrap.
   private buildAdInputFlags(adPath: string): string[] {
     const ext = path.extname(adPath).slice(1).toLowerCase();
-    const videoExts = new Set(["mp4", "gif", "webm", "mov", "avi", "mkv"]);
-    if (videoExts.has(ext)) {
-      return ["-stream_loop", "-1", "-re", "-i", adPath];
+    if (NodeFFmpegService.VIDEO_EXTS.has(ext)) {
+      return ["-stream_loop", "-1", "-re", "-fflags", "+genpts", "-i", adPath];
     }
     return ["-f", "image2", "-loop", "1", "-i", adPath];
   }
