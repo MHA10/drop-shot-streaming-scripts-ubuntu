@@ -1,4 +1,6 @@
 import { Stream } from "../../domain/entities/Stream";
+import { AdSpec } from "../../domain/events/StreamEvent";
+export { AdSpec };
 
 export interface StartStreamRequest {
   cameraUrl: string;
@@ -6,6 +8,7 @@ export interface StartStreamRequest {
   courtId: string;
   detectAudio?: boolean;
   isScorecardActivated?: boolean;
+  ads?: AdSpec[];
 }
 
 export interface StartStreamResponse {

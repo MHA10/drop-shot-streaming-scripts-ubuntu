@@ -248,6 +248,7 @@ export class StreamManagerService {
         courtId: event.courtId,
         detectAudio: true,
         isScorecardActivated: event.isScorecardActivated,
+        ads: event.ads,
       },
       this.stopStreamUseCase
     );

@@ -21,6 +21,12 @@ export interface AppConfig {
     persistentStateDir: string;
     healthCheckInterval: number;
   };
+  ads: {
+    defaultDurationSec: number;
+    minDurationSec: number;
+    maxDurationSec: number;
+    clipFps: number;
+  };
   logging: {
     level: string;
     file?: string;
@@ -101,6 +107,12 @@ export class Config {
           this.getEnvVar("HEALTH_CHECK_INTERVAL", "30000")
         ),
       },
+      ads: {
+        defaultDurationSec: this.parseIntEnv("AD_DEFAULT_DURATION_SEC", 12),
+        minDurationSec: this.parseIntEnv("AD_MIN_DURATION_SEC", 5),
+        maxDurationSec: this.parseIntEnv("AD_MAX_DURATION_SEC", 120),
+        clipFps: this.parseIntEnv("AD_CLIP_FPS", 15),
+      },
       logging: {
         level: this.getEnvVar("LOG_LEVEL", "info"),
         file: process.env.LOG_FILE,
@@ -139,6 +151,14 @@ export class Config {
       },
       environment: this.getEnvVar("NODE_ENV", "development"),
     };
+  }
+
+  // Parse a positive integer env var, falling back when missing/invalid. Guards
+  // against NaN and non-positive values (a negative would otherwise pass through
+  // and, e.g., let an ad duration clamp to a zero-length clip).
+  private parseIntEnv(key: string, fallback: number): number {
+    const value = parseInt(this.getEnvVar(key, String(fallback)), 10);
+    return Number.isFinite(value) && value > 0 ? value : fallback;
   }
 
   private getEnvVar(key: string, defaultValue: string): string {

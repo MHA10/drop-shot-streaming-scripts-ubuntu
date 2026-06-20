@@ -7,6 +7,7 @@ import {
   FFmpegService,
   FFmpegCommand,
   FFmpegProcess,
+  AdOverlayPaths,
 } from "../../domain/services/FFmpegService";
 import { StreamUrl } from "../../domain/value-objects/StreamUrl";
 import { Logger } from "../../application/interfaces/Logger";
@@ -14,6 +15,8 @@ import { StartStreamRequest } from "../../application/interfaces/StartStreamUseC
 import { Config } from "../config/Config";
 
 export class NodeFFmpegService implements FFmpegService {
+  private static readonly VIDEO_EXTS = new Set(["mp4", "gif", "webm", "mov", "avi", "mkv"]);
+
   private readonly runningProcesses: Map<number, FFmpegProcess> = new Map();
   private readonly clientLogoPath: string;
   private readonly scoreOverlayDir: string;
@@ -45,14 +48,16 @@ export class NodeFFmpegService implements FFmpegService {
       event: StartStreamRequest;
       onRetryStream: (event: StartStreamRequest) => Promise<void>;
     },
-    isScorecardActivated?: boolean
+    isScorecardActivated?: boolean,
+    adPaths?: AdOverlayPaths
   ): Promise<FFmpegProcess> {
     const command = this.buildStreamCommand(
       cameraUrl,
       streamKey,
       hasAudio,
       courtId,
-      isScorecardActivated
+      isScorecardActivated,
+      adPaths
     );
     this.logger.info("Command full form", command);
 
@@ -304,7 +309,8 @@ export class NodeFFmpegService implements FFmpegService {
     streamKey: string,
     hasAudio: boolean,
     courtId: string,
-    isScorecardActivated?: boolean
+    isScorecardActivated?: boolean,
+    adPaths?: AdOverlayPaths
   ): FFmpegCommand {
     const rtmpUrl = `rtmp://a.rtmp.youtube.com/live2/${streamKey}`;
     let fakeAudioInputCounter = 0;
@@ -332,44 +338,109 @@ export class NodeFFmpegService implements FFmpegService {
     const dsInputIndex = 1 + fakeAudioInputCounter;
     args.push("-i", this.clientLogoPath); // Input 2: Client logo
     const clientInputIndex = 2 + fakeAudioInputCounter;
-    
+
+    let nextInputIndex = 3 + fakeAudioInputCounter;
+
     let filterComplex = "";
-    
+
+    // Optional scorecard overlay (top-left). Adds one input before any ads.
+    let scoreInputIndex: number | null = null;
     if (isScorecardActivated) {
       const scoreOverlayPath = this.getScoreOverlayPath(courtId);
       this.ensureScoreOverlay(scoreOverlayPath);
-
       // Treat the overlay PNG as a continuously looping sequence of images
       // This allows FFmpeg to reflect file updates cleanly as they are overwritten
-      args.push("-f", "image2", "-loop", "1", "-i", scoreOverlayPath); 
-      const scoreInputIndex = 3 + fakeAudioInputCounter;
-
-      // position them correctly using filter complex
-      filterComplex = [
-        "[0:v] scale=1920:1080 [base];",
-        // Top-left score overlay
-        `[${scoreInputIndex}:v] scale=420:-1:force_original_aspect_ratio=decrease [score];`,
-        // Bottom-right DropShot watermark
-        `[${dsInputIndex}:v] scale=500:-1:force_original_aspect_ratio=decrease [ds];`,
-        // Top-right client logo
-        `[${clientInputIndex}:v] scale=350:-1:force_original_aspect_ratio=decrease [client];`,
-        "[base][score] overlay=30:30 [tmp0];",
-        "[tmp0][ds] overlay=main_w-overlay_w-10:main_h-overlay_h-10 [tmp1];",
-        "[tmp1][client] overlay=main_w-overlay_w-10:10",
-      ].join(" ");
-    } else {
-      filterComplex = [
-        "[0:v] scale=1920:1080 [base];",
-        // Bottom-right DropShot watermark
-        `[${dsInputIndex}:v] scale=500:-1:force_original_aspect_ratio=decrease [ds];`,
-        // Top-right client logo
-        `[${clientInputIndex}:v] scale=350:-1:force_original_aspect_ratio=decrease [client];`,
-        "[base][ds] overlay=main_w-overlay_w-10:main_h-overlay_h-10 [tmp1];",
-        "[tmp1][client] overlay=main_w-overlay_w-10:10",
-      ].join(" ");
+      args.push("-f", "image2", "-loop", "1", "-i", scoreOverlayPath);
+      scoreInputIndex = nextInputIndex++;
     }
 
+    // Resolve left/right ad paths and push each as a new input if present.
+    // These are fixed PNG "slot" files managed by AdRotator: it overwrites them
+    // on a timer to rotate the pool, and ffmpeg reflects each new file via the
+    // image2 loop below (same live-reload trick as the score overlay). A missing
+    // slot file simply means that side has no ad this session.
+    const leftAdPath =
+      adPaths?.left && fs.existsSync(adPaths.left) ? adPaths.left : null;
+    const rightAdPath =
+      adPaths?.right && fs.existsSync(adPaths.right) ? adPaths.right : null;
+
+    let leftAdInputIndex: number | null = null;
+    let rightAdInputIndex: number | null = null;
+
+    if (leftAdPath) {
+      args.push(...this.buildAdInputFlags(leftAdPath));
+      leftAdInputIndex = nextInputIndex++;
+    }
+    if (rightAdPath) {
+      args.push(...this.buildAdInputFlags(rightAdPath));
+      rightAdInputIndex = nextInputIndex++;
+    }
+
+    const hasAnyAd = leftAdInputIndex !== null || rightAdInputIndex !== null;
+
+    // Build filter graph
+    const steps: string[] = ["[0:v] scale=1920:1080 [base];"];
+
+    if (scoreInputIndex !== null) {
+      steps.push(
+        `[${scoreInputIndex}:v] scale=420:-1:force_original_aspect_ratio=decrease [score];`
+      );
+    }
+    steps.push(
+      `[${dsInputIndex}:v] scale=500:140:force_original_aspect_ratio=decrease [ds];`,
+      `[${clientInputIndex}:v] scale=400:140:force_original_aspect_ratio=decrease [client];`
+    );
+    if (leftAdInputIndex !== null) {
+      steps.push(
+        `[${leftAdInputIndex}:v] scale=220:500:force_original_aspect_ratio=decrease [leftAd];`
+      );
+    }
+    if (rightAdInputIndex !== null) {
+      steps.push(
+        `[${rightAdInputIndex}:v] scale=220:500:force_original_aspect_ratio=decrease [rightAd];`
+      );
+    }
+
+    // Overlay chain: base → (score) → ds → client → (leftAd) → (rightAd)
+    if (scoreInputIndex !== null) {
+      steps.push(
+        "[base][score] overlay=30:30 [tmp0];",
+        "[tmp0][ds] overlay=main_w-overlay_w-10:main_h-overlay_h-10 [tmp1];"
+      );
+    } else {
+      steps.push("[base][ds] overlay=main_w-overlay_w-10:main_h-overlay_h-10 [tmp1];");
+    }
+
+    // After client overlay: label output [tmp2] if ads follow, else leave unlabeled (final output)
+    if (hasAnyAd) {
+      steps.push("[tmp1][client] overlay=main_w-overlay_w-10:10 [tmp2];");
+
+      const adSlots: Array<{ label: string; pos: string }> = [
+        leftAdInputIndex !== null ? { label: "leftAd", pos: "10:(main_h-overlay_h)/2" } : null,
+        rightAdInputIndex !== null ? { label: "rightAd", pos: "main_w-overlay_w-10:(main_h-overlay_h)/2" } : null,
+      ].filter((x): x is { label: string; pos: string } => x !== null);
+
+      let cur = "tmp2";
+      adSlots.forEach(({ label, pos }, i) => {
+        const isLast = i === adSlots.length - 1;
+        const next = isLast ? "vout" : `tmp${3 + i}`;
+        steps.push(`[${cur}][${label}] overlay=${pos} [${next}]${isLast ? "" : ";"}`);
+        cur = next;
+      });
+    } else {
+      steps.push("[tmp1][client] overlay=main_w-overlay_w-10:10");
+    }
+
+    filterComplex = steps.join(" ");
+
     args.push("-filter_complex", filterComplex);
+
+    // When any ad input is present, map video/audio explicitly so ffmpeg
+    // doesn't auto-select an ad's audio stream.
+    if (hasAnyAd) {
+      args.push("-map", "[vout]");
+      args.push("-map", `${fakeAudioInputCounter}:a`);
+    }
 
     // audio & video output configurations
     args.push(
@@ -423,6 +494,19 @@ export class NodeFFmpegService implements FFmpegService {
 
     await Promise.all(killPromises);
     this.runningProcesses.clear();
+  }
+
+  // Pick the right ffmpeg input flags for an ad file based on its extension.
+  // Animated formats loop via stream_loop; stills via image2 loop.
+  // For the looping concat slot video, "-stream_loop -1" makes the input
+  // infinite (it never EOFs, so the main encoder's clock never stalls), and
+  // "-fflags +genpts" smooths the PTS reset at each loop wrap.
+  private buildAdInputFlags(adPath: string): string[] {
+    const ext = path.extname(adPath).slice(1).toLowerCase();
+    if (NodeFFmpegService.VIDEO_EXTS.has(ext)) {
+      return ["-stream_loop", "-1", "-re", "-fflags", "+genpts", "-i", adPath];
+    }
+    return ["-f", "image2", "-loop", "1", "-i", adPath];
   }
 
   private validateImageFiles(): void {

@@ -13,6 +13,11 @@ export interface FFmpegProcess {
   readonly startTime: Date;
 }
 
+export interface AdOverlayPaths {
+  left?: string | null;
+  right?: string | null;
+}
+
 export interface FFmpegService {
   /**
    * Start an FFmpeg stream process
@@ -26,7 +31,8 @@ export interface FFmpegService {
       event: StartStreamRequest;
       onRetryStream: (event: StartStreamRequest) => Promise<void>;
     },
-    isScorecardActivated?: boolean
+    isScorecardActivated?: boolean,
+    adPaths?: AdOverlayPaths
   ): Promise<FFmpegProcess>;
 
   /**
@@ -52,7 +58,8 @@ export interface FFmpegService {
     streamKey: string,
     hasAudio: boolean,
     courtId: string,
-    isScorecardActivated?: boolean
+    isScorecardActivated?: boolean,
+    adPaths?: AdOverlayPaths
   ): FFmpegCommand;
 
   /**

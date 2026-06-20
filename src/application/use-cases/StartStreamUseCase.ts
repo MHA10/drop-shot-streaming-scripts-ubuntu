@@ -7,6 +7,11 @@ import { Logger } from "../interfaces/Logger";
 import { HttpClient } from "../services/HttpClient";
 import { Config } from "../../infrastructure/config/Config";
 import { StreamState } from "../../domain/value-objects/StreamState";
+import { AdDownloaderService } from "../../infrastructure/services/AdDownloaderService";
+import {
+  AdRotator,
+  AdRotationRegistry,
+} from "../../infrastructure/services/AdRotator";
 import { StopStreamUseCase } from "./StopStreamUseCase";
 import {
   ShouldStartStream,
@@ -23,7 +28,9 @@ export class StartStreamUseCase {
     private readonly streamRepository: StreamRepository,
     private readonly ffmpegService: FFmpegService,
     private readonly logger: Logger,
-    private readonly httpClient: HttpClient
+    private readonly httpClient: HttpClient,
+    private readonly adDownloader: AdDownloaderService,
+    private readonly adRotationRegistry: AdRotationRegistry
   ) {}
 
   private async shouldStartNewStream(
@@ -242,6 +249,9 @@ export class StartStreamUseCase {
           this.logger.error("Stream can not be retried", {
             streamId: streamId.value,
           });
+          // No restart will follow, so tear down the rotator to avoid leaking
+          // its timers (which would keep overwriting slot files for a dead stream).
+          this.adRotationRegistry.stop(event.courtId);
           return;
         }
 
@@ -253,6 +263,43 @@ export class StartStreamUseCase {
         await this.execute(request, stopUseCase);
       };
 
+      // Tear down any rotator left over from a previous run on this court now,
+      // before the (potentially slow) download, so the old rotator doesn't keep
+      // overwriting slot files during the download window.
+      this.adRotationRegistry.stop(request.courtId);
+
+      // Resolve the ad overlays before ffmpeg starts so the slot inputs exist.
+      // Two paths, both fail-soft (a missing slot file simply adds no ad input):
+      //  - Animated pool (any video/gif): pre-compose one looping MP4 per slot;
+      //    rotation is baked into the looping video, so no live rotator is needed
+      //    and the main encoder never restarts.
+      //  - Still-only pool: keep the live file-swap rotator (cheap, reshuffles).
+      const ads = request.ads ?? [];
+      let adOverlayPaths: { left?: string | null; right?: string | null } = {};
+      let rotator: AdRotator | null = null;
+
+      if (this.adDownloader.hasAnimatedAds(ads)) {
+        const slotVideos = await this.adDownloader.buildSlotVideos(
+          ads,
+          request.courtId,
+          this.config.ads
+        );
+        adOverlayPaths = { left: slotVideos.left, right: slotVideos.right };
+      } else if (ads.length > 0) {
+        const adPool = await this.adDownloader.downloadPool(ads, request.courtId);
+        const slotPaths = this.adDownloader.getSlotPaths(request.courtId);
+        rotator = new AdRotator(
+          request.courtId,
+          adPool,
+          slotPaths.left,
+          slotPaths.right,
+          this.config.ads,
+          this.logger
+        );
+        rotator.prepare(); // writes initial slot file(s) — must precede ffmpeg start
+        adOverlayPaths = { left: slotPaths.left, right: slotPaths.right };
+      }
+
       const ffmpegProcess = await this.ffmpegService.startStream(
         cameraUrl,
         request.streamKey,
@@ -262,8 +309,17 @@ export class StartStreamUseCase {
           event: request,
           onRetryStream,
         },
-        request.isScorecardActivated
+        request.isScorecardActivated,
+        adOverlayPaths
       );
+
+      // Register first so any exception after start() still has the rotator
+      // tracked for cleanup, then begin rotation now that ffmpeg is up. The
+      // animated path has no rotator (rotation is baked into the slot videos).
+      if (rotator) {
+        this.adRotationRegistry.set(request.courtId, rotator);
+        rotator.start();
+      }
 
       // Update stream with process ID
       stream.start(ffmpegProcess.pid);

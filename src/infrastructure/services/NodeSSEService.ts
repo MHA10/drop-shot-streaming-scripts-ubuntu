@@ -4,6 +4,7 @@ import {
   SSEConnectionConfig,
 } from "../../domain/services/SSEService";
 import { SSEStreamEvent } from "../../domain/events/StreamEvent";
+import { AdSpec } from "../../domain/events/StreamEvent";
 import { Logger } from "../../application/interfaces/Logger";
 
 export class NodeSSEService extends EventEmitter implements SSEService {
@@ -212,32 +213,18 @@ export class NodeSSEService extends EventEmitter implements SSEService {
     complete: string[];
     remaining: string;
   } {
-    const events: string[] = [];
-    const lines = buffer.split("\n");
-    let currentEvent = "";
-    let i = 0;
+    // SSE events are separated by a blank line. Split on the event boundary and
+    // keep the trailing partial event (everything after the last separator) in
+    // `remaining`, so an event whose `data:` line is split across network chunks
+    // is reassembled on the next read rather than corrupted by a stray newline.
+    const normalized = buffer.replace(/\r\n/g, "\n").replace(/\r/g, "\n");
+    const segments = normalized.split("\n\n");
+    const remaining = segments.pop() ?? "";
+    const complete = segments
+      .map((segment) => segment.trim())
+      .filter((segment) => segment.length > 0);
 
-    while (i < lines.length) {
-      const line = lines[i];
-
-      if (line === "") {
-        // Empty line indicates end of event
-        if (currentEvent.trim()) {
-          events.push(currentEvent.trim());
-          currentEvent = "";
-        }
-      } else {
-        currentEvent += line + "\n";
-      }
-
-      i++;
-    }
-
-    // Return complete events and remaining buffer
-    return {
-      complete: events,
-      remaining: currentEvent,
-    };
+    return { complete, remaining };
   }
 
   private handleSSEEvent(eventData: string): void {
@@ -246,11 +233,19 @@ export class NodeSSEService extends EventEmitter implements SSEService {
       let data = "";
       let eventType = "";
 
+      // Per the SSE spec a field may omit the space after the colon, and an event
+      // may carry multiple `data:` lines that are joined with newlines.
       for (const line of lines) {
-        if (line.startsWith("data: ")) {
-          data = line.substring(6);
-        } else if (line.startsWith("event: ")) {
-          eventType = line.substring(7);
+        if (line.startsWith("data:")) {
+          const chunk = line.startsWith("data: ")
+            ? line.substring(6)
+            : line.substring(5);
+          data = data ? `${data}\n${chunk}` : chunk;
+        } else if (line.startsWith("event:")) {
+          eventType = (line.startsWith("event: ")
+            ? line.substring(7)
+            : line.substring(6)
+          ).trim();
         }
       }
 
@@ -285,6 +280,7 @@ export class NodeSSEService extends EventEmitter implements SSEService {
         courtId: parsedData.courtId,
         reconciliationMode: parsedData.reconciliation_mode || false,
         isScorecardActivated: parsedData.isScorecardActivated,
+        ads: this.parseAds(parsedData.ads),
       };
 
       this.logger.info("Processing SSE stream event", {
@@ -293,6 +289,7 @@ export class NodeSSEService extends EventEmitter implements SSEService {
         streamKey: streamEvent.streamKey,
         reconciliationMode: streamEvent.reconciliationMode,
         isScorecardActivated: streamEvent.isScorecardActivated,
+        ads: streamEvent.ads,
       });
 
       this.emit("streamEvent", streamEvent);
@@ -302,6 +299,54 @@ export class NodeSSEService extends EventEmitter implements SSEService {
         eventData,
       });
     }
+  }
+
+  /**
+   * Normalize the `ads` field from an SSE payload into an AdSpec[].
+   *
+   * Accepts the new rolling-pool shape (array of { url, duration } or bare URL
+   * strings) and the legacy static shape ({ left, right }) for backward
+   * compatibility during rollout. Returns undefined when no ads are present.
+   */
+  private parseAds(raw: unknown): AdSpec[] | undefined {
+    if (!raw) return undefined;
+
+    const toSpec = (entry: unknown): AdSpec | null => {
+      if (typeof entry === "string") {
+        return entry.trim() ? { url: entry } : null;
+      }
+      if (entry && typeof entry === "object") {
+        // The backend sends each ad as { link, duration }; accept `url` too for
+        // our own docs/tests. duration may be null → falls back to the default.
+        const obj = entry as { url?: unknown; link?: unknown; duration?: unknown };
+        const rawUrl =
+          typeof obj.url === "string" && obj.url.trim()
+            ? obj.url
+            : typeof obj.link === "string" && obj.link.trim()
+              ? obj.link
+              : null;
+        if (rawUrl) {
+          const duration =
+            typeof obj.duration === "number" && isFinite(obj.duration)
+              ? obj.duration
+              : undefined;
+          return { url: rawUrl, durationSec: duration };
+        }
+      }
+      return null;
+    };
+
+    // Normalize both shapes to an entries array, then run the shared pipeline once.
+    // New shape: array of { url, duration } objects or bare URL strings.
+    // Legacy shape: { left, right } static slot object (backward compat during rollout).
+    const entries: unknown[] = Array.isArray(raw)
+      ? raw
+      : typeof raw === "object" && raw !== null
+        ? [(raw as { left?: unknown }).left, (raw as { right?: unknown }).right]
+        : [];
+
+    const specs = entries.map(toSpec).filter((s): s is AdSpec => s !== null);
+    return specs.length > 0 ? specs : undefined;
   }
 
   private scheduleRetry(): void {
