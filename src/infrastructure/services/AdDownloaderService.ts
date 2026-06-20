@@ -525,15 +525,18 @@ export class AdDownloaderService {
     }
   }
 
-  // Run a one-shot ffmpeg whose output is `dest`. Writes to a `.tmp` first and
+  // Run a one-shot ffmpeg whose output is `dest`. Writes to a temp file first and
   // renames on success so a failed/killed run never leaves a corrupt file. The
-  // caller supplies all args EXCEPT the final output path.
+  // temp name PRESERVES dest's extension (e.g. clip-x.tmp.mp4, not clip-x.mp4.tmp)
+  // because ffmpeg selects the output muxer from the extension. The caller
+  // supplies all args EXCEPT the final output path.
   private runFfmpegToFile(
     args: string[],
     dest: string,
     timeoutMs: number = this.normalizeTimeoutMs
   ): Promise<void> {
-    const tmp = `${dest}.tmp`;
+    const ext = path.extname(dest);
+    const tmp = ext ? `${dest.slice(0, -ext.length)}.tmp${ext}` : `${dest}.tmp`;
     return new Promise((resolve, reject) => {
       const proc = spawn("ffmpeg", [...args, tmp], {
         stdio: ["ignore", "ignore", "pipe"],
