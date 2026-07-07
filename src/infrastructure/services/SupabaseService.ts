@@ -188,7 +188,7 @@ export class SupabaseService {
           console.log(`   Event Type: ${payload.eventType}`);
           console.log(`   Table: ${payload.table}`);
           console.log(`   Schema: ${payload.schema}`);
-          // console.log(`   Full Payload:`, JSON.stringify(payload, null, 2)); // Reduced noise
+          console.log(`   Full Payload:`, JSON.stringify(payload, null, 2));
           console.log(`========================================\n`);
           callback(payload);
         }
