@@ -77,6 +77,8 @@ export class SupabaseListener {
       score.right,
       score.leftGames,
       score.rightGames,
+      score.leftTeam,
+      score.rightTeam,
     );
   }
 
@@ -86,12 +88,16 @@ export class SupabaseListener {
     right: string;
     leftGames: string;
     rightGames: string;
+    leftTeam: string;
+    rightTeam: string;
   } | null {
     const courtId = record["court_id"];
     const leftValue = record["red_score"];
     const rightValue = record["blue_score"];
     const leftGamesValue = record["red_games"];
     const rightGamesValue = record["blue_games"];
+    const leftTeamValue = record["red_team"];
+    const rightTeamValue = record["blue_team"];
 
     if (
       typeof courtId !== "string" ||
@@ -103,12 +109,25 @@ export class SupabaseListener {
       return null;
     }
 
+    // Team names are optional: older rows / other tables may not carry them,
+    // so fall back to the previous generic labels when absent or blank.
+    const leftTeam =
+      typeof leftTeamValue === "string" && leftTeamValue.trim()
+        ? leftTeamValue.trim()
+        : "TEAM A";
+    const rightTeam =
+      typeof rightTeamValue === "string" && rightTeamValue.trim()
+        ? rightTeamValue.trim()
+        : "TEAM B";
+
     return {
       courtId,
       left: String(leftValue),
       right: String(rightValue),
       leftGames: String(leftGamesValue),
       rightGames: String(rightGamesValue),
+      leftTeam,
+      rightTeam,
     };
   }
 
@@ -118,11 +137,13 @@ export class SupabaseListener {
     rightScore: string,
     leftGames: string,
     rightGames: string,
+    leftTeam: string,
+    rightTeam: string,
   ): Promise<void> {
     const width = 420;
     const height = 120;
-    
-    const text = `${leftScore}-${rightScore} ${leftGames}-${rightGames}`;
+
+    const text = `${leftTeam}|${rightTeam} ${leftScore}-${rightScore} ${leftGames}-${rightGames}`;
     if (text === this.lastRenderedTextByCourt.get(courtId)) {
       return;
     }
@@ -212,8 +233,8 @@ export class SupabaseListener {
     // Team Names
     ctx.font = "300 28px sans-serif";
     const namePad = 40;
-    ctx.fillText("TEAM A", namePad, height / 4 + 2);
-    ctx.fillText("TEAM B", namePad - (slantX / 2), 3 * height / 4 + 2);
+    ctx.fillText(leftTeam.toUpperCase(), namePad, height / 4 + 2);
+    ctx.fillText(rightTeam.toUpperCase(), namePad - (slantX / 2), 3 * height / 4 + 2);
 
     // Points
     ctx.textAlign = "center";
