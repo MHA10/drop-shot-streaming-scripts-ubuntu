@@ -347,7 +347,10 @@ export class NodeFFmpegService implements FFmpegService {
     let scoreInputIndex: number | null = null;
     if (isScorecardActivated) {
       const scoreOverlayPath = this.getScoreOverlayPath(courtId);
-      this.ensureScoreOverlay(scoreOverlayPath);
+      // Always start from a fully transparent overlay so nothing is shown until
+      // the first live score update arrives. This also wipes any stale scorecard
+      // left on disk from a previous match on this court.
+      this.resetScoreOverlay(scoreOverlayPath);
       // Treat the overlay PNG as a continuously looping sequence of images
       // This allows FFmpeg to reflect file updates cleanly as they are overwritten
       args.push("-f", "image2", "-loop", "1", "-i", scoreOverlayPath);
@@ -527,10 +530,11 @@ export class NodeFFmpegService implements FFmpegService {
     });
   }
 
-  private ensureScoreOverlay(scoreOverlayPath: string): void {
-    if (!fs.existsSync(scoreOverlayPath)) {
-      this.createDefaultScoreOverlay(scoreOverlayPath);
-    }
+  private resetScoreOverlay(scoreOverlayPath: string): void {
+    // Unconditionally (re)write the transparent placeholder. Unlike an
+    // ensure-if-missing check, this guarantees a clean slate on every stream
+    // start so a previous match's scorecard never shows on the new stream.
+    this.createDefaultScoreOverlay(scoreOverlayPath);
   }
 
   private getScoreOverlayPath(courtId: string): string {
