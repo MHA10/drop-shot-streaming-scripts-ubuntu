@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 
+import * as path from "path";
 import * as packageJson from "../package.json";
 import { Config } from "./infrastructure/config/Config";
 import { FileSystemStreamRepository } from "./infrastructure/repositories/FileSystemStreamRepository";
@@ -14,11 +15,20 @@ import { HttpClient } from "./application/services/HttpClient";
 import { RemoteLogger } from "./infrastructure/logging/RemoteLogger";
 import { SupabaseService } from "./infrastructure/services/SupabaseService";
 import { SupabaseListener } from "./infrastructure/listeners/SupabaseListener";
+import { SerialHighlightListener } from "./infrastructure/services/SerialHighlightListener";
+import { HighlightBufferRegistry } from "./infrastructure/services/HighlightBufferRegistry";
+import { HighlightExtractorService } from "./infrastructure/services/HighlightExtractorService";
+import { HighlightRendererService } from "./infrastructure/services/HighlightRendererService";
+import { NullBallReframer } from "./infrastructure/services/NullBallReframer";
+import { PythonBallReframer } from "./infrastructure/services/PythonBallReframer";
+import { CaptureHighlightUseCase } from "./application/use-cases/CaptureHighlightUseCase";
 
 class Application {
   private streamManager?: StreamManagerService;
   private supabaseListener?: SupabaseListener;
+  private highlightSignalSource?: SerialHighlightListener;
   private readonly adRotationRegistry = new AdRotationRegistry();
+  private readonly highlightBufferRegistry = new HighlightBufferRegistry();
   private readonly logger = new RemoteLogger(
     {
       ...Config.getInstance().get().remoteLogging,
@@ -48,6 +58,65 @@ class Application {
       const sseService = new NodeSSEService(this.logger);
       const adDownloader = new AdDownloaderService(this.logger);
 
+      // Highlight hardware detector. Started once at boot (tied to the physical
+      // USB device, not any one stream). Its isDevicePresent() drives automatic
+      // per-box enablement of the highlight buffer inside StartStreamUseCase —
+      // a box with no ESP32 attached simply never records highlights.
+      const highlightConfig = config.get().highlight;
+      // Debug knobs only apply when the feature is enabled, so a leftover
+      // HIGHLIGHT_FORCE_PRESENT / HIGHLIGHT_TRIGGER_FILE on a box where highlight
+      // is off stays inert.
+      this.highlightSignalSource = new SerialHighlightListener(
+        highlightConfig.serialPortPath,
+        highlightConfig.serialBaudRate,
+        this.logger,
+        highlightConfig.enabled && highlightConfig.forcePresent,
+        highlightConfig.enabled ? highlightConfig.triggerFile : ""
+      );
+      this.highlightSignalSource.start();
+
+      // Capture pipeline: signal → cut window → (reframe) → overlay logos.
+      const highlightExtractor = new HighlightExtractorService(
+        highlightConfig.outputDir,
+        this.logger
+      );
+      // Ball-tracking reframer: real Python/OpenCV impl only when enabled,
+      // else a no-op (full-frame). Off by default until tuned on real footage.
+      const ballReframer = highlightConfig.ballTracking.enabled
+        ? new PythonBallReframer(highlightConfig.reelAspect, this.logger)
+        : new NullBallReframer();
+      const highlightRenderer = new HighlightRendererService(
+        path.resolve("./public/ds.png"),
+        path.resolve(config.get().images.clientPath),
+        this.logger
+      );
+      const captureHighlightUseCase = new CaptureHighlightUseCase(
+        this.highlightBufferRegistry,
+        highlightExtractor,
+        ballReframer,
+        highlightRenderer,
+        this.logger
+      );
+      // One box runs one active stream, so route a highlight to whichever court
+      // is currently running. If none is live, there's nothing to capture.
+      this.highlightSignalSource.onHighlight(async ({ receivedAtMs }) => {
+        try {
+          const running = await streamRepository.findRunning();
+          if (running.length === 0) {
+            this.logger.warn("Highlight signal ignored: no running stream");
+            return;
+          }
+          await captureHighlightUseCase.execute({
+            courtId: running[0].courtId,
+            receivedAtMs,
+          });
+        } catch (error) {
+          this.logger.error("Highlight capture handler failed", {
+            error: error instanceof Error ? error.message : String(error),
+          });
+        }
+      });
+
       // Initialize use cases
       const startStreamUseCase = new StartStreamUseCase(
         streamRepository,
@@ -55,14 +124,17 @@ class Application {
         this.logger,
         this.httpClient,
         adDownloader,
-        this.adRotationRegistry
+        this.adRotationRegistry,
+        this.highlightBufferRegistry,
+        this.highlightSignalSource
       );
 
       const stopStreamUseCase = new StopStreamUseCase(
         streamRepository,
         ffmpegService,
         this.logger,
-        this.adRotationRegistry
+        this.adRotationRegistry,
+        this.highlightBufferRegistry
       );
 
       // Initialize Supabase Listener (if enabled)
@@ -122,11 +194,16 @@ class Application {
       try {
         // Stop all ad rotation timers before tearing down streams.
         this.adRotationRegistry.stopAll();
+        // Stop all highlight buffer retention sweeps.
+        this.highlightBufferRegistry.stopAll();
         if (this.streamManager) {
           await this.streamManager.stop();
         }
         if (this.supabaseListener) { // Keep this just in case, though StreamManager handles unsub
           await this.supabaseListener.stop();
+        }
+        if (this.highlightSignalSource) {
+          this.highlightSignalSource.stop();
         }
         this.logger.info("Application shutdown completed");
         process.exit(0);

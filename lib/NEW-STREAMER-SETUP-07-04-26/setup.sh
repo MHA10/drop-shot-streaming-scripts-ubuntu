@@ -157,6 +157,16 @@ sudo apt-get install -y build-essential ffmpeg
 log_info "FFmpeg version: $(ffmpeg -version 2>&1 | head -1)"
 log_success "System dependencies installed."
 
+# Optional: Python + OpenCV for highlight ball-tracking reframe (Phase 5).
+# Only needed when HIGHLIGHT_BALL_TRACKING_ENABLED=true; the highlight feature
+# works without it (full-frame reel). NON-FATAL: a failure here must not abort
+# streamer setup, so it's wrapped to warn-and-continue despite `set -e`.
+log_info "Installing Python + OpenCV for highlight reframe (optional)..."
+{
+    sudo apt-get install -y python3 python3-pip &&
+    python3 -m pip install --break-system-packages opencv-python-headless numpy
+} || log_info "Python/OpenCV install skipped or failed (ball-tracking reframe will be unavailable; highlights still work full-frame)."
+
 # =============================================================================
 # STEP 6: Install PM2
 # =============================================================================

@@ -52,6 +52,43 @@ export interface AppConfig {
     apiKey: string;
     apiSecret: string;
   };
+  highlight: {
+    // Master enable for the highlight buffer. Ships DEFAULT FALSE for now: the
+    // rolling buffer has no retention/cleanup yet (Phase 2), so auto-running it
+    // could fill the disk — and because it's a second output of the live
+    // ffmpeg, a full disk can take the live stream down too. Presence-based
+    // auto-enable is already wired (isDevicePresent gates it too); once Phase 2
+    // bounds the buffer, flip this default to true for the intended zero-config
+    // behavior. Until then, set HIGHLIGHT_ENABLED=true only on a test box.
+    enabled: boolean;
+    bufferDir: string;
+    bufferSegmentSec: number;
+    // Window geometry: a highlight clip spans [event - preRoll, event + postRoll],
+    // where event ≈ signal receipt - lagMargin (the mesh delay). The rolling
+    // buffer must retain at least this whole span; bufferRetentionSec is that
+    // span plus a safety pad, and bounds on-disk buffer size (retention/cleanup).
+    preRollSec: number;
+    postRollSec: number;
+    lagMarginSec: number;
+    bufferRetentionSec: number;
+    outputDir: string;
+    serialPortPath: string;
+    serialBaudRate: number;
+    // Debug/test knobs (default off) so the flow can be exercised on a box
+    // WITHOUT the ESP32 button hardware. forcePresent makes isDevicePresent()
+    // true; triggerFile, when set, fires a highlight whenever that file appears.
+    forcePresent: boolean;
+    triggerFile: string;
+    // Ball-tracking reframe (Phase 5). Default OFF: the classical-CV reframer
+    // is unvalidated without real padel footage, so by default the reel is the
+    // full-frame clip with logos. When enabled it runs a Python/OpenCV pass
+    // (requires python3 + opencv-python on the box) and falls back to full
+    // frame on any failure. reelAspect is the target crop aspect, e.g. "9:16".
+    ballTracking: {
+      enabled: boolean;
+    };
+    reelAspect: string;
+  };
   environment: string;
 }
 
@@ -84,6 +121,12 @@ export class Config {
   }
 
   private loadConfig(): AppConfig {
+    // Highlight window values parsed once and reused (fields + derived
+    // retention default) to avoid re-reading the same env vars.
+    const hlPreRollSec = this.parseIntEnv("HIGHLIGHT_PRE_ROLL_SEC", 25);
+    const hlPostRollSec = this.parseIntEnv("HIGHLIGHT_POST_ROLL_SEC", 5);
+    const hlLagMarginSec = this.parseIntEnv("HIGHLIGHT_LAG_MARGIN_SEC", 5);
+
     return {
       server: {
         baseUrl: this.getEnvVar("BASE_URL", "https://api.drop-shot.live"),
@@ -148,6 +191,40 @@ export class Config {
         cloudName: this.getEnvVar("REACT_APP_CLOUDINARY_CLOUD_NAME", "duca7omur"),
         apiKey: this.getEnvVar("CLOUDINARY_API_KEY", ""),
         apiSecret: this.getEnvVar("CLOUDINARY_API_SECRET", ""),
+      },
+      highlight: {
+        // Default false until Phase 2 retention bounds the buffer (see the
+        // interface comment). Strict: only the literal "true" enables it.
+        enabled: this.getEnvVar("HIGHLIGHT_ENABLED", "false") === "true",
+        bufferDir: this.getEnvVar("HIGHLIGHT_BUFFER_DIR", "./highlight-buffer"),
+        // Floor at 2s: segment filenames use whole-second (%s) timestamps, so a
+        // 1s segment length could emit two files in the same second and clobber
+        // one, punching a gap in the buffer.
+        bufferSegmentSec: Math.max(
+          2,
+          this.parseIntEnv("HIGHLIGHT_BUFFER_SEGMENT_SEC", 2)
+        ),
+        preRollSec: hlPreRollSec,
+        postRollSec: hlPostRollSec,
+        lagMarginSec: hlLagMarginSec,
+        // Default = full window (pre + post + lag) + 10s safety pad. Overridable,
+        // but must stay ≥ the window or extraction can lose the leading edge.
+        bufferRetentionSec: this.parseIntEnv(
+          "HIGHLIGHT_BUFFER_RETENTION_SEC",
+          hlPreRollSec + hlPostRollSec + hlLagMarginSec + 10
+        ),
+        outputDir: this.getEnvVar("HIGHLIGHT_OUTPUT_DIR", "./highlights"),
+        // "auto" → discover the ESP32 among connected serial devices; or an
+        // explicit path like "/dev/ttyUSB0". Baud must match esp32-leader.ino.
+        serialPortPath: this.getEnvVar("HIGHLIGHT_SERIAL_PORT", "auto"),
+        serialBaudRate: this.parseIntEnv("HIGHLIGHT_SERIAL_BAUD", 115200),
+        forcePresent: this.getEnvVar("HIGHLIGHT_FORCE_PRESENT", "false") === "true",
+        triggerFile: this.getEnvVar("HIGHLIGHT_TRIGGER_FILE", ""),
+        ballTracking: {
+          enabled:
+            this.getEnvVar("HIGHLIGHT_BALL_TRACKING_ENABLED", "false") === "true",
+        },
+        reelAspect: this.getEnvVar("HIGHLIGHT_REEL_ASPECT", "9:16"),
       },
       environment: this.getEnvVar("NODE_ENV", "development"),
     };
