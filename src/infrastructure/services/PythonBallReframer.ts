@@ -32,9 +32,17 @@ export class PythonBallReframer implements BallReframer {
     private readonly logger: Logger,
     scriptPath?: string
   ) {
-    // Resolved from CWD (the app runs from the repo root under PM2). scripts/
-    // is not copied into dist/, so reference it at the repo root.
-    this.scriptPath = scriptPath ?? path.resolve("scripts/reframe_ball.py");
+    // The app ships as an npm package run via `npx` — so the script must be
+    // found INSIDE the package (the build copies scripts/ into dist/), not from
+    // the CWD. Resolve relative to this compiled module (dist/scripts) first,
+    // then fall back to a repo-root checkout (dev / git deploy). __dirname here
+    // is <pkg>/dist/src/infrastructure/services, so ../../../scripts = dist/scripts.
+    const candidates = [
+      path.join(__dirname, "..", "..", "..", "scripts", "reframe_ball.py"),
+      path.resolve("scripts/reframe_ball.py"),
+    ];
+    this.scriptPath =
+      scriptPath ?? candidates.find((p) => fs.existsSync(p)) ?? candidates[0];
   }
 
   public async reframe(
