@@ -6,16 +6,24 @@ ball, using classical CV (no ML model).
 IN SIMPLE WORDS
     Reads the wide highlight clip, tries to find the fast-moving ball each frame,
     smoothly pans a tall (e.g. 9:16) crop window to keep it in view, and writes
-    the cropped video. If it can't find the ball, it holds the last good
-    position (and starts centered), so it always produces a watchable vertical
-    clip rather than failing.
+    the cropped video. If it can't find the ball it holds the last good position
+    (and starts centered), so it always produces a watchable vertical clip.
+
+HOW IT ISOLATES THE BALL (vs. the much bigger players)
+    Motion is found by frame differencing. Player blobs are rejected two ways:
+      * AREA band — the ball is small; blobs bigger than `--max-area-frac` of the
+        frame (torsos) or smaller than `--min-area-frac` (noise) are dropped.
+      * SHAPE gate — the ball is compact/round; blobs thinner than `--min-aspect`
+        (limbs, net lines, motion smears) are dropped.
+    Among survivors it prefers the roundest one nearest the current crop centre,
+    and rejects implausible cross-court jumps (`--max-jump-frac`) so it won't
+    teleport onto a player on the far side.
 
 STATUS / DO NOT
-    This is a BEST-EFFORT v1 and is UNVALIDATED on real padel footage. Detection
-    thresholds (area range, diff threshold, smoothing) almost certainly need
-    tuning against real clips before this is trusted in production — which is why
-    the streamer keeps ball-tracking OFF by default and falls back to the full
-    frame. Do NOT assume the crop is accurate until it's been tuned on real video.
+    Classical CV on a wide, dim, multi-player court is a hard case; the defaults
+    below are tuned against real footage but are still approximate. The streamer
+    keeps ball-tracking OFF by default and falls back to the full frame on any
+    failure. A tightly-locked "ball cam" may ultimately need a small model.
 
 Exit non-zero on any hard failure so the caller falls back to the full frame.
 """
@@ -25,14 +33,13 @@ import sys
 
 try:
     import cv2
-    import numpy as np
-except Exception as exc:  # noqa: BLE001 - missing dep is a hard, fail-soft error
+    import numpy as np  # noqa: F401 (kept for potential future use / parity)
+except Exception as exc:  # noqa: BLE001
     sys.stderr.write(f"reframe_ball: dependencies unavailable: {exc}\n")
     sys.exit(2)
 
 
 def parse_aspect(aspect: str) -> float:
-    """Return width/height ratio from an 'W:H' string (default 9/16)."""
     try:
         w, h = aspect.split(":")
         r = float(w) / float(h)
@@ -46,6 +53,14 @@ def main() -> int:
     ap.add_argument("--input", required=True)
     ap.add_argument("--output", required=True)
     ap.add_argument("--aspect", default="9:16")
+    # Tuning knobs (defaults tuned on real footage; overridable for iteration).
+    ap.add_argument("--diff-thresh", type=int, default=25)
+    ap.add_argument("--min-area-frac", type=float, default=0.00002)
+    ap.add_argument("--max-area-frac", type=float, default=0.0006)
+    ap.add_argument("--min-aspect", type=float, default=0.45)
+    ap.add_argument("--alpha", type=float, default=0.30)      # pan responsiveness
+    ap.add_argument("--max-jump-frac", type=float, default=0.25)
+    ap.add_argument("--debug", action="store_true")
     args = ap.parse_args()
 
     cap = cv2.VideoCapture(args.input)
@@ -60,21 +75,22 @@ def main() -> int:
         sys.stderr.write("reframe_ball: bad source dimensions\n")
         return 3
 
-    # Target crop: keep full height, take a vertical slice of the reel aspect.
-    # Force EVEN dimensions — H.264 / most encoders reject odd width/height, and
-    # an odd size can make VideoWriter emit an unusable file.
+    # Even crop dims (H.264 needs them); a vertical slice of the reel aspect.
     ratio = parse_aspect(args.aspect)
     crop_w = min(src_w, int(round(src_h * ratio)))
     crop_w -= crop_w % 2
     crop_h = src_h - (src_h % 2)
     half = crop_w // 2
 
-    # Center of the crop window (x). Start centered; pan toward the ball with an
-    # exponential moving average so the motion is smooth, not jittery.
+    frame_area = float(src_w * src_h)
+    min_area = frame_area * args.min_area_frac
+    max_area = frame_area * args.max_area_frac
+    max_jump = src_w * args.max_jump_frac
+
     center_x = src_w / 2.0
-    ema_alpha = 0.15  # lower = smoother/slower pan
     prev_gray = None
     frames_written = 0
+    hits = 0
 
     fourcc = cv2.VideoWriter_fourcc(*"mp4v")
     writer = cv2.VideoWriter(args.output, fourcc, fps, (crop_w, crop_h))
@@ -82,12 +98,6 @@ def main() -> int:
         sys.stderr.write("reframe_ball: cannot open output writer\n")
         cap.release()
         return 3
-
-    # Ball candidate area bounds (fraction of frame area). A padel ball is small
-    # and fast; these are rough starting points and WILL need tuning.
-    frame_area = float(src_w * src_h)
-    min_area = frame_area * 0.00002
-    max_area = frame_area * 0.01
 
     while True:
         ok, frame = cap.read()
@@ -100,37 +110,43 @@ def main() -> int:
         detected_x = None
         if prev_gray is not None:
             diff = cv2.absdiff(prev_gray, gray)
-            _, thresh = cv2.threshold(diff, 18, 255, cv2.THRESH_BINARY)
-            thresh = cv2.dilate(thresh, None, iterations=2)
+            _, thresh = cv2.threshold(diff, args.diff_thresh, 255, cv2.THRESH_BINARY)
+            thresh = cv2.dilate(thresh, None, iterations=1)
             contours, _ = cv2.findContours(
                 thresh, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE
             )
             best = None
-            best_score = 0.0
+            best_score = -1.0
             for c in contours:
                 area = cv2.contourArea(c)
                 if area < min_area or area > max_area:
-                    continue
+                    continue  # too big (player) or too small (noise)
                 x, y, w, h = cv2.boundingRect(c)
-                # Prefer compact, roughly-round blobs (ball-like) over long smears.
-                aspect_pen = min(w, h) / max(w, h) if max(w, h) > 0 else 0
-                score = area * (0.5 + aspect_pen)
+                if w == 0 or h == 0:
+                    continue
+                aspect = min(w, h) / float(max(w, h))
+                if aspect < args.min_aspect:
+                    continue  # elongated smear (limb / line), not the ball
+                cx = x + w / 2.0
+                dist = abs(cx - center_x)
+                if dist > max_jump:
+                    continue  # implausible cross-court jump → not our ball
+                # Prefer round + near the current crop centre.
+                score = aspect - (dist / src_w)
                 if score > best_score:
                     best_score = score
-                    best = (x + w / 2.0, y + h / 2.0)
-            if best is not None:
-                detected_x = best[0]
+                    best = cx
+            detected_x = best
 
         prev_gray = gray
 
         if detected_x is not None:
-            center_x = (1 - ema_alpha) * center_x + ema_alpha * detected_x
+            center_x = (1 - args.alpha) * center_x + args.alpha * detected_x
+            hits += 1
 
-        # Clamp so the crop stays fully inside the frame.
         cx = int(round(max(half, min(src_w - half, center_x))))
         x0 = cx - half
         crop = frame[0:crop_h, x0:x0 + crop_w]
-        # Guard against off-by-one at the right edge.
         if crop.shape[1] != crop_w or crop.shape[0] != crop_h:
             crop = cv2.resize(crop, (crop_w, crop_h))
         writer.write(crop)
@@ -139,8 +155,12 @@ def main() -> int:
     cap.release()
     writer.release()
 
-    # No frames → the output is unusable; fail hard so the caller falls back to
-    # the full-frame clip instead of shipping an empty reel.
+    if args.debug:
+        sys.stderr.write(
+            f"reframe_ball: frames={frames_written} ball_hits={hits} "
+            f"hit_rate={(hits / frames_written if frames_written else 0):.2f}\n"
+        )
+
     if frames_written == 0:
         sys.stderr.write("reframe_ball: no frames written\n")
         return 4
