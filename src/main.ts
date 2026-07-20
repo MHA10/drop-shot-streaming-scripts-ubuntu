@@ -62,60 +62,63 @@ class Application {
       // USB device, not any one stream). Its isDevicePresent() drives automatic
       // per-box enablement of the highlight buffer inside StartStreamUseCase —
       // a box with no ESP32 attached simply never records highlights.
+      // Highlight capture subsystem — wired up ONLY when enabled, so a box with
+      // highlights off has ZERO new runtime behavior (no serial port opened, no
+      // capture pipeline, no logs). When on, enablement is still gated further
+      // by ESP32 presence inside StartStreamUseCase.
       const highlightConfig = config.get().highlight;
-      // Debug knobs only apply when the feature is enabled, so a leftover
-      // HIGHLIGHT_FORCE_PRESENT / HIGHLIGHT_TRIGGER_FILE on a box where highlight
-      // is off stays inert.
-      this.highlightSignalSource = new SerialHighlightListener(
-        highlightConfig.serialPortPath,
-        highlightConfig.serialBaudRate,
-        this.logger,
-        highlightConfig.enabled && highlightConfig.forcePresent,
-        highlightConfig.enabled ? highlightConfig.triggerFile : ""
-      );
-      this.highlightSignalSource.start();
+      if (highlightConfig.enabled) {
+        this.highlightSignalSource = new SerialHighlightListener(
+          highlightConfig.serialPortPath,
+          highlightConfig.serialBaudRate,
+          this.logger,
+          highlightConfig.forcePresent,
+          highlightConfig.triggerFile
+        );
+        this.highlightSignalSource.start();
 
-      // Capture pipeline: signal → cut window → (reframe) → overlay logos.
-      const highlightExtractor = new HighlightExtractorService(
-        highlightConfig.outputDir,
-        this.logger
-      );
-      // Ball-tracking reframer: real Python/OpenCV impl only when enabled,
-      // else a no-op (full-frame). Off by default until tuned on real footage.
-      const ballReframer = highlightConfig.ballTracking.enabled
-        ? new PythonBallReframer(highlightConfig.reelAspect, this.logger)
-        : new NullBallReframer();
-      const highlightRenderer = new HighlightRendererService(
-        path.resolve("./public/ds.png"),
-        path.resolve(config.get().images.clientPath),
-        this.logger
-      );
-      const captureHighlightUseCase = new CaptureHighlightUseCase(
-        this.highlightBufferRegistry,
-        highlightExtractor,
-        ballReframer,
-        highlightRenderer,
-        this.logger
-      );
-      // One box runs one active stream, so route a highlight to whichever court
-      // is currently running. If none is live, there's nothing to capture.
-      this.highlightSignalSource.onHighlight(async ({ receivedAtMs }) => {
-        try {
-          const running = await streamRepository.findRunning();
-          if (running.length === 0) {
-            this.logger.warn("Highlight signal ignored: no running stream");
-            return;
+        // Capture pipeline: signal → cut window → (reframe) → overlay logos.
+        const highlightExtractor = new HighlightExtractorService(
+          highlightConfig.outputDir,
+          this.logger
+        );
+        // Ball-tracking reframer: real Python/OpenCV impl only when enabled,
+        // else a no-op (full-frame). Off by default until tuned on real footage.
+        const ballReframer = highlightConfig.ballTracking.enabled
+          ? new PythonBallReframer(highlightConfig.reelAspect, this.logger)
+          : new NullBallReframer();
+        const highlightRenderer = new HighlightRendererService(
+          path.resolve("./public/ds.png"),
+          path.resolve(config.get().images.clientPath),
+          this.logger
+        );
+        const captureHighlightUseCase = new CaptureHighlightUseCase(
+          this.highlightBufferRegistry,
+          highlightExtractor,
+          ballReframer,
+          highlightRenderer,
+          this.logger
+        );
+        // One box runs one active stream, so route a highlight to whichever
+        // court is currently running. If none is live, nothing to capture.
+        this.highlightSignalSource.onHighlight(async ({ receivedAtMs }) => {
+          try {
+            const running = await streamRepository.findRunning();
+            if (running.length === 0) {
+              this.logger.warn("Highlight signal ignored: no running stream");
+              return;
+            }
+            await captureHighlightUseCase.execute({
+              courtId: running[0].courtId,
+              receivedAtMs,
+            });
+          } catch (error) {
+            this.logger.error("Highlight capture handler failed", {
+              error: error instanceof Error ? error.message : String(error),
+            });
           }
-          await captureHighlightUseCase.execute({
-            courtId: running[0].courtId,
-            receivedAtMs,
-          });
-        } catch (error) {
-          this.logger.error("Highlight capture handler failed", {
-            error: error instanceof Error ? error.message : String(error),
-          });
-        }
-      });
+        });
+      }
 
       // Initialize use cases
       const startStreamUseCase = new StartStreamUseCase(
