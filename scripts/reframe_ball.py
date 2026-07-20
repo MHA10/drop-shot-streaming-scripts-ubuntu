@@ -1,30 +1,28 @@
 #!/usr/bin/env python3
 """
 reframe_ball.py — crop a padel highlight clip to a reel aspect that follows the
-ball, using classical CV (no ML model).
+play, using classical CV (no ML model).
 
-DETECTION (COLOR + MOTION + SHAPE)
-    A padel ball is small, round, bright optic-yellow, and moving; players and
-    background are not all four. So each frame we intersect three cues:
-      * COLOR  — an HSV range for the ball (rejects dark clothing / blue court).
-      * MOTION — frame differencing (rejects STATIC yellow: lines, signage).
-      * SHAPE/SIZE — small + round blob (rejects big/elongated player motion).
-    Among survivors we pick the roundest nearest the last position and reject
-    implausible cross-court jumps.
+MODES (--mode)
+  action  (default) — follow the PLAYERS. Background subtraction (MOG2) isolates
+      the moving people; the crop centre is their area-weighted horizontal
+      centre, so it sits on wherever the rally is. Robust: players are big,
+      stable targets (unlike the tiny ball, which color/motion can't separate
+      from yellow-green plants and orange paddles on this footage).
+  ball — follow the BALL via an HSV colour gate ∩ motion ∩ small-round shape.
+      Kept for footage where the ball is cleanly separable; unreliable on dim,
+      cluttered courts (documented limitation).
 
 SMOOTH PANNING (two passes)
-    Per-frame reaction is jittery, so we detect over the WHOLE clip, then build
-    ONE smoothed pan path (interpolate gaps -> median filter -> wide moving
-    average -> hard max-velocity clamp) and render the crop along it. Smoothness
-    is prioritized over a tight ball-lock.
+  Detect a target x for every frame, then build ONE smoothed pan path
+  (interpolate gaps → median filter → wide moving average → hard max-velocity
+  clamp) and render the crop along it. Smoothness is prioritized.
 
 DEBUG / DEMO
-    --debug-overlay <path> writes a FULL-FRAME annotated video showing, per
-    frame: the detected ball box (green), the chosen ball centre (red dot), and
-    the crop window (yellow). Use it to see/tune what the detector locks onto.
+  --debug-overlay <path> writes a full-frame annotated video: detected boxes
+  (green), the chosen crop-centre (red dot), and the crop window (yellow).
 
 Off by default in the streamer; falls back to full frame on any failure.
-Exit non-zero on any hard failure so the caller falls back to the full frame.
 """
 
 import argparse
@@ -38,7 +36,7 @@ except Exception as exc:  # noqa: BLE001
     sys.exit(2)
 
 
-def parse_aspect(aspect: str) -> float:
+def parse_aspect(aspect):
     try:
         w, h = aspect.split(":")
         r = float(w) / float(h)
@@ -47,10 +45,10 @@ def parse_aspect(aspect: str) -> float:
         return 9 / 16
 
 
-def parse_hsv(s: str, default):
+def parse_hsv(s, default):
     try:
-        parts = [int(v) for v in s.split(",")]
-        return np.array(parts[:3], dtype=np.uint8) if len(parts) >= 3 else np.array(default, np.uint8)
+        p = [int(v) for v in s.split(",")]
+        return np.array(p[:3], np.uint8) if len(p) >= 3 else np.array(default, np.uint8)
     except Exception:  # noqa: BLE001
         return np.array(default, np.uint8)
 
@@ -75,31 +73,30 @@ def median_filter(xs, win):
     return out
 
 
-def main() -> int:
+def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--input", required=True)
     ap.add_argument("--output", required=True)
     ap.add_argument("--aspect", default="9:16")
-    # Colour gate (HSV, OpenCV H is 0-179). Default = optic yellow-green ball.
+    ap.add_argument("--mode", choices=["action", "ball"], default="action")
+    # action-mode (players)
+    ap.add_argument("--min-player-frac", type=float, default=0.0015)
+    ap.add_argument("--max-player-frac", type=float, default=0.20)
+    # ball-mode
     ap.add_argument("--hsv-lower", default="20,70,120")
     ap.add_argument("--hsv-upper", default="45,255,255")
-    # Motion + shape gates
     ap.add_argument("--diff-thresh", type=int, default=18)
-    ap.add_argument("--motion-dilate", type=int, default=12)  # px halo around motion
     ap.add_argument("--min-area-frac", type=float, default=0.000008)
     ap.add_argument("--max-area-frac", type=float, default=0.0006)
     ap.add_argument("--min-aspect", type=float, default=0.5)
     ap.add_argument("--max-jump-frac", type=float, default=0.30)
-    # Smoothing
+    # smoothing
     ap.add_argument("--median-sec", type=float, default=0.5)
     ap.add_argument("--smooth-sec", type=float, default=2.0)
     ap.add_argument("--max-vel-frac", type=float, default=0.004)
     ap.add_argument("--debug-overlay", default="")
     ap.add_argument("--debug", action="store_true")
     args = ap.parse_args()
-
-    lower = parse_hsv(args.hsv_lower, [20, 70, 120])
-    upper = parse_hsv(args.hsv_upper, [45, 255, 255])
 
     cap = cv2.VideoCapture(args.input)
     if not cap.isOpened():
@@ -117,67 +114,91 @@ def main() -> int:
     crop_w -= crop_w % 2
     crop_h = src_h - (src_h % 2)
     half = crop_w // 2
-
     frame_area = float(src_w * src_h)
+
+    # detector state
+    lower = parse_hsv(args.hsv_lower, [20, 70, 120])
+    upper = parse_hsv(args.hsv_upper, [45, 255, 255])
     min_area = frame_area * args.min_area_frac
     max_area = frame_area * args.max_area_frac
     max_jump = src_w * args.max_jump_frac
+    min_player = frame_area * args.min_player_frac
+    max_player = frame_area * args.max_player_frac
+    bg = cv2.createBackgroundSubtractorMOG2(history=300, varThreshold=40, detectShadows=False) \
+        if args.mode == "action" else None
 
-    # ---- Pass 1: detect ball x + box per frame ----
-    xs_raw = []          # x or NaN
-    boxes = []           # (x,y,w,h) or None
+    xs_raw, boxes_per_frame = [], []
     prev_gray = None
     last_x = src_w / 2.0
+
     while True:
         ok, frame = cap.read()
         if not ok:
             break
-        hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
-        color = cv2.inRange(hsv, lower, upper)
         gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-
         found_x = np.nan
-        found_box = None
-        if prev_gray is not None:
-            diff = cv2.absdiff(prev_gray, gray)
-            _, motion = cv2.threshold(diff, args.diff_thresh, 255, cv2.THRESH_BINARY)
-            if args.motion_dilate > 0:
-                k = np.ones((args.motion_dilate, args.motion_dilate), np.uint8)
-                motion = cv2.dilate(motion, k, iterations=1)
-            mask = cv2.bitwise_and(color, motion)   # yellow AND moving
-            contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-            best_score = -1.0
+        frame_boxes = []
+
+        if args.mode == "action":
+            fg = bg.apply(frame)
+            _, fg = cv2.threshold(fg, 200, 255, cv2.THRESH_BINARY)  # drop shadows/soft
+            fg = cv2.morphologyEx(fg, cv2.MORPH_OPEN, np.ones((3, 3), np.uint8))
+            fg = cv2.dilate(fg, np.ones((9, 9), np.uint8), iterations=1)
+            contours, _ = cv2.findContours(fg, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+            wsum = 0.0
+            xsum = 0.0
             for c in contours:
                 area = cv2.contourArea(c)
-                if area < min_area or area > max_area:
-                    continue
+                if area < min_player or area > max_player:
+                    continue  # too small (noise/plants) or too big (light flash)
                 x, y, w, h = cv2.boundingRect(c)
-                if w == 0 or h == 0:
-                    continue
-                aspect = min(w, h) / float(max(w, h))
-                if aspect < args.min_aspect:
+                # players are taller than wide; reject wide low blobs (shadows/court)
+                if h < w * 0.8:
                     continue
                 cx = x + w / 2.0
-                dist = abs(cx - last_x)
-                if dist > max_jump:
-                    continue
-                score = aspect - (dist / src_w)
-                if score > best_score:
-                    best_score = score
-                    found_x = cx
-                    found_box = (x, y, w, h)
-            if found_box is not None:
-                last_x = found_x
+                wsum += area
+                xsum += area * cx
+                frame_boxes.append((x, y, w, h))
+            if wsum > 0:
+                found_x = xsum / wsum
+        else:  # ball mode
+            hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
+            color = cv2.inRange(hsv, lower, upper)
+            if prev_gray is not None:
+                diff = cv2.absdiff(prev_gray, gray)
+                _, motion = cv2.threshold(diff, args.diff_thresh, 255, cv2.THRESH_BINARY)
+                motion = cv2.dilate(motion, np.ones((12, 12), np.uint8), iterations=1)
+                mask = cv2.bitwise_and(color, motion)
+                contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+                best = -1.0
+                for c in contours:
+                    area = cv2.contourArea(c)
+                    if area < min_area or area > max_area:
+                        continue
+                    x, y, w, h = cv2.boundingRect(c)
+                    if w == 0 or h == 0 or min(w, h) / max(w, h) < args.min_aspect:
+                        continue
+                    cx = x + w / 2.0
+                    dist = abs(cx - last_x)
+                    if dist > max_jump:
+                        continue
+                    score = (min(w, h) / max(w, h)) - dist / src_w
+                    if score > best:
+                        best = score
+                        found_x = cx
+                        frame_boxes = [(x, y, w, h)]
+                if not np.isnan(found_x):
+                    last_x = found_x
+
         prev_gray = gray
         xs_raw.append(found_x)
-        boxes.append(found_box)
+        boxes_per_frame.append(frame_boxes)
     cap.release()
 
     n = len(xs_raw)
     if n == 0:
         sys.stderr.write("reframe_ball: no frames read\n")
         return 4
-
     xs = np.array(xs_raw, dtype=float)
     valid = ~np.isnan(xs)
     hit_rate = valid.sum() / n
@@ -200,11 +221,10 @@ def main() -> int:
     if args.debug:
         vel = np.abs(np.diff(path)) if n > 1 else np.array([0])
         sys.stderr.write(
-            f"reframe_ball: frames={n} hit_rate={hit_rate:.2f} "
+            f"reframe_ball: mode={args.mode} frames={n} hit_rate={hit_rate:.2f} "
             f"max_step_px={vel.max():.0f} mean_step_px={vel.mean():.2f}\n"
         )
 
-    # ---- Pass 2: render crop (+ optional debug overlay) ----
     cap = cv2.VideoCapture(args.input)
     fourcc = cv2.VideoWriter_fourcc(*"mp4v")
     writer = cv2.VideoWriter(args.output, fourcc, fps, (crop_w, crop_h))
@@ -212,12 +232,10 @@ def main() -> int:
         sys.stderr.write("reframe_ball: cannot open output writer\n")
         cap.release()
         return 3
-    overlay_writer = None
-    if args.debug_overlay:
-        overlay_writer = cv2.VideoWriter(args.debug_overlay, fourcc, fps, (src_w, src_h))
+    ov_writer = cv2.VideoWriter(args.debug_overlay, fourcc, fps, (src_w, src_h)) \
+        if args.debug_overlay else None
 
-    i = 0
-    written = 0
+    i = written = 0
     while True:
         ok, frame = cap.read()
         if not ok:
@@ -229,27 +247,20 @@ def main() -> int:
             crop = cv2.resize(crop, (crop_w, crop_h))
         writer.write(crop)
         written += 1
-
-        if overlay_writer is not None:
+        if ov_writer is not None:
             ov = frame.copy()
-            # crop window (yellow)
             cv2.rectangle(ov, (x0, 0), (x0 + crop_w, crop_h), (0, 255, 255), 3)
-            box = boxes[min(i, n - 1)]
-            if box is not None:
-                bx, by, bw, bh = box
+            for (bx, by, bw, bh) in boxes_per_frame[min(i, n - 1)]:
                 cv2.rectangle(ov, (bx, by), (bx + bw, by + bh), (0, 255, 0), 2)
-                cv2.circle(ov, (bx + bw // 2, by + bh // 2), 6, (0, 0, 255), -1)
-                cv2.putText(ov, f"ball x={bx + bw // 2} y={by + bh // 2}", (bx, max(0, by - 8)),
-                            cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 255), 2)
-            else:
-                cv2.putText(ov, "ball: (none this frame)", (20, 40),
-                            cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)
-            overlay_writer.write(ov)
+            cv2.circle(ov, (cx, crop_h // 2), 8, (0, 0, 255), -1)
+            cv2.putText(ov, f"{args.mode} center x={cx}", (x0 + 8, 30),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)
+            ov_writer.write(ov)
         i += 1
     cap.release()
     writer.release()
-    if overlay_writer is not None:
-        overlay_writer.release()
+    if ov_writer is not None:
+        ov_writer.release()
 
     if written == 0:
         sys.stderr.write("reframe_ball: no frames written\n")
