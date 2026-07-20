@@ -107,6 +107,7 @@ def main():
     src_h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
     if src_w <= 0 or src_h <= 0:
         sys.stderr.write("reframe_ball: bad source dimensions\n")
+        cap.release()
         return 3
 
     ratio = parse_aspect(args.aspect)
@@ -152,8 +153,11 @@ def main():
                 if area < min_player or area > max_player:
                     continue  # too small (noise/plants) or too big (light flash)
                 x, y, w, h = cv2.boundingRect(c)
-                # players are taller than wide; reject wide low blobs (shadows/court)
-                if h < w * 0.8:
+                # Reject only extreme horizontal streaks (reflections / banner
+                # glints). Keep near-square and wide blobs — two clustered
+                # players often merge into a wide box at the key rally moments,
+                # and dropping those was hurting tracking accuracy.
+                if w > h * 3:
                     continue
                 cx = x + w / 2.0
                 wsum += area
@@ -236,31 +240,35 @@ def main():
         if args.debug_overlay else None
 
     i = written = 0
-    while True:
-        ok, frame = cap.read()
-        if not ok:
-            break
-        cx = int(path[min(i, n - 1)])
-        x0 = cx - half
-        crop = frame[0:crop_h, x0:x0 + crop_w]
-        if crop.shape[1] != crop_w or crop.shape[0] != crop_h:
-            crop = cv2.resize(crop, (crop_w, crop_h))
-        writer.write(crop)
-        written += 1
+    try:
+        while True:
+            ok, frame = cap.read()
+            if not ok:
+                break
+            cx = int(path[min(i, n - 1)])
+            x0 = cx - half
+            crop = frame[0:crop_h, x0:x0 + crop_w]
+            if crop.shape[1] != crop_w or crop.shape[0] != crop_h:
+                crop = cv2.resize(crop, (crop_w, crop_h))
+            writer.write(crop)
+            written += 1
+            if ov_writer is not None:
+                ov = frame.copy()
+                cv2.rectangle(ov, (x0, 0), (x0 + crop_w, crop_h), (0, 255, 255), 3)
+                for (bx, by, bw, bh) in boxes_per_frame[min(i, n - 1)]:
+                    cv2.rectangle(ov, (bx, by), (bx + bw, by + bh), (0, 255, 0), 2)
+                cv2.circle(ov, (cx, crop_h // 2), 8, (0, 0, 255), -1)
+                cv2.putText(ov, f"{args.mode} center x={cx}", (x0 + 8, 30),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)
+                ov_writer.write(ov)
+            i += 1
+    finally:
+        # Always release so an error mid-render never leaks handles or leaves a
+        # locked/partial file (the caller ffprobe-validates and falls back).
+        cap.release()
+        writer.release()
         if ov_writer is not None:
-            ov = frame.copy()
-            cv2.rectangle(ov, (x0, 0), (x0 + crop_w, crop_h), (0, 255, 255), 3)
-            for (bx, by, bw, bh) in boxes_per_frame[min(i, n - 1)]:
-                cv2.rectangle(ov, (bx, by), (bx + bw, by + bh), (0, 255, 0), 2)
-            cv2.circle(ov, (cx, crop_h // 2), 8, (0, 0, 255), -1)
-            cv2.putText(ov, f"{args.mode} center x={cx}", (x0 + 8, 30),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)
-            ov_writer.write(ov)
-        i += 1
-    cap.release()
-    writer.release()
-    if ov_writer is not None:
-        ov_writer.release()
+            ov_writer.release()
 
     if written == 0:
         sys.stderr.write("reframe_ball: no frames written\n")

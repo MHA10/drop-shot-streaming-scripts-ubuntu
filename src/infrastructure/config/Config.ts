@@ -152,10 +152,12 @@ export class Config {
         healthCheckInterval: parseInt(
           this.getEnvVar("HEALTH_CHECK_INTERVAL", "30000")
         ),
+        // Trailing slash trimmed so a base like ".../live2/" can't produce a
+        // double slash when the stream key is appended.
         youtubeRtmpBase: this.getEnvVar(
           "YOUTUBE_RTMP_BASE",
           "rtmp://a.rtmp.youtube.com/live2"
-        ),
+        ).replace(/\/+$/, ""),
       },
       ads: {
         defaultDurationSec: this.parseIntEnv("AD_DEFAULT_DURATION_SEC", 12),
