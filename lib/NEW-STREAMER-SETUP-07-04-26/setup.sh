@@ -231,6 +231,8 @@ CLOUDINARY_API_SECRET=IrdU2pOiXW9GwDeP7h5JV3MRdwM
 # HIGHLIGHT_FORCE_PRESENT=true            # pretend the ESP32 is present
 # HIGHLIGHT_TRIGGER_FILE=/tmp/hl-trigger  # `touch` this file to fire a highlight
 # HIGHLIGHT_BALL_TRACKING_ENABLED=true    # player-follow reel (needs python3+opencv, installed above)
+#   Once the two knobs above are set and the streamer restarted, fire a test
+#   reel with:  bash lib/highlight-trigger.sh
 ENVEOF
 log_info ".env file created at $REPO_DIR/.env"
 
