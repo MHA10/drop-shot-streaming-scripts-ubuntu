@@ -336,10 +336,21 @@ Consequences:
 - [ ] `pm2 monit` shows acceptable CPU/memory headroom with the second encode
       running continuously — this is the actual validation of the "cheap
       encode" assumption above
-- [ ] The existing stall-detection/restart logic still correctly reflects the
-      live RTMP output's health with a second output present (deliberately
-      test a stall/restart scenario if possible, or at minimum confirm the
-      `time=` progression in logs still tracks real elapsed stream time)
+- [ ] **WATCH ITEM (found in local full-app test 2026-07-20):** the existing
+      stall detector (`NodeFFmpegService.startStream`: "10 identical `time=` →
+      SIGKILL") can FALSE-POSITIVE with the second output present — ffmpeg
+      emits interleaved progress from both outputs and the naive single-value
+      `time=` tracker can read a non-advancing value and restart a HEALTHY
+      stream in a loop. Locally this was entangled with CPU contention (a
+      laptop running the 1080p dual-encode at ~0.5× produced a transient
+      startup freeze); the same command run directly (no app killer) was
+      healthy (`time=`→24s, segments written). On staging, confirm the live
+      stream does NOT enter a stall-restart loop once the buffer is enabled.
+      If it does, the ready fix is a monotonic high-water-mark of `time=`
+      (flag a stall only when the MAX observed time stops advancing) — this is
+      behavior-identical for today's single-output streams and only corrects
+      the multi-output case. Do NOT pre-emptively change core retry logic
+      without staging evidence.
 - [ ] Segment files appear in the configured buffer directory and are valid,
       playable video when inspected with `ffprobe`/`ffplay`
 

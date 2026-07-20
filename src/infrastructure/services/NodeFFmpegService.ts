@@ -316,7 +316,7 @@ export class NodeFFmpegService implements FFmpegService {
     adPaths?: AdOverlayPaths,
     highlightBufferDir?: string | null
   ): FFmpegCommand {
-    const rtmpUrl = `rtmp://a.rtmp.youtube.com/live2/${streamKey}`;
+    const rtmpUrl = `${this.config.get().stream.youtubeRtmpBase}/${streamKey}`;
     let fakeAudioInputCounter = 0;
 
     let args: string[] = [];

@@ -20,6 +20,9 @@ export interface AppConfig {
   stream: {
     persistentStateDir: string;
     healthCheckInterval: number;
+    // RTMP ingest base the live output pushes to. Defaults to YouTube; override
+    // (YOUTUBE_RTMP_BASE) to point at a local sink for end-to-end local testing.
+    youtubeRtmpBase: string;
   };
   ads: {
     defaultDurationSec: number;
@@ -148,6 +151,10 @@ export class Config {
         ),
         healthCheckInterval: parseInt(
           this.getEnvVar("HEALTH_CHECK_INTERVAL", "30000")
+        ),
+        youtubeRtmpBase: this.getEnvVar(
+          "YOUTUBE_RTMP_BASE",
+          "rtmp://a.rtmp.youtube.com/live2"
         ),
       },
       ads: {
