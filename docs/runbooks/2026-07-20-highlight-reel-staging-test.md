@@ -3,7 +3,9 @@
 > **Audience**: Engineer/DevOps validating the highlight-reel feature on a staging streamer box before it goes to production.
 > **Feature branch / PR**: `feat/highlight-clip-capture` → `staging` (PR #28)
 > **Ships**: OFF by default — this runbook turns it on for one box and proves the end-to-end path.
-> **Box layout**: repo at `~/Documents/drop-shot-streaming-scripts-ubuntu`, `.env` at repo root, PM2 process `streamer-<DROPSHOT_GROUND_ID>`, app runs via `npx streamer-node@latest`.
+> **Box layout**: repo at `/home/ds/Documents/drop-shot-streaming-scripts-ubuntu`, `.env` at repo root.
+> **Staging runs from the git checkout** via `lib/pm2/run-staging.sh` (`npm run dev` = build + start), PM2 process **`dropshot-staging`**, working dir pinned to the repo dir. This means **no `npm publish` is needed to test here** — you deploy by pulling the branch and restarting. (Production is different: it runs `npx streamer-node@latest` as `streamer-<ground>`; that path is only relevant after staging passes — see §3.)
+> First, confirm which runner your box uses: `pm2 status`. This runbook assumes **`dropshot-staging`**; if instead you see `streamer-<ground>`, your box uses the npx/publish path and you must follow §3B.
 
 There is **no ESP32 button on staging**, so this runbook uses the built-in debug knobs (`HIGHLIGHT_FORCE_PRESENT` + `HIGHLIGHT_TRIGGER_FILE`) to simulate a hardware press. Everything downstream of the press (buffer → extract → reframe → render) is the real production path.
 
@@ -42,60 +44,71 @@ There is **no ESP32 button on staging**, so this runbook uses the built-in debug
 | Requirement | Verify |
 |---|---|
 | SSH to the staging box | `ssh <user>@<staging-host>` |
-| Streamer already running a live stream | `pm2 status` → `streamer-<ground>` is `online` |
+| Streamer already running a live stream | `pm2 status` → `dropshot-staging` is `online` |
 | `ffmpeg` + `ffprobe` present | `ffmpeg -version`, `ffprobe -version` |
 | Disk headroom (buffer needs a few hundred MB) | `df -h .` |
 | For Test C only: python3 + OpenCV | `python3 -c "import cv2, numpy"` (installed non-fatally by `setup.sh`) |
 
-Set a shell var for convenience (used throughout):
+Set shell vars for convenience (used throughout). `PROC` is the PM2 process name — confirm it against `pm2 status`:
 
 ```bash
-export GID="$(grep -E '^DROPSHOT_GROUND_ID=' ~/Documents/drop-shot-streaming-scripts-ubuntu/.env | cut -d= -f2-)"
-echo "$GID"   # sanity check — should print the ground id
+export REPO=/home/ds/Documents/drop-shot-streaming-scripts-ubuntu
+export PROC=dropshot-staging     # from `pm2 status`; use streamer-<ground> if that's what you see
+export GID="$(grep -E '^DROPSHOT_GROUND_ID=' "$REPO/.env" | cut -d= -f2-)"
+echo "$PROC / $GID"   # sanity check
 ```
 
 ---
 
 ## 3. Deploy the build to the box
 
-The streamer runs the **published npm package**, not this git branch. The feature reaches the box only after a new version is published.
+### 3A. Staging (`dropshot-staging` — runs from the git checkout)
 
-1. **Merge PR #28 into `staging`** (review first).
-2. **Publish a new version** of `streamer-node` (whoever owns releases). `prepublishOnly` rebuilds, so `dist/` — including `dist/scripts/reframe_ball.py` — is included.
-   - ⚠️ If publishing to the `latest` tag, **every** box on `@latest` picks this up on its next restart, not just staging. If staging must be isolated from production, publish under a separate dist-tag (e.g. `@next`) and point the staging runner at it. Confirm this with whoever owns publishing before proceeding.
-3. On the box, pull the new version by restarting (the runner invokes `npx streamer-node@latest`):
+This is the normal staging path. The service runs `lib/pm2/run-staging.sh`, which `cd`s into the repo and runs `npm install && npm run dev` (`dev` = `build` + `start`). So the box runs **whatever the checkout is on** — no `npm publish`, no effect on production boxes. `npm run build` copies `scripts/ → dist/`, so `reframe_ball.py` ships automatically.
 
 ```bash
-pm2 restart streamer-$GID
-pm2 logs streamer-$GID --lines 40   # confirm it booted the new version
+cd "$REPO"
+git fetch origin
+git checkout feat/highlight-clip-capture && git pull    # or `staging` once PR #28 is merged
+# restart re-runs run-staging.sh → npm install + build + start
+pm2 restart "$PROC"
+pm2 logs "$PROC" --lines 60    # watch it install → build → boot
 ```
 
-> The `git clone` in `setup.sh` only provides PM2 tooling, `.env`, and `lib/highlight-trigger.sh` — it does **not** provide the app code. Make sure the box's checkout is on the merged `staging` commit so `lib/highlight-trigger.sh` is present.
+> Restart re-runs `npm install`, which also (re)installs the optional `serialport`. If that native build fails on the box it is **non-fatal** — highlights just can't use real hardware; the forced-presence test path still works.
+
+### 3B. Production-style boxes (`streamer-<ground>` — runs `npx @latest`)
+
+Only if `pm2 status` showed `streamer-<ground>` instead. These run the **published npm package**, so the feature reaches them only after a publish:
+
+1. Merge PR #28, then **publish a new `streamer-node` version** (whoever owns releases; `prepublishOnly` rebuilds `dist/` incl. `dist/scripts/reframe_ball.py`).
+2. ⚠️ Publishing to the `latest` tag means **every** `@latest` box picks it up on its next restart — not just this one. To isolate, publish under a separate dist-tag (e.g. `@next`) and point only this box's runner at it. Confirm with whoever owns publishing first.
+3. `pm2 restart "$PROC"` then `pm2 logs "$PROC" --lines 40` to confirm the new version booted.
 
 ---
 
 ## 4. Configure `.env`
 
-Edit `~/Documents/drop-shot-streaming-scripts-ubuntu/.env` and add:
+Edit `$REPO/.env` and add:
 
 ```bash
 # --- Highlight reel (staging test) ---
 HIGHLIGHT_ENABLED=true
 HIGHLIGHT_FORCE_PRESENT=true                    # no ESP32 → pretend present so the buffer records
 HIGHLIGHT_TRIGGER_FILE=/tmp/hl-trigger          # `touch` this to simulate a button press
-HIGHLIGHT_BUFFER_DIR=/home/<user>/hl-buffer     # ABSOLUTE — see note below
-HIGHLIGHT_OUTPUT_DIR=/home/<user>/hl-out        # ABSOLUTE — where reels land
+HIGHLIGHT_BUFFER_DIR=/home/ds/hl-buffer         # absolute — see note below
+HIGHLIGHT_OUTPUT_DIR=/home/ds/hl-out            # absolute — where reels land
 # HIGHLIGHT_BALL_TRACKING_ENABLED=true          # enable only for Test C
 ```
 
-> **Use absolute paths.** The defaults (`./highlight-buffer`, `./highlights`) are relative to the runner's working directory, which is not pinned by the PM2 launcher — so a relative path can land somewhere unexpected. Absolute paths remove all doubt and make the files easy to find.
+> **Paths.** On `dropshot-staging` the working dir is pinned to `$REPO`, so the defaults (`./highlight-buffer`, `./highlights`) resolve predictably *inside the repo* — fine, but they'll clutter the checkout. Absolute paths (as above) keep test artifacts out of the repo and are unambiguous on any runner. Either works; absolute is recommended.
 
 **Why `HIGHLIGHT_FORCE_PRESENT=true` matters:** the rolling buffer only records when a highlight device is *present*. With no ESP32 attached, presence would be false and the buffer would stay empty — so there'd be nothing to cut. This knob forces presence on for the test. (Remove it in production; the ESP32 provides real presence.)
 
 Apply the config:
 
 ```bash
-pm2 restart streamer-$GID
+pm2 restart $PROC
 ```
 
 ---
@@ -103,7 +116,7 @@ pm2 restart streamer-$GID
 ## 5. Restart and verify a clean boot
 
 ```bash
-pm2 logs streamer-$GID --lines 80
+pm2 logs $PROC --lines 80
 ```
 
 Expected within the first ~15s:
@@ -121,7 +134,7 @@ If you see `serialport module unavailable ...` that is **fine** on staging — p
 Watch the buffer directory fill and self-prune:
 
 ```bash
-watch -n 2 'ls -la /home/<user>/hl-buffer | tail'
+watch -n 2 'ls -la /home/ds/hl-buffer | tail'
 ```
 
 Expected:
@@ -137,14 +150,14 @@ If the directory stays empty → presence isn't on (check `HIGHLIGHT_FORCE_PRESE
 Let a real rally play (or just let the stream run ~30s so the buffer has content), then fire the manual trigger with the helper script:
 
 ```bash
-cd ~/Documents/drop-shot-streaming-scripts-ubuntu
+cd $REPO
 bash lib/highlight-trigger.sh
 ```
 
 The script checks the feature is enabled + a trigger file is configured, touches it, and prints where the reel will land. Then follow the logs:
 
 ```bash
-pm2 logs streamer-$GID | grep -i highlight
+pm2 logs $PROC | grep -i highlight
 ```
 
 Expected sequence:
@@ -156,8 +169,8 @@ Expected sequence:
 Then inspect the output:
 
 ```bash
-ls -la /home/<user>/hl-out/$GID/
-ffprobe /home/<user>/hl-out/$GID/<file>.mp4   # confirm duration ~30s, playable
+ls -la /home/ds/hl-out/$GID/
+ffprobe /home/ds/hl-out/$GID/<file>.mp4   # confirm duration ~30s, playable
 ```
 
 Copy it off the box (`scp`) and eyeball it: it should be the last ~30s of play with logos. Fire the trigger a few times to confirm repeatability.
@@ -171,9 +184,9 @@ Only after Test B passes. Requires `python3 -c "import cv2, numpy"` to succeed.
 ```bash
 # in .env:
 HIGHLIGHT_BALL_TRACKING_ENABLED=true
-pm2 restart streamer-$GID
+pm2 restart $PROC
 bash lib/highlight-trigger.sh
-pm2 logs streamer-$GID | grep -iE "reframe|highlight"
+pm2 logs $PROC | grep -iE "reframe|highlight"
 ```
 
 Expected:
@@ -187,9 +200,9 @@ Expected:
 | Watch-item | How | Bad sign | If it happens |
 |---|---|---|---|
 | **Live stream unaffected** | YouTube Studio / the live URL | Stream drops, stutters, or quality changes | Disable the feature (§12); this is a blocker for prod. |
-| **Stall-detector false-fire** | `pm2 logs streamer-$GID \| grep -iE "stall\|SIGKILL\|restart"` | The 2nd (buffer) output makes the stall detector think the stream froze and it kills/restarts ffmpeg in a loop | Known watch-item. A high-water-mark fix is ready — apply it and re-publish if this trips. |
+| **Stall-detector false-fire** | `pm2 logs $PROC \| grep -iE "stall\|SIGKILL\|restart"` | The 2nd (buffer) output makes the stall detector think the stream froze and it kills/restarts ffmpeg in a loop | Known watch-item. A high-water-mark fix is ready — apply it and re-publish if this trips. |
 | **CPU headroom** | `pm2 monit` / `top` | CPU pinned ~100%, especially during a reframe | Keep ball tracking OFF; the CV pass is the heaviest step. |
-| **Disk bounded** | `du -sh /home/<user>/hl-buffer` over time | Grows without bound | Retention isn't pruning — check `HIGHLIGHT_BUFFER_RETENTION_SEC` and dir permissions. |
+| **Disk bounded** | `du -sh /home/ds/hl-buffer` over time | Grows without bound | Retention isn't pruning — check `HIGHLIGHT_BUFFER_RETENTION_SEC` and dir permissions. |
 
 ---
 
@@ -207,7 +220,7 @@ Expected:
 
 | Symptom / log line | Likely cause | Fix |
 |---|---|---|
-| Script: `HIGHLIGHT_ENABLED is not 'true'` | Feature off in `.env` | Set it, `pm2 restart streamer-$GID`. |
+| Script: `HIGHLIGHT_ENABLED is not 'true'` | Feature off in `.env` | Set it, `pm2 restart $PROC`. |
 | Script: `HIGHLIGHT_TRIGGER_FILE is not set` | Knob missing | Add it to `.env`, restart. |
 | Trigger file created but nothing happens | App not watching / not restarted after adding the knob | Confirm `Highlight manual trigger file watch enabled` is in the logs; restart. |
 | `Highlight capture aborted: no active buffer for court` | Buffer empty at trigger time | Ensure `HIGHLIGHT_FORCE_PRESENT=true`; let the stream run ≥30s before triggering. |
@@ -224,7 +237,7 @@ Expected:
 Feature is gated entirely behind `HIGHLIGHT_ENABLED`. To turn it off, comment/remove the highlight block in `.env` (or set `HIGHLIGHT_ENABLED=false`) and restart:
 
 ```bash
-pm2 restart streamer-$GID
+pm2 restart $PROC
 ```
 
 The live path returns to exactly its prior behavior — no buffer output, no serial, no reel pipeline. To roll the code back entirely, publish/point the box at the previous npm version and restart.
@@ -232,5 +245,5 @@ The live path returns to exactly its prior behavior — no buffer output, no ser
 Clean up test artifacts:
 
 ```bash
-rm -rf /home/<user>/hl-buffer/* /home/<user>/hl-out/* /tmp/hl-trigger
+rm -rf /home/ds/hl-buffer/* /home/ds/hl-out/* /tmp/hl-trigger
 ```
