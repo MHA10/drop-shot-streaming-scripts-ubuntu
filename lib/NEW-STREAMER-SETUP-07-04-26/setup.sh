@@ -223,6 +223,14 @@ REACT_APP_CLOUDINARY_FOLDER=dropshot/padel-courts
 REACT_APP_CLOUDINARY_UPLOAD_PRESET=dropshot-partners
 CLOUDINARY_API_KEY=941851446579375
 CLOUDINARY_API_SECRET=IrdU2pOiXW9GwDeP7h5JV3MRdwM
+
+# Highlight Reel Capture (OFF by default — uncomment to enable on this box).
+# HIGHLIGHT_ENABLED=true
+#   Enables the rolling buffer + reel capture. Needs the ESP32 highlight
+#   hardware attached; to test WITHOUT it, also set the two debug knobs below.
+# HIGHLIGHT_FORCE_PRESENT=true            # pretend the ESP32 is present
+# HIGHLIGHT_TRIGGER_FILE=/tmp/hl-trigger  # `touch` this file to fire a highlight
+# HIGHLIGHT_BALL_TRACKING_ENABLED=true    # player-follow reel (needs python3+opencv, installed above)
 ENVEOF
 log_info ".env file created at $REPO_DIR/.env"
 
