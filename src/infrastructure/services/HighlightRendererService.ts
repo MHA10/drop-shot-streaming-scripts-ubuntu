@@ -83,8 +83,13 @@ export class HighlightRendererService {
       }
 
       // Logo bounding box relative to canvas so it reads well at any aspect.
-      const boxW = Math.round(width * 0.26);
-      const boxH = Math.round(height * 0.13);
+      // A portrait (reel) canvas is narrow, so the 16:9 fraction renders the
+      // logos too small — give portrait a larger share of the width. Landscape
+      // (the full-frame reel) keeps the original sizing, so that output is
+      // unchanged.
+      const portrait = height > width;
+      const boxW = Math.round(width * (portrait ? 0.4 : 0.26));
+      const boxH = Math.round(height * (portrait ? 0.18 : 0.13));
 
       const args: string[] = ["-y", "-i", sourceClip];
       logos.forEach((l) => args.push("-i", l.file));

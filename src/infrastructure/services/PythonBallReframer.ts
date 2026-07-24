@@ -68,12 +68,24 @@ export class PythonBallReframer implements BallReframer {
     const out = path.join(dir, `reframed-${base}.mp4`);
 
     try {
-      await this.runPython([
+      // --debug makes the script print a one-line detector summary to stderr
+      // (frames / hit_rate / motion); we log it so staging can SEE whether
+      // tracking actually locked onto players, not just that the script ran.
+      const stderr = await this.runPython([
         this.scriptPath,
         "--input", clipPath,
         "--output", out,
         "--aspect", this.reelAspect,
+        "--debug",
       ]);
+      const summary = stderr
+        .split("\n")
+        .map((l) => l.trim())
+        .filter((l) => l.startsWith("reframe_ball:"))
+        .pop();
+      if (summary) {
+        this.logger.info("Ball reframe stats", { courtId, summary });
+      }
       if (!fs.existsSync(out)) {
         this.logger.warn("Ball reframer produced no output; using full frame", {
           courtId,
@@ -123,7 +135,9 @@ export class PythonBallReframer implements BallReframer {
     });
   }
 
-  private runPython(args: string[]): Promise<void> {
+  // Resolves with the process's stderr (used for the --debug summary line);
+  // rejects on non-zero exit, spawn error, or timeout.
+  private runPython(args: string[]): Promise<string> {
     return new Promise((resolve, reject) => {
       // Low CPU priority so the OpenCV passes can't starve the live ffmpeg.
       const lp = withLowPriority("python3", args);
@@ -140,7 +154,7 @@ export class PythonBallReframer implements BallReframer {
       }, this.timeoutMs);
       proc.on("exit", (code) => {
         clearTimeout(timeout);
-        if (code === 0) resolve();
+        if (code === 0) resolve(stderr);
         else reject(new Error(`python exited ${code}: ${stderr.slice(-200)}`));
       });
       proc.on("error", (err) => {
