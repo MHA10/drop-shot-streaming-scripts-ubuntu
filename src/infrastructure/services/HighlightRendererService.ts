@@ -2,6 +2,7 @@ import * as fs from "fs";
 import { spawn } from "child_process";
 import { Logger } from "../../application/interfaces/Logger";
 import { spawnToFile } from "../utils/spawnToFile";
+import { withLowPriority } from "../utils/lowPriority";
 
 /**
  * Overlays the DropShot + client logos onto a highlight clip, producing the
@@ -27,7 +28,9 @@ import { spawnToFile } from "../utils/spawnToFile";
  *   un-branded source clip).
  */
 export class HighlightRendererService {
-  private readonly renderTimeoutMs = 60_000;
+  // Generous: runs at low priority (see withLowPriority), so it may take
+  // longer under load — better slow than killed. Live stream is protected.
+  private readonly renderTimeoutMs = 120_000;
 
   constructor(
     private readonly dsLogoPath: string,
@@ -112,7 +115,9 @@ export class HighlightRendererService {
         "-an"
       );
 
-      await spawnToFile("ffmpeg", args, outPath, this.renderTimeoutMs);
+      // Low CPU priority so logo compositing can't starve the live ffmpeg.
+      const lp = withLowPriority("ffmpeg", args);
+      await spawnToFile(lp.command, lp.args, outPath, this.renderTimeoutMs);
       this.logger.info("Highlight reel rendered", {
         courtId,
         outPath,

@@ -3,6 +3,7 @@ import * as path from "path";
 import { spawn } from "child_process";
 import { BallReframer } from "../../domain/services/BallReframer";
 import { Logger } from "../../application/interfaces/Logger";
+import { withLowPriority } from "../utils/lowPriority";
 
 /**
  * BallReframer backed by a one-shot Python/OpenCV script (scripts/reframe_ball.py).
@@ -24,7 +25,12 @@ import { Logger } from "../../application/interfaces/Logger";
  *   footage — until then the crop quality is unproven (hence default OFF).
  */
 export class PythonBallReframer implements BallReframer {
-  private readonly timeoutMs = 120_000;
+  // The reframe is the heaviest highlight stage (two-pass OpenCV). It runs at
+  // low CPU priority (see withLowPriority), so on a weak box it can take a
+  // while — give it a generous ceiling rather than killing a nearly-done pass.
+  // Detection is downscaled + frame-skipped (reframe_ball.py) to keep it well
+  // under this in practice.
+  private readonly timeoutMs = 240_000;
   private readonly scriptPath: string;
 
   constructor(
@@ -119,7 +125,9 @@ export class PythonBallReframer implements BallReframer {
 
   private runPython(args: string[]): Promise<void> {
     return new Promise((resolve, reject) => {
-      const proc = spawn("python3", args, {
+      // Low CPU priority so the OpenCV passes can't starve the live ffmpeg.
+      const lp = withLowPriority("python3", args);
+      const proc = spawn(lp.command, lp.args, {
         stdio: ["ignore", "ignore", "pipe"],
       });
       let stderr = "";

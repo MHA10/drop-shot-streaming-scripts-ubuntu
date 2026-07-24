@@ -4,6 +4,7 @@ import { Logger } from "../../application/interfaces/Logger";
 import { SegmentRecord } from "./HighlightBufferManager";
 import { ensureDirSync, safeSegment } from "../utils/paths";
 import { spawnToFile } from "../utils/spawnToFile";
+import { withLowPriority } from "../utils/lowPriority";
 
 /**
  * Cuts a highlight clip out of the rolling buffer's segment files.
@@ -33,7 +34,9 @@ import { spawnToFile } from "../utils/spawnToFile";
  * - Do NOT assume success — callers must handle a null return.
  */
 export class HighlightExtractorService {
-  private readonly extractTimeoutMs = 60_000;
+  // Generous: runs at low priority (see withLowPriority), so it may take
+  // longer under load — better slow than killed. Live stream is protected.
+  private readonly extractTimeoutMs = 120_000;
 
   constructor(
     private readonly outputDir: string,
@@ -81,23 +84,20 @@ export class HighlightExtractorService {
         return null;
       }
 
-      await spawnToFile(
-        "ffmpeg",
-        [
-          "-y",
-          "-f", "concat",
-          "-safe", "0",
-          "-i", listPath,
-          // output-side seek/duration → frame-accurate cut of the window
-          "-ss", String(offsetSec),
-          "-t", String(durationSec),
-          "-c:v", "libx264",
-          "-preset", "veryfast",
-          "-an",
-        ],
-        dest,
-        this.extractTimeoutMs
-      );
+      // Low CPU priority so this re-encode can't starve the live ffmpeg.
+      const { command, args } = withLowPriority("ffmpeg", [
+        "-y",
+        "-f", "concat",
+        "-safe", "0",
+        "-i", listPath,
+        // output-side seek/duration → frame-accurate cut of the window
+        "-ss", String(offsetSec),
+        "-t", String(durationSec),
+        "-c:v", "libx264",
+        "-preset", "veryfast",
+        "-an",
+      ]);
+      await spawnToFile(command, args, dest, this.extractTimeoutMs);
 
       this.logger.info("Highlight clip extracted", {
         courtId,
