@@ -5,6 +5,7 @@ import { HighlightBufferRegistry } from "../../infrastructure/services/Highlight
 import { HighlightExtractorService } from "../../infrastructure/services/HighlightExtractorService";
 import { HighlightRendererService } from "../../infrastructure/services/HighlightRendererService";
 import { BallReframer } from "../../domain/services/BallReframer";
+import { ResourceSampler } from "../../infrastructure/utils/ResourceSampler";
 import { Logger } from "../interfaces/Logger";
 
 export interface CaptureHighlightRequest {
@@ -50,8 +51,7 @@ export class CaptureHighlightUseCase {
   ) {}
 
   public async execute(request: CaptureHighlightRequest): Promise<void> {
-    const { preRollSec, postRollSec, lagMarginSec, bufferSegmentSec } =
-      this.config.highlight;
+    const { preRollSec, postRollSec, lagMarginSec } = this.config.highlight;
 
     const estimatedEventMs = request.receivedAtMs - lagMarginSec * 1000;
     const windowStartMs = estimatedEventMs - preRollSec * 1000;
@@ -64,6 +64,29 @@ export class CaptureHighlightUseCase {
       windowStartMs,
       windowEndMs,
     });
+
+    // Sample box CPU/memory across the whole capture so every reel logs what it
+    // cost the streamer (extract + reframe + render are CPU-heavy). Logged in
+    // the finally below so the stats appear even on an abort/failure path.
+    const sampler = new ResourceSampler();
+    sampler.start();
+    try {
+      await this.runCapture(request, windowStartMs, windowEndMs);
+    } finally {
+      const usage = sampler.stop();
+      this.logger.info("Highlight resource usage", {
+        courtId: request.courtId,
+        ...usage,
+      });
+    }
+  }
+
+  private async runCapture(
+    request: CaptureHighlightRequest,
+    windowStartMs: number,
+    windowEndMs: number
+  ): Promise<void> {
+    const { bufferSegmentSec } = this.config.highlight;
 
     // Wait until the post-roll footage exists: the segment containing windowEnd
     // is only finalized once the muxer rolls to the next one (~bufferSegmentSec
