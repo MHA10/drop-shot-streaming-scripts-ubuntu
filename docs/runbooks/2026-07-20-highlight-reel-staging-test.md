@@ -190,7 +190,7 @@ pm2 logs $PROC | grep -iE "reframe|highlight"
 ```
 
 Expected:
-- ✅ `Ball reframe complete` then `Highlight captured` with `{ reframed: true }` → the reel is a vertical (9:16) crop that follows the players.
+- ✅ `Ball reframe complete` then `Highlight captured` with `{ reframed: true }` → the reel is a vertical (4:5 by default, `HIGHLIGHT_REEL_ASPECT`) crop that follows the players.
 - ✅ If CV fails for any reason (`Ball reframe failed; using full frame`, `Ball reframer script missing ...`), you still get a full-frame reel with `reframed: false`. **A failed reframe must never lose the clip** — verify a file still lands.
 
 ---

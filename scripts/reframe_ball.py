@@ -77,7 +77,7 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--input", required=True)
     ap.add_argument("--output", required=True)
-    ap.add_argument("--aspect", default="9:16")
+    ap.add_argument("--aspect", default="4:5")
     ap.add_argument("--mode", choices=["action", "ball"], default="action")
     # action-mode (players)
     ap.add_argument("--min-player-frac", type=float, default=0.0015)

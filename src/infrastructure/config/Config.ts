@@ -86,7 +86,7 @@ export interface AppConfig {
     // is unvalidated without real padel footage, so by default the reel is the
     // full-frame clip with logos. When enabled it runs a Python/OpenCV pass
     // (requires python3 + opencv-python on the box) and falls back to full
-    // frame on any failure. reelAspect is the target crop aspect, e.g. "9:16".
+    // frame on any failure. reelAspect is the target crop aspect, e.g. "4:5".
     ballTracking: {
       enabled: boolean;
     };
@@ -233,7 +233,11 @@ export class Config {
           enabled:
             this.getEnvVar("HIGHLIGHT_BALL_TRACKING_ENABLED", "false") === "true",
         },
-        reelAspect: this.getEnvVar("HIGHLIGHT_REEL_ASPECT", "9:16"),
+        // 4:5 is the best-compatibility vertical for social (native on
+        // IG/FB feed+reels, uploads clean to Shorts/TikTok) and crops less
+        // aggressively than 9:16, keeping more players in frame. Override per
+        // box with HIGHLIGHT_REEL_ASPECT (e.g. "9:16").
+        reelAspect: this.getEnvVar("HIGHLIGHT_REEL_ASPECT", "4:5"),
       },
       environment: this.getEnvVar("NODE_ENV", "development"),
     };
