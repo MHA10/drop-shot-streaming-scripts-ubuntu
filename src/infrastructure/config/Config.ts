@@ -6,6 +6,12 @@ dotenv.config();
 export interface AppConfig {
   server: {
     baseUrl: string;
+    // Server-to-server auth for the DropShot backend device routes (SSE,
+    // heartbeat, go-live, logs, video upload-session). Sent as the
+    // `x-streaming-api-key` header. Empty = not sent (backward-compatible until
+    // the backend enforces the guard; once it does, this MUST be set or those
+    // calls get 401).
+    streamingApiKey: string;
   };
   images: {
     clientPath: string;
@@ -91,6 +97,11 @@ export interface AppConfig {
       enabled: boolean;
     };
     reelAspect: string;
+    // When true (and STREAMING_API_KEY is set), a finished reel is uploaded to
+    // YouTube via the backend's resumable upload-session flow. Default OFF: the
+    // reel is always written to disk regardless; upload is an additive step
+    // that must never affect the live stream or lose the local clip.
+    uploadEnabled: boolean;
   };
   environment: string;
 }
@@ -133,6 +144,7 @@ export class Config {
     return {
       server: {
         baseUrl: this.getEnvVar("BASE_URL", "https://api.drop-shot.live"),
+        streamingApiKey: this.getEnvVar("STREAMING_API_KEY", ""),
       },
       images: {
         clientPath: this.getEnvVar("CLIENT_IMAGES_PATH", "./public/client.png"),
@@ -238,6 +250,8 @@ export class Config {
         // aggressively than 9:16, keeping more players in frame. Override per
         // box with HIGHLIGHT_REEL_ASPECT (e.g. "9:16").
         reelAspect: this.getEnvVar("HIGHLIGHT_REEL_ASPECT", "4:5"),
+        uploadEnabled:
+          this.getEnvVar("HIGHLIGHT_UPLOAD_ENABLED", "false") === "true",
       },
       environment: this.getEnvVar("NODE_ENV", "development"),
     };

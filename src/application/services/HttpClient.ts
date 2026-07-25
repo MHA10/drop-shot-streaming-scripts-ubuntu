@@ -2,7 +2,17 @@ import { Config } from "../../infrastructure/config/Config";
 
 export class HttpClient {
   private readonly config = Config.getInstance().get();
-  
+
+  // Base headers for DropShot backend calls, including the server-to-server
+  // auth key when configured. Sent only when STREAMING_API_KEY is set, so this
+  // stays backward-compatible until the backend enforces the guard.
+  private backendHeaders(extra: Record<string, string> = {}): Record<string, string> {
+    const headers: Record<string, string> = { ...extra };
+    const key = this.config.server.streamingApiKey;
+    if (key) headers["x-streaming-api-key"] = key;
+    return headers;
+  }
+
   async goLiveYouTube(
     groundId: string,
     courtId: string,
@@ -20,9 +30,7 @@ export class HttpClient {
       try {
         const response = await fetch(url, {
           method: "GET",
-          headers: {
-            "Content-Type": "application/json",
-          },
+          headers: this.backendHeaders({ "Content-Type": "application/json" }),
         });
 
         // If we get a non-5xx response, return it (success or non-retryable error)
@@ -72,10 +80,10 @@ export class HttpClient {
     try {
       const response = await fetch(url, {
         method: "POST",
-        headers: {
+        headers: this.backendHeaders({
           "accept": "application/json",
           "Content-Type": "application/json",
-        },
+        }),
         body: JSON.stringify({
           groundId: groundId
         }),

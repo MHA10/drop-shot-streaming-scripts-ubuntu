@@ -13,6 +13,12 @@ export interface CaptureHighlightRequest {
   receivedAtMs: number;
 }
 
+export interface CaptureHighlightResult {
+  finalPath: string;
+  reframed: boolean;
+  branded: boolean;
+}
+
 /**
  * Turns a highlight signal into a clip cut from that court's rolling buffer.
  *
@@ -50,7 +56,9 @@ export class CaptureHighlightUseCase {
     private readonly logger: Logger
   ) {}
 
-  public async execute(request: CaptureHighlightRequest): Promise<void> {
+  public async execute(
+    request: CaptureHighlightRequest
+  ): Promise<CaptureHighlightResult | null> {
     const { preRollSec, postRollSec, lagMarginSec } = this.config.highlight;
 
     const estimatedEventMs = request.receivedAtMs - lagMarginSec * 1000;
@@ -71,7 +79,7 @@ export class CaptureHighlightUseCase {
     const sampler = new ResourceSampler();
     sampler.start();
     try {
-      await this.runCapture(request, windowStartMs, windowEndMs);
+      return await this.runCapture(request, windowStartMs, windowEndMs);
     } finally {
       const usage = sampler.stop();
       this.logger.info("Highlight resource usage", {
@@ -85,7 +93,7 @@ export class CaptureHighlightUseCase {
     request: CaptureHighlightRequest,
     windowStartMs: number,
     windowEndMs: number
-  ): Promise<void> {
+  ): Promise<CaptureHighlightResult | null> {
     const { bufferSegmentSec } = this.config.highlight;
 
     // Wait until the post-roll footage exists: the segment containing windowEnd
@@ -102,7 +110,7 @@ export class CaptureHighlightUseCase {
       this.logger.warn("Highlight capture aborted: no active buffer for court", {
         courtId: request.courtId,
       });
-      return;
+      return null;
     }
 
     const segments = manager.getSegmentsInWindow(windowStartMs, windowEndMs);
@@ -111,7 +119,7 @@ export class CaptureHighlightUseCase {
         "Highlight capture aborted: insufficient buffer history for window",
         { courtId: request.courtId, windowStartMs, windowEndMs }
       );
-      return;
+      return null;
     }
 
     const rawClipPath = await this.extractor.extractWindow(
@@ -124,7 +132,7 @@ export class CaptureHighlightUseCase {
       this.logger.warn("Highlight capture failed: extraction produced no clip", {
         courtId: request.courtId,
       });
-      return;
+      return null;
     }
 
     // Ball-tracking reframe (off by default → null → full frame). Any failure
@@ -159,5 +167,11 @@ export class CaptureHighlightUseCase {
       windowStartMs,
       windowEndMs,
     });
+
+    return {
+      finalPath,
+      reframed: reframed !== null,
+      branded: rendered !== null,
+    };
   }
 }

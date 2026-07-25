@@ -21,6 +21,7 @@ import { HighlightExtractorService } from "./infrastructure/services/HighlightEx
 import { HighlightRendererService } from "./infrastructure/services/HighlightRendererService";
 import { NullBallReframer } from "./infrastructure/services/NullBallReframer";
 import { PythonBallReframer } from "./infrastructure/services/PythonBallReframer";
+import { YouTubeUploadService } from "./infrastructure/services/YouTubeUploadService";
 import { CaptureHighlightUseCase } from "./application/use-cases/CaptureHighlightUseCase";
 
 class Application {
@@ -33,6 +34,7 @@ class Application {
     {
       ...Config.getInstance().get().remoteLogging,
       baseUrl: Config.getInstance().get().server.baseUrl,
+      streamingApiKey: Config.getInstance().get().server.streamingApiKey,
     },
     "debug"
   );
@@ -99,6 +101,18 @@ class Application {
           highlightRenderer,
           this.logger
         );
+        // Optional YouTube upload of the finished reel. Only built when enabled
+        // AND a streaming key is configured; otherwise reels stay on disk only.
+        const serverCfg = config.get().server;
+        const highlightUploader =
+          highlightConfig.uploadEnabled && serverCfg.streamingApiKey
+            ? new YouTubeUploadService(
+                serverCfg.baseUrl,
+                config.get().groundInfo.groundId,
+                serverCfg.streamingApiKey,
+                this.logger
+              )
+            : null;
         // One box runs one active stream, so route a highlight to whichever
         // court is currently running. If none is live, nothing to capture.
         this.highlightSignalSource.onHighlight(async ({ receivedAtMs }) => {
@@ -108,10 +122,24 @@ class Application {
               this.logger.warn("Highlight signal ignored: no running stream");
               return;
             }
-            await captureHighlightUseCase.execute({
-              courtId: running[0].courtId,
+            const court = running[0];
+            const result = await captureHighlightUseCase.execute({
+              courtId: court.courtId,
               receivedAtMs,
             });
+            // Upload is a best-effort, additive step: it runs only on a
+            // successful capture and its failure never affects the on-disk reel
+            // (the uploader is fully fail-soft). streamKey is required by the
+            // backend to resolve the video's privacy.
+            if (result && highlightUploader) {
+              await highlightUploader.upload({
+                filePath: result.finalPath,
+                courtId: court.courtId,
+                streamKey: court.streamKey,
+                title: `DropShot highlight — ${court.courtId}`,
+                preferShort: true,
+              });
+            }
           } catch (error) {
             this.logger.error("Highlight capture handler failed", {
               error: error instanceof Error ? error.message : String(error),

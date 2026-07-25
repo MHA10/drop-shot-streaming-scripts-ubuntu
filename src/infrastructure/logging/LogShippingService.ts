@@ -5,6 +5,7 @@ export class LogShippingService {
   private readonly sourceId: string;
   private readonly retryAttempts: number;
   private readonly retryDelay: number;
+  private readonly streamingApiKey: string;
   private readonly errorRetryQueue: LogEntry[] = [];
   private isProcessingErrorQueue = false;
 
@@ -12,12 +13,24 @@ export class LogShippingService {
     url: string,
     sourceId: string,
     retryAttempts: number,
-    retryDelay: number
+    retryDelay: number,
+    streamingApiKey = ""
   ) {
     this.baseUrl = url;
     this.sourceId = sourceId;
     this.retryAttempts = retryAttempts;
     this.retryDelay = retryDelay;
+    this.streamingApiKey = streamingApiKey;
+  }
+
+  // Headers for the backend logs endpoint, incl. server-to-server auth when
+  // configured. Only sent when STREAMING_API_KEY is set (backward-compatible).
+  private headers(): Record<string, string> {
+    const headers: Record<string, string> = {
+      "Content-Type": "application/json",
+    };
+    if (this.streamingApiKey) headers["x-streaming-api-key"] = this.streamingApiKey;
+    return headers;
   }
 
   public async shipLogs(logs: LogEntry[]): Promise<LogShippingResult> {
@@ -33,9 +46,7 @@ export class LogShippingService {
     try {
       const response = await fetch(`${this.baseUrl}/api/v1/logs/logs`, {
         method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
+        headers: this.headers(),
         body: JSON.stringify(batch),
       });
 

@@ -204,6 +204,12 @@ cat > "$REPO_DIR/.env" << ENVEOF
 # Server Configuration
 BASE_URL=https://api.staging.drop-shot.live
 
+# Server-to-server auth key for the DropShot backend device routes (SSE,
+# heartbeat, go-live, logs, video upload). REQUIRED once the backend enforces
+# the guard — without it those calls get 401. Leave blank until then; get the
+# value from the backend team / environment secrets.
+STREAMING_API_KEY=
+
 # Streamer Ground ID
 DROPSHOT_GROUND_ID=$DROPSHOT_GROUND_ID
 
@@ -231,6 +237,9 @@ CLOUDINARY_API_SECRET=IrdU2pOiXW9GwDeP7h5JV3MRdwM
 # HIGHLIGHT_FORCE_PRESENT=true            # pretend the ESP32 is present
 # HIGHLIGHT_TRIGGER_FILE=/tmp/hl-trigger  # `touch` this file to fire a highlight
 # HIGHLIGHT_BALL_TRACKING_ENABLED=true    # player-follow reel (needs python3+opencv, installed above)
+# HIGHLIGHT_UPLOAD_ENABLED=true           # upload finished reels to YouTube via the
+#                                         # backend (requires STREAMING_API_KEY above)
+# HIGHLIGHT_REEL_ASPECT=9:16              # default 4:5; use 9:16 for true YouTube Shorts
 #   Once the two knobs above are set and the streamer restarted, fire a test
 #   reel with:  bash lib/highlight-trigger.sh
 ENVEOF
