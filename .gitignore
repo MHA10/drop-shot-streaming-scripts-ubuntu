@@ -5,7 +5,15 @@
 # ignoring all node js modules
 **/dist/
 **/node_modules/
-.claudelocal-reels/
+.claude
 .env
 /ad/
 /public/
+
+# marketing reel toolkit: local venv + generated reels are never committed
+tools/reels/.venv/
+local-reels/
+/reel-*.mp4
+/highlight-*.mp4
+**/__pycache__/
+.DS_Store
