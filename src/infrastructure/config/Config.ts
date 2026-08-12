@@ -6,6 +6,12 @@ dotenv.config();
 export interface AppConfig {
   server: {
     baseUrl: string;
+    // Server-to-server auth for the DropShot backend device routes (SSE,
+    // heartbeat, go-live, logs). Sent as the `x-streaming-api-key` header.
+    // Empty = not sent, which keeps older backends working — but once the
+    // backend enforces the guard, an empty key means every one of those calls
+    // gets a 401. It MUST be set on every box before enforcement goes live.
+    streamingApiKey: string;
   };
   images: {
     clientPath: string;
@@ -87,6 +93,7 @@ export class Config {
     return {
       server: {
         baseUrl: this.getEnvVar("BASE_URL", "https://api.drop-shot.live"),
+        streamingApiKey: this.getEnvVar("STREAMING_API_KEY", ""),
       },
       images: {
         clientPath: this.getEnvVar("CLIENT_IMAGES_PATH", "./public/client.png"),

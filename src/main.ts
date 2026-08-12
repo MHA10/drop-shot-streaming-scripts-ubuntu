@@ -23,6 +23,7 @@ class Application {
     {
       ...Config.getInstance().get().remoteLogging,
       baseUrl: Config.getInstance().get().server.baseUrl,
+      streamingApiKey: Config.getInstance().get().server.streamingApiKey,
     },
     "debug"
   );

@@ -56,6 +56,7 @@ export class StreamManagerService {
         ...sseConfig,
         groundId: this.config.get().groundInfo.groundId,
         baseUrl: this.config.get().server.baseUrl,
+        streamingApiKey: this.config.get().server.streamingApiKey,
       });
 
       this.logger.info("Stream Manager Service started successfully");
