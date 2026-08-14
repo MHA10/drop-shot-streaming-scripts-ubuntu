@@ -5,7 +5,7 @@ export class HttpClient {
 
   // Base headers for DropShot backend calls, including the server-to-server
   // auth key when configured. Sent only when STREAMING_API_KEY is set, so this
-  // stays backward-compatible until the backend enforces the guard.
+  // stays backward-compatible with a backend that doesn't yet require it.
   private backendHeaders(extra: Record<string, string> = {}): Record<string, string> {
     const headers: Record<string, string> = { ...extra };
     const key = this.config.server.streamingApiKey;

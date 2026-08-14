@@ -24,7 +24,7 @@ export class LogShippingService {
   }
 
   // Headers for the backend logs endpoint, incl. server-to-server auth when
-  // configured. Only sent when STREAMING_API_KEY is set (backward-compatible).
+  // configured. Only sent when STREAMING_API_KEY is set.
   private headers(): Record<string, string> {
     const headers: Record<string, string> = {
       "Content-Type": "application/json",

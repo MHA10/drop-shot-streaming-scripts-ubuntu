@@ -126,7 +126,7 @@ export class NodeSSEService extends EventEmitter implements SSEService {
             headers: {
               Accept: "text/event-stream",
               "Cache-Control": "no-cache",
-              // Server-to-server auth; only sent when configured (see config).
+              // Server-to-server auth; only sent when configured.
               ...(this.config.streamingApiKey
                 ? { "x-streaming-api-key": this.config.streamingApiKey }
                 : {}),

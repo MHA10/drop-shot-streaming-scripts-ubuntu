@@ -8,9 +8,10 @@ export interface AppConfig {
     baseUrl: string;
     // Server-to-server auth for the DropShot backend device routes (SSE,
     // heartbeat, go-live, logs, video upload-session). Sent as the
-    // `x-streaming-api-key` header. Empty = not sent (backward-compatible until
-    // the backend enforces the guard; once it does, this MUST be set or those
-    // calls get 401).
+    // `x-streaming-api-key` header. Empty = not sent, which keeps older
+    // backends working — but once the backend enforces the guard, an empty key
+    // means every one of those calls gets a 401. It MUST be set on every box
+    // before enforcement goes live.
     streamingApiKey: string;
   };
   images: {

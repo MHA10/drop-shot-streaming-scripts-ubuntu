@@ -75,14 +75,14 @@ echo ""
 # =============================================================================
 # Taken from the environment if exported, else prompted. NOTE: this cannot be
 # pulled from GitHub Actions secrets — secret VALUES are never readable outside
-# an Actions runner (the API returns only name/created_at/updated_at). So the
-# value has to be supplied here, either by exporting it before running:
+# an Actions runner (the API exposes only name/created_at/updated_at). So the
+# value is supplied here, either by exporting it before running:
 #     export STREAMING_API_KEY="..." && bash setup.sh
 # or by pasting it at the prompt below.
 #
-# Not fatal when blank: the streamer omits the header when unset, which is
-# correct until the backend enforces the guard. Once it does, a box without
-# this key gets 401 on SSE / heartbeat / go-live / logs.
+# Not fatal when blank: the streamer omits the header when unset. But once the
+# backend enforces the guard, a box without this key gets 401 on SSE /
+# heartbeat / go-live / logs, so it must be set before then.
 if [ -z "${STREAMING_API_KEY:-}" ]; then
     # -s so the key isn't echoed into the terminal/scrollback.
     read -s -p "  Enter STREAMING_API_KEY (press Enter to skip): " STREAMING_API_KEY
