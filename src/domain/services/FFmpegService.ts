@@ -32,7 +32,8 @@ export interface FFmpegService {
       onRetryStream: (event: StartStreamRequest) => Promise<void>;
     },
     isScorecardActivated?: boolean,
-    adPaths?: AdOverlayPaths
+    adPaths?: AdOverlayPaths,
+    highlightBufferDir?: string | null
   ): Promise<FFmpegProcess>;
 
   /**
@@ -59,7 +60,8 @@ export interface FFmpegService {
     hasAudio: boolean,
     courtId: string,
     isScorecardActivated?: boolean,
-    adPaths?: AdOverlayPaths
+    adPaths?: AdOverlayPaths,
+    highlightBufferDir?: string | null
   ): FFmpegCommand;
 
   /**
