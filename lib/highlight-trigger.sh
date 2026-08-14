@@ -82,21 +82,28 @@ env_get() {
   printf '%s' "$val"
 }
 
-# The pm2 app name varies per box, so ask pm2 rather than guessing. node is a
-# hard dependency of this repo, so it's always available to parse pm2's JSON.
+# The pm2 app name and its log file both vary per box, so ask pm2 rather than
+# guessing. node is a hard dependency of this repo, so it's always available to
+# parse pm2's JSON. Prints "<name>\t<out_log_path>".
+#
+# We need the LOG PATH, not just the name, because `pm2 logs` only streams to a
+# TTY — redirect its stdout into a pipe or file and it produces nothing at all.
+# Following the file with `tail -F` is what actually works unattended.
 detect_pm2_app() {
-  [ -n "${PM2_APP:-}" ] && { printf '%s' "$PM2_APP"; return; }
   command -v pm2 >/dev/null 2>&1 || return 0
   pm2 jlist 2>/dev/null | node -e '
+    const want = process.argv[1] || "";
     let s = "";
     process.stdin.on("data", d => s += d).on("end", () => {
       try {
         const apps = JSON.parse(s);
-        const hit = apps.find(a => /dropshot|streamer/i.test(a.name)) || apps[0];
-        if (hit) process.stdout.write(hit.name);
+        const hit = want
+          ? apps.find(a => a.name === want)
+          : apps.find(a => /dropshot|streamer/i.test(a.name)) || apps[0];
+        if (hit) process.stdout.write(hit.name + "\t" + (hit.pm2_env?.pm_out_log_path || ""));
       } catch { /* pm2 absent or not JSON — caller handles the empty result */ }
     });
-  ' 2>/dev/null
+  ' "${PM2_APP:-}" 2>/dev/null
 }
 
 # ── --diag: why is the reel shorter than the window? ─────────────────────────
@@ -165,7 +172,10 @@ TRIGGER_FILE="$(env_get HIGHLIGHT_TRIGGER_FILE)"
 OUTPUT_DIR="$(env_get HIGHLIGHT_OUTPUT_DIR)"
 GROUND_ID="$(env_get DROPSHOT_GROUND_ID)"
 : "${OUTPUT_DIR:=./highlights}"
-APP="$(detect_pm2_app)"
+PM2_INFO="$(detect_pm2_app)"
+APP="${PM2_INFO%%$'\t'*}"
+OUT_LOG="${PM2_INFO#*$'\t'}"
+[ "$OUT_LOG" = "$PM2_INFO" ] && OUT_LOG=""
 : "${APP:=streamer-${GROUND_ID:-<ground-id>}}"
 
 if [ "$ENABLED" != "true" ]; then
@@ -196,28 +206,35 @@ fire() {
 }
 
 # ── no-follow: fire and get out of the way ───────────────────────────────────
-if [ "$FOLLOW" = "0" ] || ! command -v pm2 >/dev/null 2>&1; then
+if [ "$FOLLOW" = "0" ] || [ -z "$OUT_LOG" ] || [ ! -r "$OUT_LOG" ]; then
+  [ "$FOLLOW" = "1" ] && [ -z "$OUT_LOG" ] && \
+    yellow "Could not find pm2's log file for '$APP' — firing without follow."
   fire
   echo
   echo "  Reel output : $OUTPUT_DIR/<court>/"
-  echo "  Watch logs  : pm2 logs $APP | grep -iE 'highlight|reel'"
+  echo "  Watch logs  : pm2 logs $APP --lines 150 --nostream | grep -iE 'highlight|reel'"
   exit 0
 fi
 
-# ── follow: attach FIRST, then fire ──────────────────────────────────────────
+# ── follow: mark the log position FIRST, then fire ───────────────────────────
 # Order matters — see the header. A warm buffer can finish the whole pipeline
-# in under a minute, and pm2 takes a moment to attach.
+# before a follower that attaches afterwards sees anything, producing a false
+# timeout on a run that actually succeeded.
+#
+# We follow pm2's log FILE rather than `pm2 logs`, which emits nothing at all
+# when its stdout isn't a TTY. `tail -F` (not -f) also survives pm2 rotating
+# the file mid-run.
 LOG="$(mktemp -t hl-trigger.XXXXXX)"
 cleanup() { [ -n "${LOG_PID:-}" ] && kill "$LOG_PID" 2>/dev/null; rm -f "$LOG"; }
 trap cleanup EXIT INT TERM
 
-timeout "$TIMEOUT" pm2 logs "$APP" --raw --lines 0 >"$LOG" 2>/dev/null &
+timeout "$TIMEOUT" tail -F -n 0 "$OUT_LOG" >"$LOG" 2>/dev/null &
 LOG_PID=$!
-sleep 1.5
+sleep 1
 
 fire
 echo
-dim "watching '$APP' (up to ${TIMEOUT}s; Ctrl-C to stop) …"
+dim "watching $(basename "$OUT_LOG") (up to ${TIMEOUT}s; Ctrl-C to stop) …"
 echo
 
 # Print the pipeline's milestones live. awk exits on a terminal line, which
