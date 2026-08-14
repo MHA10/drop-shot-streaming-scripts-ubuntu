@@ -3,6 +3,7 @@ import * as fs from "fs";
 import type { SerialPort as SerialPortInstance } from "serialport";
 import type { ReadlineParser as ReadlineParserInstance } from "@serialport/parser-readline";
 import {
+  CourtScoreSignal,
   HighlightSignal,
   HighlightSignalSource,
 } from "../../domain/services/HighlightSignalSource";
@@ -14,23 +15,33 @@ import { Logger } from "../../application/interfaces/Logger";
  * enablement of the highlight buffer — see HighlightSignalSource.
  *
  * ── IN SIMPLE WORDS ──
- * The scoreboard ESP32 plugs into the box over USB and prints a line every few
- * seconds ("HEARTBEAT|ESP32", score packets, and eventually "HIGHLIGHT"). This
- * class keeps the serial port open and notes the last time it heard a
- * recognized line. If we've heard the device recently, it's "present" and the
- * box should record highlights; if the box has no ESP32, we never hear it and
- * `isDevicePresent()` stays false.
+ * The court ESP32 plugs into the box over USB and prints one JSON object per
+ * line — a heartbeat every 5s, score updates, logs, and a `button` packet when
+ * someone presses the physical highlight button. This class keeps the serial
+ * port open and notes the last time it heard a valid line. If we've heard the
+ * device recently, it's "present" and the box should record highlights; if the
+ * box has no ESP32, we never hear it and `isDevicePresent()` stays false.
+ *
+ * Protocol contract: docs/esp32/STREAMER_INTEGRATION.md (authoritative — the
+ * desk harness in lib/esp-serial-com is NOT the spec; it only pretty-prints
+ * three of the four types).
  *
  * ── BUSINESS RULES ──
  * - Highlight capture is enabled per-box by HARDWARE PRESENCE (decision
  *   2026-07-18): a box with the ESP32 attached records the buffer; one without
  *   never does. `isDevicePresent()` is that signal.
- * - Presence is proven by the ESP32's own heartbeat: esp32-leader.ino runs
- *   `Serial.begin(115200)` and prints `HEARTBEAT|ESP32` every 5s, so no
- *   firmware change is needed. Freshness window = 15s (tolerate 3 missed beats).
- * - Recognized tokens (HEARTBEAT / TENNIS / AMER / HIGHLIGHT) are exactly the
- *   prefixes of the existing pipe-delimited packets the ESP32 prints and relays
- *   over USB (`TENNIS|15|40|1|0`, `HEARTBEAT|ESP32`, …); anything else is noise.
+ * - Presence is proven by the ESP32's own heartbeat, emitted every 5s
+ *   unconditionally (needs no mesh, no court). Freshness window = 15s
+ *   (tolerate 3 missed beats).
+ * - A highlight is a `{"type":"button","event":"press"}` packet. It comes from
+ *   a SEPARATE ESP8266 to the scoreboard one, on its own power and mesh nodeId,
+ *   provisioned with the same courtId — that shared court ID is what correlates
+ *   a press with the court it happened on.
+ * - COURT FILTERING IS MANDATORY. All units share one set of mesh credentials,
+ *   so at a venue with two courts in WiFi range this ESP32 relays the other
+ *   court's traffic verbatim (the firmware does no filtering — by design; the
+ *   spec puts it on the streamer). The courtId rides on HighlightSignal and is
+ *   matched downstream before any clip is cut.
  *
  * ── WHY IT'S BUILT THIS WAY (change at your peril) ──
  * - Presence is CONTENT-based (a recognized packet seen recently), not merely
@@ -52,10 +63,6 @@ import { Logger } from "../../application/interfaces/Logger";
  * - Do NOT let a serial error/disconnect crash the process — port AND parser
  *   errors are handled and route to a backoff reconnect (mirrors NodeSSEService).
  */
-
-// Token before the first '|' in the existing pipe-delimited protocol. A line
-// starting with one of these is genuine ESP32 traffic (vs. line noise).
-const RECOGNIZED_PREFIXES = new Set(["HEARTBEAT", "TENNIS", "AMER", "HIGHLIGHT"]);
 
 // The ESP32 heartbeats every 5s (esp32-leader.ino). Allow ~3 missed beats
 // before declaring the device gone, so a single dropped line doesn't flap.
@@ -82,6 +89,8 @@ export class SerialHighlightListener
   private reconnectTimer: NodeJS.Timeout | null = null;
   private reconnectAttempts = 0;
   private triggerTimer: NodeJS.Timeout | null = null;
+  // Last `seq` seen on a button packet, to spot presses lost in mesh transit.
+  private lastButtonSeq: number | undefined;
 
   // Native serial libs, lazily required in start(). Null when unavailable, in
   // which case the listener is inert and isDevicePresent() stays false.
@@ -103,6 +112,10 @@ export class SerialHighlightListener
 
   public onHighlight(listener: (signal: HighlightSignal) => void): void {
     this.on("highlight", listener);
+  }
+
+  public onScore(listener: (signal: CourtScoreSignal) => void): void {
+    this.on("score", listener);
   }
 
   public start(): void {
@@ -246,48 +259,151 @@ export class SerialHighlightListener
   }
 
   private handleLine(raw: string): void {
+    // Trailing \r: the ESP32 uses Serial.println (CRLF) while we split on \n.
     const line = raw.trim();
     if (!line) return;
 
-    const prefix = line.split("|", 1)[0];
-    if (!RECOGNIZED_PREFIXES.has(prefix)) return; // ignore noise / partial junk
+    // NOT every line is JSON. esp32-leader relays mesh messages it can't parse
+    // verbatim rather than dropping them, and boot-time chatter appears on the
+    // port too. A parse failure means "ignore this line" — never an error path,
+    // or the first line of ESP8266 boot noise takes the streamer down.
+    let msg: Record<string, unknown>;
+    try {
+      const parsed: unknown = JSON.parse(line);
+      if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return;
+      msg = parsed as Record<string, unknown>;
+    } catch {
+      return;
+    }
 
-    // Any recognized packet proves the device is alive → refresh presence.
-    // Log only the absent→present transition (not every 5s heartbeat) so
-    // staging can confirm the ESP32 is actually being heard without log spam.
+    const type = msg.type;
+    if (typeof type !== "string") return;
+
+    // PRESENCE: any line that parsed as JSON and carries a string `type` proves
+    // the USB link is alive. Deliberately NOT gated on courtId — the ESP32's own
+    // heartbeat is {"type":"heartbeat","source":"ESP32"} with no court (it is the
+    // local leader), so requiring one would leave presence false forever.
     const now = Date.now();
     const wasFresh = now - this.lastTrafficAtMs <= PRESENCE_FRESHNESS_MS;
     this.lastTrafficAtMs = now;
     this.reconnectAttempts = 0;
     if (!wasFresh) {
-      this.logger.info("Highlight hardware detected (recognized serial traffic)", {
-        prefix,
+      this.logger.info("Highlight hardware detected (ESP32 serial traffic)", {
+        type,
       });
     }
 
-    // The button press: fire a highlight signal for CaptureHighlightUseCase.
-    if (prefix === "HIGHLIGHT") {
-      this.logger.info("Highlight signal received (serial)", { line });
-      this.emit("highlight", { receivedAtMs: now } as HighlightSignal);
+    // Switch on `type` and IGNORE unknown types — the protocol reserves the
+    // right to add more. Four exist today: score, button, heartbeat, log.
+    if (type === "score") {
+      this.handleScore(msg);
+      return;
     }
+    if (type !== "button") return;
+
+    const courtId = typeof msg.courtId === "string" ? msg.courtId : undefined;
+    const seq = typeof msg.seq === "number" ? msg.seq : undefined;
+
+    // Press edge only, debounced 50ms in firmware — one physical click is one
+    // message, so no debounce of our own is needed.
+    if (typeof msg.event === "string" && msg.event !== "press") return;
+
+    // `seq` is monotonic per boot, +1 per press. A gap means the mesh broadcast
+    // was lost (best-effort, no retry); going backwards means the node rebooted.
+    // Log it as a delivery signal — do not try to recover missed presses.
+    if (seq !== undefined && this.lastButtonSeq !== undefined) {
+      if (seq > this.lastButtonSeq + 1) {
+        this.logger.warn("Highlight button presses lost in mesh transit", {
+          courtId,
+          expected: this.lastButtonSeq + 1,
+          got: seq,
+          missed: seq - this.lastButtonSeq - 1,
+        });
+      } else if (seq < this.lastButtonSeq) {
+        this.logger.info("Highlight button node rebooted (seq reset)", {
+          courtId,
+          previous: this.lastButtonSeq,
+          got: seq,
+        });
+      }
+    }
+    if (seq !== undefined) this.lastButtonSeq = seq;
+
+    this.logger.info("Highlight signal received (button press)", {
+      courtId,
+      seq,
+    });
+    this.emit("highlight", { receivedAtMs: now, courtId } as HighlightSignal);
+  }
+
+  /**
+   * A `score` packet: the board's current state, forwarded verbatim.
+   *
+   * Score packets are the one type that carries NO `source` field, so anything
+   * keying on `source` being present would drop them — switch on `type` only.
+   * Values are passed through untouched: interpreting "AD" or mapping the mode
+   * is the consumer's job, not the transport's.
+   */
+  private handleScore(msg: Record<string, unknown>): void {
+    const courtId = typeof msg.courtId === "string" ? msg.courtId : undefined;
+    // Without a court we cannot address the write, and at a multi-court venue we
+    // could not tell whose score it is — drop rather than guess.
+    if (!courtId) return;
+
+    const scoreA = msg.scoreA;
+    const scoreB = msg.scoreB;
+    if (scoreA === undefined || scoreB === undefined) return;
+
+    this.emit("score", {
+      courtId,
+      mode: typeof msg.mode === "string" ? msg.mode : undefined,
+      // Coerced with String() rather than assumed: the firmware sends strings,
+      // but a number here must not become "undefined" downstream.
+      scoreA: String(scoreA),
+      scoreB: String(scoreB),
+      gamesA: typeof msg.gamesA === "number" ? msg.gamesA : undefined,
+      gamesB: typeof msg.gamesB === "number" ? msg.gamesB : undefined,
+    } as CourtScoreSignal);
   }
 
   private async resolvePortPath(): Promise<string> {
     if (this.portPath && this.portPath !== "auto") {
       return this.portPath;
     }
-    // Auto-discovery: open ONLY a USB-serial-looking device. Deliberately no
-    // "first available port" fallback — grabbing an arbitrary tty (e.g. a
-    // system debug console) could disturb unrelated hardware. If nothing
-    // matches, return "" so openPort() backs off and re-scans later (the ESP32
-    // may be plugged in after boot). A precise vendor/product-id match can be
-    // added here once the hardware team confirms the ESP32's ids.
+    // Auto-discovery: open ONLY an ESP32-looking device. Deliberately no "first
+    // available port" fallback — grabbing an arbitrary tty (e.g. a system debug
+    // console) could disturb unrelated hardware. If nothing matches, return ""
+    // so openPort() backs off and re-scans later (the ESP32 may be plugged in
+    // after boot).
+    //
+    // Match on MANUFACTURER, not product id: the boards ship with either a
+    // CP2102 (Silicon Labs) or a CH340 (wch.cn / QinHeng) bridge, so no single
+    // PID covers the fleet. Path matching alone is not enough — on a box that
+    // also has the ESP8266 debug cable or an Arduino FTDI attached, "first
+    // USB-ish tty" can open the wrong device and then sit there hearing
+    // nothing. Manufacturer is checked first for that reason.
     const { SerialPort } = this.serialLib!;
     const ports = await SerialPort.list();
-    const usbLike = ports.find((p) =>
-      /ttyusb|ttyacm|cu\.usb|tty\.usb/i.test(p.path)
+
+    const isEsp32 = (p: {
+      path: string;
+      manufacturer?: string;
+      vendorId?: string;
+    }): boolean => {
+      const mfr = p.manufacturer ?? "";
+      if (/silicon labs|wch\.cn|qinheng/i.test(mfr)) return true;
+      // Linux reports the bare USB vendor ID for the CH340 instead of a name.
+      if (p.vendorId?.toLowerCase() === "1a86") return true;
+      return /usbserial|ttyusb|ttyacm|cu\.usb|tty\.usb/i.test(p.path);
+    };
+
+    // Prefer a manufacturer/vendor match over a bare path match.
+    const byIdentity = ports.find(
+      (p) =>
+        /silicon labs|wch\.cn|qinheng/i.test(p.manufacturer ?? "") ||
+        p.vendorId?.toLowerCase() === "1a86"
     );
-    return usbLike?.path ?? "";
+    return (byIdentity ?? ports.find(isEsp32))?.path ?? "";
   }
 
   private handlePortDown(): void {

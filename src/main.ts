@@ -39,6 +39,91 @@ class Application {
     "debug"
   );
   private readonly httpClient = new HttpClient();
+  /** Last state forwarded per court, to suppress redundant identical writes. */
+  private readonly lastScoreByCourt = new Map<string, string>();
+  /** Courts the backend has rejected, so we stop retrying them every packet. */
+  private readonly rejectedScoreCourts = new Set<string>();
+
+  /**
+   * Forward score packets from the court hardware to the backend, which writes
+   * them to Supabase — the single source of truth the scorecard overlay already
+   * reads. The streamer is a bridge here, not a second source.
+   *
+   * ── WHY THE DEDUPE AND THE REJECT-SET ──
+   * At a multi-court venue this ESP32 also relays the NEIGHBOURING court's
+   * traffic (shared mesh credentials; the firmware does no filtering). We can't
+   * filter locally — we don't know which courts belong to this ground — so the
+   * backend validates it. But an un-suppressed reject would then POST and 400
+   * on every packet from that court, forever. First rejection is logged, then
+   * that court is dropped silently.
+   *
+   * ── DO NOT ──
+   * - Do NOT throw from here. A scoring failure must never disturb the live
+   *   stream; every path swallows and logs.
+   */
+  private wireScoreForwarding(groundId: string): void {
+    if (!this.highlightSignalSource) return;
+    this.logger.info("ESP32 score forwarding enabled", { groundId });
+
+    this.highlightSignalSource.onScore(async (score) => {
+      try {
+        if (this.rejectedScoreCourts.has(score.courtId)) return;
+
+        // Absolute state — identical repeats carry no information.
+        const fingerprint = JSON.stringify([
+          score.mode,
+          score.scoreA,
+          score.scoreB,
+          score.gamesA,
+          score.gamesB,
+        ]);
+        if (this.lastScoreByCourt.get(score.courtId) === fingerprint) return;
+
+        // Firmware mode -> the backend's enum. Unknown/absent is omitted so the
+        // existing row keeps its mode rather than being forced to a guess.
+        const mode =
+          score.mode === "AMER"
+            ? "americano"
+            : score.mode === "TENNIS"
+              ? "standard"
+              : undefined;
+
+        const res = await this.httpClient.postScoreboard(groundId, score.courtId, {
+          mode,
+          // A -> red (left/top), B -> blue (right/bottom), matching the overlay.
+          redScore: score.scoreA,
+          blueScore: score.scoreB,
+          redGames: score.gamesA,
+          blueGames: score.gamesB,
+        });
+
+        if (res.ok) {
+          this.lastScoreByCourt.set(score.courtId, fingerprint);
+          return;
+        }
+
+        // 400/404 = this court isn't ours (mesh bleed from another ground).
+        // Expected at shared venues; log once, then ignore that court.
+        if (res.status === 400 || res.status === 404) {
+          this.rejectedScoreCourts.add(score.courtId);
+          this.logger.info(
+            "Ignoring score for a court the backend does not recognise for this ground",
+            { courtId: score.courtId, status: res.status }
+          );
+          return;
+        }
+        this.logger.warn("Score forward failed", {
+          courtId: score.courtId,
+          status: res.status,
+        });
+      } catch (error) {
+        this.logger.warn("Score forward errored", {
+          courtId: score.courtId,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+    });
+  }
 
   public async start(): Promise<void> {
     try {
@@ -69,7 +154,14 @@ class Application {
       // capture pipeline, no logs). When on, enablement is still gated further
       // by ESP32 presence inside StartStreamUseCase.
       const highlightConfig = config.get().highlight;
-      if (highlightConfig.enabled) {
+      const esp32Config = config.get().esp32;
+
+      // ONE device, ONE reader. The ESP32 carries both the highlight button and
+      // the score packets, and a serial port can only be held by one consumer —
+      // so the listener is opened when EITHER feature is on, and each subscribes
+      // to the events it cares about. With both off, nothing is opened at all
+      // and the box has zero new runtime behaviour.
+      if (highlightConfig.enabled || esp32Config.scoreForwardingEnabled) {
         this.highlightSignalSource = new SerialHighlightListener(
           highlightConfig.serialPortPath,
           highlightConfig.serialBaudRate,
@@ -78,6 +170,13 @@ class Application {
           highlightConfig.triggerFile
         );
         this.highlightSignalSource.start();
+
+        if (esp32Config.scoreForwardingEnabled) {
+          this.wireScoreForwarding(config.get().groundInfo.groundId);
+        }
+      }
+
+      if (highlightConfig.enabled && this.highlightSignalSource) {
 
         // Capture pipeline: signal → cut window → (reframe) → overlay logos.
         const highlightExtractor = new HighlightExtractorService(
@@ -113,16 +212,36 @@ class Application {
                 this.logger
               )
             : null;
-        // One box runs one active stream, so route a highlight to whichever
-        // court is currently running. If none is live, nothing to capture.
-        this.highlightSignalSource.onHighlight(async ({ receivedAtMs }) => {
+        // Route a highlight to the court the press actually came from.
+        //
+        // COURT FILTERING IS LOAD-BEARING, not a nicety: every unit ships with
+        // the same mesh credentials, so at a venue with two courts in WiFi
+        // range this box's ESP32 relays the neighbouring court's button presses
+        // verbatim. Taking `running[0]` unconditionally would cut a clip from
+        // the wrong court's stream with nothing in the logs to explain it.
+        // A signal with no courtId is a debug trigger (force/trigger-file) and
+        // falls back to the single running stream.
+        this.highlightSignalSource.onHighlight(async ({ receivedAtMs, courtId }) => {
           try {
             const running = await streamRepository.findRunning();
             if (running.length === 0) {
-              this.logger.warn("Highlight signal ignored: no running stream");
+              this.logger.warn("Highlight signal ignored: no running stream", {
+                courtId,
+              });
               return;
             }
-            const court = running[0];
+            const court = courtId
+              ? running.find((s) => s.courtId === courtId)
+              : running[0];
+            if (!court) {
+              // Almost always a neighbouring court's press bleeding over the
+              // shared mesh — expected at multi-court venues, not an error.
+              this.logger.info(
+                "Highlight signal ignored: press is for another court",
+                { pressCourtId: courtId, running: running.map((s) => s.courtId) }
+              );
+              return;
+            }
             const result = await captureHighlightUseCase.execute({
               courtId: court.courtId,
               receivedAtMs,
