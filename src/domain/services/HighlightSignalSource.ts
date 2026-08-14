@@ -2,13 +2,15 @@
  * Source of highlight signals from the physical ESP32 device.
  *
  * ── IN SIMPLE WORDS ──
- * The referee's scoreboard hardware (an ESP32) plugs into the streamer box
- * over USB and constantly chatters — a "HEARTBEAT|ESP32" line every 5 seconds,
- * plus (eventually) a "HIGHLIGHT" line when someone presses the highlight
- * button. This interface is the streamer's window onto that device: it can
- * tell us whether the hardware is currently attached and alive
+ * The court hardware (an ESP32) plugs into the streamer box over USB and
+ * constantly chatters one JSON object per line — a heartbeat every 5 seconds,
+ * plus a `{"type":"button"}` line when someone presses the physical highlight
+ * button on a court. This interface is the streamer's window onto that device:
+ * it can tell us whether the hardware is currently attached and alive
  * (`isDevicePresent`), which is what decides whether a box records the
  * highlight buffer at all.
+ *
+ * Protocol contract: docs/esp32/STREAMER_INTEGRATION.md (authoritative).
  *
  * ── BUSINESS RULES ──
  * - Highlight capture is enabled per-box by HARDWARE PRESENCE, not by config
@@ -37,6 +39,20 @@
  */
 export interface HighlightSignal {
   receivedAtMs: number;
+  /**
+   * The court the press came from, taken from the `button` packet's `courtId`.
+   *
+   * MUST be checked before acting. Every unit ships with the same mesh
+   * credentials, so at a venue with two courts in WiFi range this box's ESP32
+   * relays the neighbouring court's traffic verbatim — the firmware does no
+   * filtering and the spec puts that on the streamer. Acting on any press
+   * would cut a clip from the wrong court's stream, with nothing in the logs
+   * to explain it.
+   *
+   * Undefined for debug-triggered signals (force/trigger-file), which carry no
+   * court and are treated as "this box's running stream".
+   */
+  courtId?: string;
 }
 
 export interface HighlightSignalSource {

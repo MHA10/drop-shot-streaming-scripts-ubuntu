@@ -113,16 +113,36 @@ class Application {
                 this.logger
               )
             : null;
-        // One box runs one active stream, so route a highlight to whichever
-        // court is currently running. If none is live, nothing to capture.
-        this.highlightSignalSource.onHighlight(async ({ receivedAtMs }) => {
+        // Route a highlight to the court the press actually came from.
+        //
+        // COURT FILTERING IS LOAD-BEARING, not a nicety: every unit ships with
+        // the same mesh credentials, so at a venue with two courts in WiFi
+        // range this box's ESP32 relays the neighbouring court's button presses
+        // verbatim. Taking `running[0]` unconditionally would cut a clip from
+        // the wrong court's stream with nothing in the logs to explain it.
+        // A signal with no courtId is a debug trigger (force/trigger-file) and
+        // falls back to the single running stream.
+        this.highlightSignalSource.onHighlight(async ({ receivedAtMs, courtId }) => {
           try {
             const running = await streamRepository.findRunning();
             if (running.length === 0) {
-              this.logger.warn("Highlight signal ignored: no running stream");
+              this.logger.warn("Highlight signal ignored: no running stream", {
+                courtId,
+              });
               return;
             }
-            const court = running[0];
+            const court = courtId
+              ? running.find((s) => s.courtId === courtId)
+              : running[0];
+            if (!court) {
+              // Almost always a neighbouring court's press bleeding over the
+              // shared mesh — expected at multi-court venues, not an error.
+              this.logger.info(
+                "Highlight signal ignored: press is for another court",
+                { pressCourtId: courtId, running: running.map((s) => s.courtId) }
+              );
+              return;
+            }
             const result = await captureHighlightUseCase.execute({
               courtId: court.courtId,
               receivedAtMs,
