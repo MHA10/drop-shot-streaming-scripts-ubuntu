@@ -55,6 +55,28 @@ export interface HighlightSignal {
   courtId?: string;
 }
 
+/**
+ * The court's scoreboard state, exactly as the physical board reports it.
+ *
+ * ── WHY THE SCORES ARE STRINGS ──
+ * Tennis values are "00"/"15"/"30"/"40"/"AD" — the Arduino's token is passed
+ * through untouched by every hop. An integer type works right up until deuce.
+ * Games ARE integers (and are 0/meaningless in Americano).
+ *
+ * ── WHY ABSOLUTE, NEVER A DELTA ──
+ * Mesh delivery is best-effort with no retry. Replaying absolute state is
+ * self-healing after a dropped packet; replaying increments desyncs forever.
+ */
+export interface CourtScoreSignal {
+  courtId: string;
+  /** Raw firmware mode: "TENNIS" | "AMER". Mapped to the backend's enum later. */
+  mode?: string;
+  scoreA: string;
+  scoreB: string;
+  gamesA?: number;
+  gamesB?: number;
+}
+
 export interface HighlightSignalSource {
   /**
    * Begin listening to the device (open the serial port, start parsing).
@@ -82,4 +104,15 @@ export interface HighlightSignalSource {
    * (subtracting the lag margin) happens in the capture use-case.
    */
   onHighlight(listener: (signal: HighlightSignal) => void): void;
+
+  /**
+   * Subscribe to scoreboard updates from the court hardware.
+   *
+   * Lives on this interface because the ESP32 is ONE serial device and a serial
+   * port has exactly one reader — so the same listener necessarily surfaces both
+   * the button presses and the score packets. (The interface name predates the
+   * score path; renaming it to something like CourtDeviceSource is a worthwhile
+   * follow-up, deliberately kept out of this change to keep the diff reviewable.)
+   */
+  onScore(listener: (signal: CourtScoreSignal) => void): void;
 }

@@ -73,6 +73,41 @@ export class HttpClient {
     }
   }
 
+  /**
+   * Forward a court's current scoreboard state to the backend, which writes it
+   * to Supabase (the single source of truth the overlay already reads).
+   *
+   * ── WHY VIA THE BACKEND AND NOT SUPABASE DIRECTLY ──
+   * Writing Supabase from the box would need write credentials on every court
+   * machine. This reuses the x-streaming-api-key every box already has, and the
+   * backend validates the court actually belongs to this ground — a check the
+   * shared device key cannot make on its own.
+   *
+   * The state is ABSOLUTE, never a delta: mesh delivery is best-effort with no
+   * retry, so a dropped packet must be self-healing on the next update.
+   */
+  async postScoreboard(
+    groundId: string,
+    courtId: string,
+    body: {
+      mode?: string;
+      redScore: string;
+      blueScore: string;
+      redGames?: number;
+      blueGames?: number;
+    }
+  ): Promise<Response> {
+    const url = `${this.config.server.baseUrl}/api/v1/padel-grounds/${groundId}/courts/${courtId}/scoreboard`;
+    return fetch(url, {
+      method: "POST",
+      headers: this.backendHeaders({
+        accept: "application/json",
+        "Content-Type": "application/json",
+      }),
+      body: JSON.stringify(body),
+    });
+  }
+
   async sendHeartbeat(groundId: string): Promise<Response> {
     // POST request to send heartbeat
     const url = `${this.config.server.baseUrl}/api/v1/padel-grounds/heartbeat`;

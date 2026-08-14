@@ -3,6 +3,7 @@ import * as fs from "fs";
 import type { SerialPort as SerialPortInstance } from "serialport";
 import type { ReadlineParser as ReadlineParserInstance } from "@serialport/parser-readline";
 import {
+  CourtScoreSignal,
   HighlightSignal,
   HighlightSignalSource,
 } from "../../domain/services/HighlightSignalSource";
@@ -111,6 +112,10 @@ export class SerialHighlightListener
 
   public onHighlight(listener: (signal: HighlightSignal) => void): void {
     this.on("highlight", listener);
+  }
+
+  public onScore(listener: (signal: CourtScoreSignal) => void): void {
+    this.on("score", listener);
   }
 
   public start(): void {
@@ -290,6 +295,10 @@ export class SerialHighlightListener
 
     // Switch on `type` and IGNORE unknown types — the protocol reserves the
     // right to add more. Four exist today: score, button, heartbeat, log.
+    if (type === "score") {
+      this.handleScore(msg);
+      return;
+    }
     if (type !== "button") return;
 
     const courtId = typeof msg.courtId === "string" ? msg.courtId : undefined;
@@ -325,6 +334,36 @@ export class SerialHighlightListener
       seq,
     });
     this.emit("highlight", { receivedAtMs: now, courtId } as HighlightSignal);
+  }
+
+  /**
+   * A `score` packet: the board's current state, forwarded verbatim.
+   *
+   * Score packets are the one type that carries NO `source` field, so anything
+   * keying on `source` being present would drop them — switch on `type` only.
+   * Values are passed through untouched: interpreting "AD" or mapping the mode
+   * is the consumer's job, not the transport's.
+   */
+  private handleScore(msg: Record<string, unknown>): void {
+    const courtId = typeof msg.courtId === "string" ? msg.courtId : undefined;
+    // Without a court we cannot address the write, and at a multi-court venue we
+    // could not tell whose score it is — drop rather than guess.
+    if (!courtId) return;
+
+    const scoreA = msg.scoreA;
+    const scoreB = msg.scoreB;
+    if (scoreA === undefined || scoreB === undefined) return;
+
+    this.emit("score", {
+      courtId,
+      mode: typeof msg.mode === "string" ? msg.mode : undefined,
+      // Coerced with String() rather than assumed: the firmware sends strings,
+      // but a number here must not become "undefined" downstream.
+      scoreA: String(scoreA),
+      scoreB: String(scoreB),
+      gamesA: typeof msg.gamesA === "number" ? msg.gamesA : undefined,
+      gamesB: typeof msg.gamesB === "number" ? msg.gamesB : undefined,
+    } as CourtScoreSignal);
   }
 
   private async resolvePortPath(): Promise<string> {

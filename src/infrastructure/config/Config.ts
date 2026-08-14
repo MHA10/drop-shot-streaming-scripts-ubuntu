@@ -104,6 +104,16 @@ export interface AppConfig {
     // that must never affect the live stream or lose the local clip.
     uploadEnabled: boolean;
   };
+  esp32: {
+    // Forward `type:"score"` packets read off the court ESP32 to the backend,
+    // which writes them to Supabase (the single source of truth the scorecard
+    // overlay already reads). Default OFF.
+    //
+    // NOTE this is independent of `highlight.enabled`: a box may forward scores
+    // without recording highlight reels, or vice versa. The serial port is
+    // opened if EITHER is on — one device, one reader.
+    scoreForwardingEnabled: boolean;
+  };
   environment: string;
 }
 
@@ -253,6 +263,10 @@ export class Config {
         reelAspect: this.getEnvVar("HIGHLIGHT_REEL_ASPECT", "4:5"),
         uploadEnabled:
           this.getEnvVar("HIGHLIGHT_UPLOAD_ENABLED", "false") === "true",
+      },
+      esp32: {
+        scoreForwardingEnabled:
+          this.getEnvVar("ESP32_SCORE_FORWARDING_ENABLED", "false") === "true",
       },
       environment: this.getEnvVar("NODE_ENV", "development"),
     };
