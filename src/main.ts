@@ -258,6 +258,18 @@ class Application {
                 title: `DropShot highlight — ${court.courtId}`,
                 preferShort: true,
               });
+            } else if (result) {
+              // Say WHY there was no upload. Without this the capture simply
+              // ends and a disabled uploader is indistinguishable from a broken
+              // one — you cannot tell from the logs that anything was meant to
+              // happen at all.
+              this.logger.info("Reel upload skipped (not configured)", {
+                courtId: court.courtId,
+                finalPath: result.finalPath,
+                reason: !highlightConfig.uploadEnabled
+                  ? "HIGHLIGHT_UPLOAD_ENABLED is not true"
+                  : "STREAMING_API_KEY is not set",
+              });
             }
           } catch (error) {
             this.logger.error("Highlight capture handler failed", {

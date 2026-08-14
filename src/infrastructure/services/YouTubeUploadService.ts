@@ -103,6 +103,19 @@ export class YouTubeUploadService {
       );
     }
 
+    // Logged BEFORE the session request: that call reaches the backend and can
+    // hang or be slow, and without this line the whole upload is invisible
+    // until it succeeds. "Started but never finished" must be diagnosable.
+    const uploadStartedAt = Date.now();
+    this.logger.info("Reel upload starting", {
+      courtId: req.courtId,
+      filePath: req.filePath,
+      fileSizeMb: +(fileSize / 1048576).toFixed(2),
+      isShort,
+      durationSeconds: durationSeconds ? Math.round(durationSeconds) : undefined,
+      dims: dims ? `${dims.width}x${dims.height}` : undefined,
+    });
+
     let uploadId: string | undefined;
     try {
       const session = await this.createSession(req, fileSize, isShort, dims, durationSeconds);
@@ -114,7 +127,13 @@ export class YouTubeUploadService {
         fileSize,
       });
 
-      const videoId = await this.putFile(req.filePath, fileSize, session.sessionUri);
+      const videoId = await this.putFile(
+        req.filePath,
+        fileSize,
+        session.sessionUri,
+        req.courtId,
+        uploadId
+      );
       if (!videoId) {
         await this.reportComplete(req.courtId, uploadId, {
           status: "failed",
@@ -124,11 +143,22 @@ export class YouTubeUploadService {
       }
 
       await this.reportComplete(req.courtId, uploadId, { videoId });
-      this.logger.info("Reel uploaded", { courtId: req.courtId, uploadId, videoId });
+      this.logger.info("Reel uploaded", {
+        courtId: req.courtId,
+        uploadId,
+        videoId,
+        url: `https://youtu.be/${videoId}`,
+        ...this.transferStats(fileSize, uploadStartedAt),
+      });
       return videoId;
     } catch (error) {
       const msg = error instanceof Error ? error.message : String(error);
-      this.logger.warn("Reel upload failed", { courtId: req.courtId, uploadId, error: msg });
+      this.logger.warn("Reel upload failed", {
+        courtId: req.courtId,
+        uploadId,
+        error: msg,
+        elapsedSec: +((Date.now() - uploadStartedAt) / 1000).toFixed(1),
+      });
       // Best-effort failure report so the backend records it (idempotent).
       if (uploadId) {
         await this.reportComplete(req.courtId, uploadId, {
@@ -190,13 +220,19 @@ export class YouTubeUploadService {
   private async putFile(
     filePath: string,
     fileSize: number,
-    sessionUri: string
+    sessionUri: string,
+    courtId: string,
+    uploadId: string
   ): Promise<string | null> {
+    const totalChunks = Math.max(1, Math.ceil(fileSize / CHUNK_SIZE));
+    const startedAt = Date.now();
+    let chunkNo = 0;
     let offset = 0;
     while (offset < fileSize) {
       const end = Math.min(offset + CHUNK_SIZE, fileSize);
       const chunk = this.readChunk(filePath, offset, end - offset);
       const contentRange = `bytes ${offset}-${end - 1}/${fileSize}`;
+      chunkNo++;
 
       let attempt = 0;
       // Retry a single chunk on transient failure; on a 308 advance to where
@@ -218,11 +254,28 @@ export class YouTubeUploadService {
 
         if (res.status === 200 || res.status === 201) {
           const json = (await res.json().catch(() => ({}))) as { id?: string };
+          this.logger.info("Reel upload transfer complete", {
+            courtId,
+            uploadId,
+            chunks: chunkNo,
+            ...this.transferStats(fileSize, startedAt),
+          });
           return json.id ?? null;
         }
         if (res.status === 308) {
           const kept = this.parseRangeEnd(res.headers.get("range"));
           offset = kept !== null ? kept + 1 : end; // trust Google's Range
+          // Per-chunk progress: without this the whole transfer is silent
+          // between "session created" and "uploaded", so a stall is
+          // indistinguishable from normal operation.
+          this.logger.debug("Reel upload progress", {
+            courtId,
+            uploadId,
+            chunk: `${chunkNo}/${totalChunks}`,
+            sentMb: +(offset / 1048576).toFixed(2),
+            totalMb: +(fileSize / 1048576).toFixed(2),
+            percent: Math.round((offset / fileSize) * 100),
+          });
           break; // proceed to next chunk
         }
         // Non-terminal error → retry this chunk a few times, else give up.
@@ -232,6 +285,15 @@ export class YouTubeUploadService {
           );
         }
         attempt++;
+        // Surface retries: a flaky link should be visible, not silent.
+        this.logger.warn("Reel upload chunk retry", {
+          courtId,
+          uploadId,
+          chunk: `${chunkNo}/${totalChunks}`,
+          status: res.status,
+          attempt,
+          maxAttempts: MAX_CHUNK_RETRIES,
+        });
         await this.delay(1000 * Math.pow(2, attempt - 1));
       }
     }
@@ -366,6 +428,18 @@ export class YouTubeUploadService {
     } catch {
       return "";
     }
+  }
+
+  /** Elapsed time + average throughput, so a slow link is visible in the logs. */
+  private transferStats(
+    bytes: number,
+    startedAt: number
+  ): { elapsedSec: number; mbps: number } {
+    const elapsedSec = Math.max(0.001, (Date.now() - startedAt) / 1000);
+    return {
+      elapsedSec: +elapsedSec.toFixed(1),
+      mbps: +((bytes * 8) / 1e6 / elapsedSec).toFixed(2),
+    };
   }
 
   private delay(ms: number): Promise<void> {
