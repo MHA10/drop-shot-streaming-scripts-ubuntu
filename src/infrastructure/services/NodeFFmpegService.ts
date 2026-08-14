@@ -13,6 +13,7 @@ import { StreamUrl } from "../../domain/value-objects/StreamUrl";
 import { Logger } from "../../application/interfaces/Logger";
 import { StartStreamRequest } from "../../application/interfaces/StartStreamUseCase.types";
 import { Config } from "../config/Config";
+import { ensureDirSync } from "../utils/paths";
 
 export class NodeFFmpegService implements FFmpegService {
   private static readonly VIDEO_EXTS = new Set(["mp4", "gif", "webm", "mov", "avi", "mkv"]);
@@ -49,7 +50,8 @@ export class NodeFFmpegService implements FFmpegService {
       onRetryStream: (event: StartStreamRequest) => Promise<void>;
     },
     isScorecardActivated?: boolean,
-    adPaths?: AdOverlayPaths
+    adPaths?: AdOverlayPaths,
+    highlightBufferDir?: string | null
   ): Promise<FFmpegProcess> {
     const command = this.buildStreamCommand(
       cameraUrl,
@@ -57,7 +59,8 @@ export class NodeFFmpegService implements FFmpegService {
       hasAudio,
       courtId,
       isScorecardActivated,
-      adPaths
+      adPaths,
+      highlightBufferDir
     );
     this.logger.info("Command full form", command);
 
@@ -310,9 +313,10 @@ export class NodeFFmpegService implements FFmpegService {
     hasAudio: boolean,
     courtId: string,
     isScorecardActivated?: boolean,
-    adPaths?: AdOverlayPaths
+    adPaths?: AdOverlayPaths,
+    highlightBufferDir?: string | null
   ): FFmpegCommand {
-    const rtmpUrl = `rtmp://a.rtmp.youtube.com/live2/${streamKey}`;
+    const rtmpUrl = `${this.config.get().stream.youtubeRtmpBase}/${streamKey}`;
     let fakeAudioInputCounter = 0;
 
     let args: string[] = [];
@@ -378,8 +382,39 @@ export class NodeFFmpegService implements FFmpegService {
 
     const hasAnyAd = leftAdInputIndex !== null || rightAdInputIndex !== null;
 
+    // Highlight buffer: when a buffer dir is configured, branch the scaled
+    // frame BEFORE any overlay is applied. One copy ([base]) continues into
+    // the existing overlay/RTMP chain completely unchanged; the other
+    // ([hlbuf]) becomes a second output that records a raw (no ads/logos)
+    // rolling buffer for later highlight-clip extraction. This keeps the
+    // camera connection count at exactly one — no second ffmpeg process, no
+    // proxy — the split happens inside this same command.
+    // Fail-soft: the highlight buffer is a non-critical, secondary output. If
+    // its directory can't be created (bad path, permissions, disk full), we
+    // must NOT let that abort the live stream — disable the buffer branch for
+    // this run and build the command exactly as if it were off. Without this,
+    // a throw here propagates up and leaves the stream wedged (the caller's
+    // catch doesn't reset state), blocking future starts for the court.
+    let highlightBufferEnabled = !!highlightBufferDir;
+    if (highlightBufferEnabled) {
+      try {
+        ensureDirSync(highlightBufferDir!);
+      } catch (error) {
+        this.logger.warn(
+          "Failed to create highlight buffer dir; continuing without highlight buffer",
+          {
+            highlightBufferDir,
+            error: error instanceof Error ? error.message : String(error),
+          }
+        );
+        highlightBufferEnabled = false;
+      }
+    }
+
     // Build filter graph
-    const steps: string[] = ["[0:v] scale=1920:1080 [base];"];
+    const steps: string[] = highlightBufferEnabled
+      ? ["[0:v] scale=1920:1080 [scaled];", "[scaled] split=2 [base][hlbuf];"]
+      : ["[0:v] scale=1920:1080 [base];"];
 
     if (scoreInputIndex !== null) {
       steps.push(
@@ -427,6 +462,14 @@ export class NodeFFmpegService implements FFmpegService {
         steps.push(`[${cur}][${label}] overlay=${pos} [${next}]${isLast ? "" : ";"}`);
         cur = next;
       });
+    } else if (highlightBufferEnabled) {
+      // The highlight buffer branch introduces a second named filtergraph
+      // pad ([hlbuf]), so the primary chain's output can no longer rely on
+      // ffmpeg's "auto-pick the single unlabeled filtergraph output"
+      // behavior — that becomes ambiguous with two named pads present. Label
+      // it explicitly and map it below, same as the ad-overlay path already
+      // has to.
+      steps.push("[tmp1][client] overlay=main_w-overlay_w-10:10 [vout]");
     } else {
       steps.push("[tmp1][client] overlay=main_w-overlay_w-10:10");
     }
@@ -435,9 +478,13 @@ export class NodeFFmpegService implements FFmpegService {
 
     args.push("-filter_complex", filterComplex);
 
-    // When any ad input is present, map video/audio explicitly so ffmpeg
-    // doesn't auto-select an ad's audio stream.
-    if (hasAnyAd) {
+    // Whether the primary chain terminates in an explicit [vout] label (vs.
+    // ffmpeg's implicit single-output selection) and whether we must emit an
+    // explicit -map for it are the SAME decision — derive both from one flag
+    // so a future output-adding feature can't update one site and forget the
+    // other (which would dangle the label or map a non-existent pad).
+    const needsExplicitVout = hasAnyAd || highlightBufferEnabled;
+    if (needsExplicitVout) {
       args.push("-map", "[vout]");
       args.push("-map", `${fakeAudioInputCounter}:a`);
     }
@@ -469,6 +516,40 @@ export class NodeFFmpegService implements FFmpegService {
 
     // Specify output format for RTMP streaming
     args.push("-f", "flv", rtmpUrl);
+
+    // Second output: the highlight buffer branch. Deliberately cheap encode
+    // (low bitrate, ultrafast, no audio) since this is an intermediate
+    // artifact that gets reframed/re-encoded again during highlight
+    // processing — quality parity with the broadcast output isn't needed.
+    // "-c copy" isn't an option here: [hlbuf] is decoded/filtered video, not
+    // an already-encoded bitstream, so it must be encoded to be written out.
+    if (highlightBufferEnabled) {
+      const segmentSec = this.config.get().highlight.bufferSegmentSec;
+      // Unique per stream run (and per retry, since retries rebuild the
+      // command). The segment muxer names files by whole-second wall clock
+      // (%s), so on a fast restart the respawned process's first segment could
+      // land on the same second as the dying process's last one and overwrite
+      // it. A per-run token in the name keeps runs from colliding while %s
+      // still carries the segment's start time for the buffer manifest.
+      const runToken = Date.now().toString(36);
+      args.push(
+        "-map", "[hlbuf]",
+        "-c:v", "libx264",
+        "-preset", "ultrafast",
+        "-b:v", "800k",
+        "-an",
+        // Force a keyframe exactly every segmentSec. The segment muxer can only
+        // cut at keyframes; without this, libx264's default GOP (~250 frames,
+        // ~8-10s) governs the real segment length and -segment_time is
+        // effectively ignored, producing segments far coarser than configured.
+        "-force_key_frames", `expr:gte(t,n_forced*${segmentSec})`,
+        "-f", "segment",
+        "-segment_time", String(segmentSec),
+        "-reset_timestamps", "1",
+        "-strftime", "1",
+        path.join(highlightBufferDir!, `seg-${runToken}-%s.ts`)
+      );
+    }
 
     const fullCommand = `ffmpeg ${args.join(" ")}`;
 

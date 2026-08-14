@@ -1,12 +1,11 @@
-# ignoring all build modules
-**/dist/
-# ignoring all node js modules
-**/node_modules/
+
 # ignore public data with images
-/public/
 # ignore runtime-downloaded ad files
-/ad/
-
+# ignoring all build modules
+# ignoring all node js modules
+**/dist/
+**/node_modules/
+.claudelocal-reels/
 .env
-
-.claude
+/ad/
+/public/

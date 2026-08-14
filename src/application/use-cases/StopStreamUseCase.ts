@@ -2,6 +2,7 @@ import { StreamId } from "../../domain/value-objects/StreamId";
 import { StreamRepository } from "../../domain/repositories/StreamRepository";
 import { FFmpegService } from "../../domain/services/FFmpegService";
 import { AdRotationRegistry } from "../../infrastructure/services/AdRotator";
+import { HighlightBufferRegistry } from "../../infrastructure/services/HighlightBufferRegistry";
 import { Logger } from "../interfaces/Logger";
 
 export interface StopStreamRequest {
@@ -18,7 +19,8 @@ export class StopStreamUseCase {
     private readonly streamRepository: StreamRepository,
     private readonly ffmpegService: FFmpegService,
     private readonly logger: Logger,
-    private readonly adRotationRegistry: AdRotationRegistry
+    private readonly adRotationRegistry: AdRotationRegistry,
+    private readonly highlightBufferRegistry: HighlightBufferRegistry
   ) {}
 
   public async execute(
@@ -42,6 +44,8 @@ export class StopStreamUseCase {
 
       // Tear down ad rotation for this court so its timers stop overwriting slot files.
       this.adRotationRegistry.stop(stream.courtId);
+      // Stop the highlight buffer's retention sweep for this court.
+      this.highlightBufferRegistry.stop(stream.courtId);
 
       // Stop FFmpeg process if it has a PID and the process is actually running
       if (stream.processId) {

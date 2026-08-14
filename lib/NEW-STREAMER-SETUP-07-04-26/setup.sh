@@ -188,6 +188,16 @@ sudo apt-get install -y build-essential ffmpeg
 log_info "FFmpeg version: $(ffmpeg -version 2>&1 | head -1)"
 log_success "System dependencies installed."
 
+# Optional: Python + OpenCV for highlight ball-tracking reframe (Phase 5).
+# Only needed when HIGHLIGHT_BALL_TRACKING_ENABLED=true; the highlight feature
+# works without it (full-frame reel). NON-FATAL: a failure here must not abort
+# streamer setup, so it's wrapped to warn-and-continue despite `set -e`.
+log_info "Installing Python + OpenCV for highlight reframe (optional)..."
+{
+    sudo apt-get install -y python3 python3-pip &&
+    python3 -m pip install --break-system-packages opencv-python-headless numpy
+} || log_info "Python/OpenCV install skipped or failed (ball-tracking reframe will be unavailable; highlights still work full-frame)."
+
 # =============================================================================
 # STEP 6: Install PM2
 # =============================================================================
@@ -226,8 +236,8 @@ cat > "$REPO_DIR/.env" << ENVEOF
 BASE_URL=https://api.staging.drop-shot.live
 
 # Server-to-server auth key for the DropShot backend device routes (SSE,
-# heartbeat, go-live, logs). REQUIRED once the backend enforces the guard —
-# without it those calls get 401.
+# heartbeat, go-live, logs, video upload). REQUIRED once the backend enforces
+# the guard — without it those calls get 401.
 STREAMING_API_KEY=$STREAMING_API_KEY
 
 # Streamer Ground ID
@@ -249,6 +259,19 @@ REACT_APP_CLOUDINARY_FOLDER=dropshot/padel-courts
 REACT_APP_CLOUDINARY_UPLOAD_PRESET=dropshot-partners
 CLOUDINARY_API_KEY=941851446579375
 CLOUDINARY_API_SECRET=IrdU2pOiXW9GwDeP7h5JV3MRdwM
+
+# Highlight Reel Capture (OFF by default — uncomment to enable on this box).
+# HIGHLIGHT_ENABLED=true
+#   Enables the rolling buffer + reel capture. Needs the ESP32 highlight
+#   hardware attached; to test WITHOUT it, also set the two debug knobs below.
+# HIGHLIGHT_FORCE_PRESENT=true            # pretend the ESP32 is present
+# HIGHLIGHT_TRIGGER_FILE=/tmp/hl-trigger  # `touch` this file to fire a highlight
+# HIGHLIGHT_BALL_TRACKING_ENABLED=true    # player-follow reel (needs python3+opencv, installed above)
+# HIGHLIGHT_UPLOAD_ENABLED=true           # upload finished reels to YouTube via the
+#                                         # backend (requires STREAMING_API_KEY above)
+# HIGHLIGHT_REEL_ASPECT=9:16              # default 4:5; use 9:16 for true YouTube Shorts
+#   Once the two knobs above are set and the streamer restarted, fire a test
+#   reel with:  bash lib/highlight-trigger.sh
 ENVEOF
 log_info ".env file created at $REPO_DIR/.env"
 
