@@ -1,5 +1,6 @@
 import * as fs from "fs";
 import * as path from "path";
+import { spawn } from "child_process";
 import { Logger } from "../../application/interfaces/Logger";
 import { SegmentRecord } from "./HighlightBufferManager";
 import { ensureDirSync, safeSegment } from "../utils/paths";
@@ -99,13 +100,37 @@ export class HighlightExtractorService {
       ]);
       await spawnToFile(command, args, dest, this.extractTimeoutMs);
 
+      // Log the ACTUAL duration alongside the requested one. Logging only the
+      // request hid a real bug: the buffer's segments carry the camera
+      // sub-stream's timing, so a 30s window can extract to a far shorter clip
+      // and nothing in the logs said so. A mismatch here means the reel is
+      // time-compressed and every downstream step inherits it.
+      const actualSec = await this.probeDurationSec(dest);
+      const shortfall =
+        actualSec !== null && durationSec > 0
+          ? 1 - actualSec / durationSec
+          : 0;
       this.logger.info("Highlight clip extracted", {
         courtId,
         dest,
         segments: segments.length,
         offsetSec,
-        durationSec,
+        requestedSec: durationSec,
+        actualSec: actualSec !== null ? +actualSec.toFixed(2) : undefined,
       });
+      // >10% short is not rounding — it means duration is being lost upstream.
+      if (shortfall > 0.1) {
+        this.logger.warn(
+          "Highlight clip is much shorter than the requested window — the reel will look sped up",
+          {
+            courtId,
+            requestedSec: durationSec,
+            actualSec: actualSec !== null ? +actualSec.toFixed(2) : undefined,
+            lostPct: Math.round(shortfall * 100),
+            hint: "buffer segments likely carry the camera sub-stream's frame timing",
+          }
+        );
+      }
       return dest;
     } catch (error) {
       this.logger.warn("Highlight extraction failed", {
@@ -117,4 +142,24 @@ export class HighlightExtractorService {
       fs.unlink(listPath, () => {}); // best-effort cleanup of the list file
     }
   }
+
+  /** Actual duration of `file` in seconds, or null if it can't be probed. */
+  private probeDurationSec(file: string): Promise<number | null> {
+    return new Promise((resolve) => {
+      const proc = spawn("ffprobe", [
+        "-v", "error",
+        "-show_entries", "format=duration",
+        "-of", "default=nw=1:nk=1",
+        file,
+      ]);
+      let out = "";
+      proc.stdout?.on("data", (d) => (out += d.toString()));
+      proc.on("exit", (code) => {
+        const dur = parseFloat(out.trim());
+        resolve(code === 0 && Number.isFinite(dur) && dur > 0 ? dur : null);
+      });
+      proc.on("error", () => resolve(null));
+    });
+  }
+
 }

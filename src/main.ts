@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 
+import * as fs from "fs";
 import * as path from "path";
 import * as packageJson from "../package.json";
 import { Config } from "./infrastructure/config/Config";
@@ -251,13 +252,34 @@ class Application {
             // (the uploader is fully fail-soft). streamKey is required by the
             // backend to resolve the video's privacy.
             if (result && highlightUploader) {
-              await highlightUploader.upload({
+              const videoId = await highlightUploader.upload({
                 filePath: result.finalPath,
                 courtId: court.courtId,
                 streamKey: court.streamKey,
                 title: `DropShot highlight — ${court.courtId}`,
                 preferShort: true,
               });
+              // Reclaim the disk once YouTube has CONFIRMED the video. Gated on
+              // a real videoId, never on "we tried": a failed upload keeps the
+              // file so the reel still exists somewhere. Unlink failure is
+              // logged and ignored — it must not fail the capture.
+              if (videoId && highlightConfig.deleteAfterUpload) {
+                fs.unlink(result.finalPath, (err) => {
+                  if (err) {
+                    this.logger.warn("Could not delete reel after upload", {
+                      courtId: court.courtId,
+                      filePath: result.finalPath,
+                      error: err.message,
+                    });
+                  } else {
+                    this.logger.info("Local reel deleted after upload", {
+                      courtId: court.courtId,
+                      filePath: result.finalPath,
+                      videoId,
+                    });
+                  }
+                });
+              }
             } else if (result) {
               // Say WHY there was no upload. Without this the capture simply
               // ends and a disabled uploader is indistinguishable from a broken

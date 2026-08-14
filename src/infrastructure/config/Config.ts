@@ -104,6 +104,12 @@ export interface AppConfig {
     // reel is always written to disk regardless; upload is an additive step
     // that must never affect the live stream or lose the local clip.
     uploadEnabled: boolean;
+    // Delete the local reel once YouTube has confirmed it (a videoId came
+    // back). Default TRUE: these boxes have modest disks and reels accumulate
+    // forever otherwise. Deletion happens ONLY on a confirmed upload — a failed
+    // or disabled upload always keeps the file, so a reel is never lost with
+    // nowhere to recover it from.
+    deleteAfterUpload: boolean;
   };
   esp32: {
     // Forward `type:"score"` packets read off the court ESP32 to the backend,
@@ -270,6 +276,9 @@ export class Config {
         reelAspect: this.getEnvVar("HIGHLIGHT_REEL_ASPECT", "16:9"),
         uploadEnabled:
           this.getEnvVar("HIGHLIGHT_UPLOAD_ENABLED", "false") === "true",
+        // Opt OUT (set "false") to keep local copies after upload.
+        deleteAfterUpload:
+          this.getEnvVar("HIGHLIGHT_DELETE_AFTER_UPLOAD", "true") !== "false",
       },
       esp32: {
         scoreForwardingEnabled:
