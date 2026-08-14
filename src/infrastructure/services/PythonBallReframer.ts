@@ -63,6 +63,26 @@ export class PythonBallReframer implements BallReframer {
       return null;
     }
 
+    // Nothing to crop → nothing to track. The reframer takes a window as WIDE
+    // as `aspect` allows out of a full-height source, so when the target is as
+    // wide as (or wider than) the source there is no horizontal room to pan and
+    // the pass would be a pure re-encode: ~40s of CPU on a streamer box for a
+    // frame-identical result. Skip it and let the caller use the raw clip.
+    //
+    // This is the normal case for the default 16:9 target on a 16:9 camera.
+    const srcDims = await this.probeDimensions(clipPath);
+    if (srcDims) {
+      const target = this.parseAspect(this.reelAspect);
+      const source = srcDims.width / srcDims.height;
+      if (target !== null && target >= source - 0.001) {
+        this.logger.info(
+          "Ball reframe skipped: target aspect is not narrower than the source, nothing to crop",
+          { courtId, aspect: this.reelAspect, source: `${srcDims.width}x${srcDims.height}` }
+        );
+        return null; // caller falls back to the full-frame clip — the desired result
+      }
+    }
+
     const dir = path.dirname(clipPath);
     const base = path.basename(clipPath, path.extname(clipPath));
     const out = path.join(dir, `reframed-${base}.mp4`);
@@ -111,6 +131,38 @@ export class PythonBallReframer implements BallReframer {
       });
       return null;
     }
+  }
+
+  /** "16:9" -> 1.777…; null when unparseable (caller then just runs the pass). */
+  private parseAspect(aspect: string): number | null {
+    const m = aspect.match(/^\s*(\d+(?:\.\d+)?)\s*:\s*(\d+(?:\.\d+)?)\s*$/);
+    if (!m) return null;
+    const w = parseFloat(m[1]);
+    const h = parseFloat(m[2]);
+    return h > 0 && w > 0 ? w / h : null;
+  }
+
+  // Width/height of `file`, or null on any probe failure (never throws).
+  private probeDimensions(
+    file: string
+  ): Promise<{ width: number; height: number } | null> {
+    return new Promise((resolve) => {
+      const proc = spawn("ffprobe", [
+        "-v", "error",
+        "-select_streams", "v:0",
+        "-show_entries", "stream=width,height",
+        "-of", "csv=p=0",
+        file,
+      ]);
+      let out = "";
+      proc.stdout?.on("data", (d) => (out += d.toString()));
+      proc.on("exit", (code) => {
+        if (code !== 0) return resolve(null);
+        const m = out.trim().match(/(\d+)\s*,\s*(\d+)/);
+        resolve(m ? { width: parseInt(m[1], 10), height: parseInt(m[2], 10) } : null);
+      });
+      proc.on("error", () => resolve(null));
+    });
   }
 
   // True when ffprobe reports a positive duration for `file` (i.e. a real,
