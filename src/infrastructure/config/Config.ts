@@ -93,8 +93,8 @@ export interface AppConfig {
     // is unvalidated without real padel footage, so by default the reel is the
     // full-frame clip with logos. When enabled it runs a Python/OpenCV pass
     // (requires python3 + opencv-python on the box) and falls back to full
-    // frame on any failure. reelAspect is the target crop aspect, e.g. "16:9"
-    // (default, full frame) / "4:5" / "9:16".
+    // frame on any failure. reelAspect is the target crop aspect: "9:16"
+    // (default — required for YouTube Shorts) / "4:5" / "16:9" (full frame).
     ballTracking: {
       enabled: boolean;
     };
@@ -263,17 +263,12 @@ export class Config {
           enabled:
             this.getEnvVar("HIGHLIGHT_BALL_TRACKING_ENABLED", "false") === "true",
         },
-        // 16:9 keeps the reel in the camera's native landscape shape — the full
-        // frame, nothing cropped away. Override per box with
-        // HIGHLIGHT_REEL_ASPECT for social-vertical output: "4:5" (best
-        // all-rounder, native on IG/FB) or "9:16" (full-screen Reels/Shorts;
-        // required for YouTube to classify the upload as a Short).
-        //
-        // NOTE at 16:9 from a 16:9 camera there is nothing to crop, so the
-        // player-tracking reframe has no work to do and is skipped entirely
-        // (see PythonBallReframer). Tracking only does something for a target
-        // narrower than the source.
-        reelAspect: this.getEnvVar("HIGHLIGHT_REEL_ASPECT", "16:9"),
+        // 9:16 — full-screen vertical. This is the ratio YouTube requires to
+        // classify an upload as a SHORT (the backend accepts 9:16 or 1:1), and
+        // it is what Reels/TikTok expect too. Overridable per box: "4:5" crops
+        // less aggressively for feed posts, "16:9" keeps the full landscape
+        // frame (and then skips the reframe entirely — nothing to crop).
+        reelAspect: this.getEnvVar("HIGHLIGHT_REEL_ASPECT", "9:16"),
         uploadEnabled:
           this.getEnvVar("HIGHLIGHT_UPLOAD_ENABLED", "false") === "true",
         // Opt OUT (set "false") to keep local copies after upload.

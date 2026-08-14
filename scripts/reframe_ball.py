@@ -151,12 +151,21 @@ def main():
     prev_gray = None
     last_x = det_w / 2.0
     idx = 0
+    last_pos_msec = 0.0
 
     while True:
         # grab() advances the decoder without fully decoding; only retrieve()
         # (decode) the frames we actually analyse, so skipped frames are cheap.
         if not cap.grab():
             break
+        # Track the real presentation time of the last frame. The DECLARED fps
+        # cannot be trusted: RTSP sub-streams routinely announce 25fps while
+        # delivering ~8, and writing N frames at the declared rate then produces
+        # a clip several times shorter than the footage (a 30s window came out
+        # as 10.28s). We rebuild the true rate from these timestamps below.
+        pos = cap.get(cv2.CAP_PROP_POS_MSEC)
+        if pos and pos > last_pos_msec:
+            last_pos_msec = pos
         found_x = np.nan
         frame_boxes = []
 
@@ -244,6 +253,23 @@ def main():
     if n == 0:
         sys.stderr.write("reframe_ball: no frames read\n")
         return 4
+
+    # ── True output frame rate ──
+    # Write N frames at the rate the footage ACTUALLY ran at, not the rate the
+    # container claims. A camera sub-stream that declares 25fps but delivers ~8
+    # would otherwise yield a clip ~3x too short and playing ~3x too fast.
+    # Derived from the last frame's presentation time; falls back to the
+    # declared fps when timestamps are unavailable or implausible.
+    out_fps = fps
+    if last_pos_msec > 0 and n > 1:
+        measured = n / (last_pos_msec / 1000.0)
+        if 1.0 <= measured <= 120.0:
+            out_fps = measured
+        else:
+            sys.stderr.write(
+                f"reframe_ball: measured fps {measured:.2f} implausible; "
+                f"keeping declared {fps:.2f}\n"
+            )
     xs = np.array(xs_raw, dtype=float)
     valid = ~np.isnan(xs)
     # hit_rate is over the frames we actually analysed (not skipped ones)
@@ -269,17 +295,18 @@ def main():
         vel = np.abs(np.diff(path)) if n > 1 else np.array([0])
         sys.stderr.write(
             f"reframe_ball: mode={args.mode} frames={n} hit_rate={hit_rate:.2f} "
+            f"fps_declared={fps:.2f} fps_out={out_fps:.2f} dur={n/out_fps:.1f}s "
             f"max_step_px={vel.max():.0f} mean_step_px={vel.mean():.2f}\n"
         )
 
     cap = cv2.VideoCapture(args.input)
     fourcc = cv2.VideoWriter_fourcc(*"mp4v")
-    writer = cv2.VideoWriter(args.output, fourcc, fps, (crop_w, crop_h))
+    writer = cv2.VideoWriter(args.output, fourcc, out_fps, (crop_w, crop_h))
     if not writer.isOpened():
         sys.stderr.write("reframe_ball: cannot open output writer\n")
         cap.release()
         return 3
-    ov_writer = cv2.VideoWriter(args.debug_overlay, fourcc, fps, (src_w, src_h)) \
+    ov_writer = cv2.VideoWriter(args.debug_overlay, fourcc, out_fps, (src_w, src_h)) \
         if args.debug_overlay else None
 
     i = written = 0
