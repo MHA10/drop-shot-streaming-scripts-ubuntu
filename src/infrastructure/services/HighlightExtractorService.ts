@@ -31,8 +31,20 @@ import { withLowPriority } from "../utils/lowPriority";
  *   clip at the final path. Fail-soft: any error returns null (logged), never
  *   throws into the caller — a failed highlight must not disrupt anything.
  *
+ * - Segments are HARDLINKED into a private dir before ffmpeg reads them. The
+ *   retention sweeper runs every 5s and this re-encode takes ~30s, so without
+ *   pinning the sweeper deletes segments ffmpeg hasn't reached yet — and
+ *   ffmpeg then TRUNCATES THE OUTPUT AND EXITS 0. That silent success turned a
+ *   30s window into a 9.12s clip while every log line reported normal.
+ *
  * ── DO NOT ──
  * - Do NOT assume success — callers must handle a null return.
+ * - Do NOT put the buffer dir and the output dir on different filesystems.
+ *   Hardlinks cannot cross a filesystem boundary, so pinning silently degrades
+ *   to the racy behaviour above (it is logged, but the reels get short again).
+ * - Do NOT treat a zero exit from ffmpeg as "the clip is complete" — compare
+ *   the probed duration against the requested window, which is what the
+ *   shortfall warning below does.
  */
 export class HighlightExtractorService {
   // Generous: runs at low priority (see withLowPriority), so it may take
@@ -59,18 +71,35 @@ export class HighlightExtractorService {
     const stamp = windowStartMs; // stable, sortable id for the clip
     const courtOut = path.join(this.outputDir, safeSegment(courtId));
     const listPath = path.join(courtOut, `.concat-${stamp}.txt`);
+    const pinDir = path.join(courtOut, `.pin-${stamp}`);
     const dest = path.join(courtOut, `highlight-${stamp}.mp4`);
 
     try {
       ensureDirSync(courtOut);
+
+      // PIN THE SEGMENTS BEFORE READING THEM.
+      //
+      // The retention sweeper deletes buffer segments on a 5s timer, and this
+      // re-encode takes ~30s at nice 19 on a loaded box. Without pinning, the
+      // sweeper unlinks segments this ffmpeg has NOT REACHED YET, ffmpeg hits
+      // "Error during demuxing: No such file or directory" — and then EXITS 0
+      // with a truncated file. That silent success is what made this so hard
+      // to see: a 30s window came out at 9.12s and every log line said fine.
+      //
+      // A hardlink is a second name for the same inode. Once we hold one, the
+      // sweeper's unlink only removes ITS name; the data stays alive until we
+      // drop ours in the finally below. No locks, no coordination with the
+      // sweeper, and no copy — this is a directory entry, not the video.
+      const pinned = this.pinSegments(segments, pinDir, courtId);
+      if (pinned.length === 0) return null;
 
       // concat demuxer list. Entries MUST be absolute: ffmpeg resolves relative
       // `file` paths against the LIST FILE's directory (not CWD), so with the
       // default relative bufferDir the segments would be looked up under the
       // output dir and never found. path.resolve makes this unambiguous.
       // Escape single quotes per ffmpeg's list syntax.
-      const listBody = segments
-        .map((s) => `file '${path.resolve(s.path).replace(/'/g, "'\\''")}'`)
+      const listBody = pinned
+        .map((p) => `file '${path.resolve(p).replace(/'/g, "'\\''")}'`)
         .join("\n");
       fs.writeFileSync(listPath, `${listBody}\n`);
 
@@ -127,7 +156,7 @@ export class HighlightExtractorService {
             requestedSec: durationSec,
             actualSec: actualSec !== null ? +actualSec.toFixed(2) : undefined,
             lostPct: Math.round(shortfall * 100),
-            hint: "buffer segments likely carry the camera sub-stream's frame timing",
+            hint: "segments went missing mid-read (ffmpeg truncates and still exits 0) — check the pinning warning above",
           }
         );
       }
@@ -140,7 +169,65 @@ export class HighlightExtractorService {
       return null;
     } finally {
       fs.unlink(listPath, () => {}); // best-effort cleanup of the list file
+      // Drop our hardlinks. For segments the sweeper already unlinked, this is
+      // the last reference and the disk space is reclaimed here.
+      fs.rm(pinDir, { recursive: true, force: true }, () => {});
     }
+  }
+
+  /**
+   * Hardlink each segment into `pinDir` so the retention sweeper cannot delete
+   * the data out from under ffmpeg. Returns the pinned paths, in order.
+   *
+   * A segment that is ALREADY gone is skipped rather than passed through: the
+   * concat demuxer aborts the whole remaining list on a missing file, so
+   * skipping one costs a small jump while passing it through costs everything
+   * after it.
+   */
+  private pinSegments(
+    segments: SegmentRecord[],
+    pinDir: string,
+    courtId: string
+  ): string[] {
+    ensureDirSync(pinDir);
+    const pinned: string[] = [];
+    let missing = 0;
+    let unlinkable = 0;
+
+    for (const seg of segments) {
+      const src = path.resolve(seg.path);
+      const dst = path.join(pinDir, path.basename(src));
+      try {
+        fs.linkSync(src, dst);
+        pinned.push(dst);
+      } catch (error) {
+        const code = (error as NodeJS.ErrnoException).code;
+        if (code === "ENOENT") {
+          missing++; // swept between the manifest query and now
+          continue;
+        }
+        // EXDEV (different filesystem) or EPERM: we cannot pin, but the file is
+        // there right now. Use it directly and accept the original race rather
+        // than dropping footage we can still read.
+        unlinkable++;
+        pinned.push(src);
+      }
+    }
+
+    if (missing > 0 || unlinkable > 0) {
+      this.logger.warn("Some highlight segments could not be pinned", {
+        courtId,
+        missing,
+        unlinkable,
+        pinned: pinned.length,
+        of: segments.length,
+        hint:
+          unlinkable > 0
+            ? "buffer and output dirs are on different filesystems — put them on one volume so segments can be hardlinked"
+            : "segments were swept before pinning; raise HIGHLIGHT_BUFFER_RETENTION_SEC",
+      });
+    }
+    return pinned;
   }
 
   /** Actual duration of `file` in seconds, or null if it can't be probed. */
