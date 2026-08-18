@@ -895,6 +895,9 @@ def main():
                          "surface the HSV gate cannot find")
     ap.add_argument("--dump-court", default="",
                     help="write the calibration it worked out to this JSON file")
+    ap.add_argument("--dump-tracks", default="",
+                    help="write per-frame per-player positions to this JSON file "
+                         "(feeds player_heatmap.py without re-running the detector)")
     ap.add_argument("--court-hsv", default="90,40,40,130,255,255",
                     help="HSV gate for the playing surface (lo h,s,v,hi h,s,v)")
     ap.add_argument("--calib-debug", default="", help="write the calibration check image here")
@@ -964,6 +967,34 @@ def main():
         radar_on = court is not None and args.radar != "off"
         sys.stderr.write(f"track_players: lock frame={used_lock} "
                          f"({used_lock/fps:.2f}s) radar={'on' if radar_on else 'off'}\n")
+
+    if args.dump_tracks:
+        # Persist tracks so downstream renderers (the heatmap composite) never
+        # have to re-run YOLO. Detection is the expensive half of this tool;
+        # iterating on a layout should not cost a full inference pass.
+        payload = {
+            "video": args.input,
+            "fps": fps,
+            "width": w,
+            "height": h,
+            "frames": len(per_frame),
+            "lock_frame": used_lock,
+            "court": None if court is None else {
+                "mL": court.mL, "bL": court.bL, "mR": court.mR, "bR": court.bR,
+                "y_top": court.y_top, "y_bot": court.y_bot, "y_net": court.y_net,
+            },
+            "tracks": {
+                L: [None if s is None else {
+                    "box": [round(float(v), 1) for v in s["box"]],
+                    "foot": [round(float(s["foot"][0]), 1), round(float(s["foot"][1]), 1)],
+                    "solid": bool(s["solid"]),
+                } for s in tracks[L]]
+                for L in LABELS
+            },
+        }
+        with open(args.dump_tracks, "w") as fh:
+            json.dump(payload, fh)
+        sys.stderr.write(f"track_players: wrote tracks to {args.dump_tracks}\n")
 
     n = render(args.input, args.output, tracks, court if args.radar != "off" else None,
                max(2, int(args.trail_sec * fps)), args.radar, args.show_court, poly, args.debug)

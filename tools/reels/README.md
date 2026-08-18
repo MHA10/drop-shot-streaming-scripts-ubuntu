@@ -20,6 +20,7 @@ nothing here ships to npm** (the published package is only `dist/`).
 | `debug-overlay.sh` | Renders the tracking guides, to see what the crop is following |
 | `setup-tracking.sh` | One-time: separate ~2 GB venv for the player tracker |
 | `track-players.sh` | **Labels the four players A/B/C/D** and renders the tracking overlay |
+| `heatmap-card.sh` | **The 9:16 share card** — four per-player heatmaps around the clip |
 
 ---
 
@@ -336,7 +337,72 @@ laptop tool for marketing and analysis.
 
 ---
 
-## 8. Troubleshooting
+## 8. Player heatmap share card
+
+A vertical card for social: four top-down courts, one per player, stained with
+where that player spent the point — plus the clip in the middle and a
+low→high activity legend. Heat builds as the clip plays.
+
+```bash
+bash tools/reels/heatmap-card.sh \
+  --input local-reels/tracking-debug-best-rally.mp4 \
+  --out   local-reels/card.mp4 \
+  --title "SET 1" \
+  --names "A=DI NENNO,B=LEBRON,C=TAPIA,D=COELLO"
+```
+
+Panels are laid out **to match the court**, not in reading order — A and B (the
+far pair) above the clip, C and D (the near pair) below it — so a panel maps to
+a player without reading the label.
+
+### Four outputs from one run
+
+The detection pass that feeds the heatmap also produces the tracking overlay, so
+you get it for free:
+
+| File | |
+|---|---|
+| `card.mp4` | the 1080×1920 card, heat accumulating |
+| `card-poster.png` | the final frame, for a static post |
+| `card-overlay.mp4` | the full-frame A/B/C/D tracking overlay |
+| `card-calibration.png` | the court fit — **check this first** |
+
+`--static` skips the video render and writes the poster only.
+
+### How to read it
+
+Heat is a long-exposure of the player's feet: green where they passed through,
+red where they camped. **All four panels share one colour scale**, so they're
+comparable with each other — a dim panel means that player genuinely covered
+less ground *or* was detected less often. Check the per-player detection rate
+that step 3 prints before drawing a conclusion:
+
+```
+track_players: C detected=727/900 (0.81)
+```
+
+On the reference rally C's panel is dim partly because that player keeps
+walking out of the bottom of the frame, not because they stood still.
+
+Only **confirmed detections** contribute heat — coasted positions are the
+tracker's guess, and a guess baked into a statistic looks like data. Splats are
+weighted by `1/frames-present`, so the card measures activity rather than
+detectability.
+
+### What these panels are not
+
+They are **schematic**: outline, net and centre line, drawn at a chosen display
+ratio. There are deliberately no metre markings, no service boxes and no
+"distance covered" figure, because the court model underneath is relative, not
+metric — same reason the radar has no scale (§7). Anything you measured off
+these panels would be invented.
+
+The scale is also normalised per render, so **red on one card is not the same
+amount of standing-around as red on another**. Don't compare cards.
+
+---
+
+## 9. Troubleshooting
 
 | Symptom | Cause | Fix |
 |---|---|---|
@@ -352,7 +418,7 @@ laptop tool for marketing and analysis.
 
 ---
 
-## 9. How this relates to the streamer's own reels
+## 10. How this relates to the streamer's own reels
 
 The streamer generates highlight reels on-box (ESP32 button → rolling buffer →
 reel). **The tracking step here is literally the same code** —
