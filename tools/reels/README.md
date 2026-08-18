@@ -18,6 +18,8 @@ nothing here ships to npm** (the published package is only `dist/`).
 | `score-audio.py` | Scores just the audio (step 1 for big/remote videos) |
 | `fetch-sections.sh` | Downloads only candidate sections of a YouTube VOD (step 2) |
 | `debug-overlay.sh` | Renders the tracking guides, to see what the crop is following |
+| `setup-tracking.sh` | One-time: separate ~2 GB venv for the player tracker |
+| `track-players.sh` | **Labels the four players A/B/C/D** and renders the tracking overlay |
 
 ---
 
@@ -226,7 +228,115 @@ Consequences:
 
 ---
 
-## 7. Troubleshooting
+## 7. Labelling the players A/B/C/D
+
+`debug-overlay.sh` answers *"what is the crop following?"*. It cannot answer
+*"who is who?"* — MOG2 has no idea a blob is a person, let alone **which**
+person. `track-players.sh` does, using an actual detector.
+
+```bash
+bash tools/reels/setup-tracking.sh                       # one time, ~2 GB
+
+bash tools/reels/track-players.sh \
+  --input local-reels/tracking-debug-best-rally.mp4 \
+  --out   local-reels/tracked.mp4
+```
+
+Output is the full frame with, per player: a coloured box, a letter chip, and a
+fading trail — plus a **radar** in the corner showing the formation top-down.
+
+### How the letters are handed out
+
+Once, at `--lock-sec` into the clip (default 2s), by where each player is
+standing **in the frame**:
+
+```
+   ┌──────────────┬──────────────┐
+   │      A       │      B       │     far pair
+   ├──────────────┼──────────────┤
+   │      C       │      D       │     near pair
+   └──────────────┴──────────────┘
+```
+
+**After that the letter belongs to the person, not the corner.** If C sprints
+across to the right, they are still C. This is the whole point — the rejected
+alternative (recompute the quadrant every frame) makes tags swap places every
+time two players cross, which is unwatchable.
+
+Consequence: the lock-in frame matters. Point it at live play, not at players
+strolling back between points.
+
+### Reading the overlay
+
+| What you see | Means |
+|---|---|
+| Solid box | The detector found this player on this frame |
+| **Dashed** box | It didn't — position is coasting from their last velocity |
+| No trail segment | Trails only record real detections, never guesses |
+| Radar dot | That player's position on the court, top-down |
+
+`--debug` prints a per-player detection rate. On the reference rally: A 0.92,
+B 0.96, C 0.81, D 0.99. **C is lower for a real reason, not a bug** — that
+player repeatedly walks out of the bottom of the frame, because the camera crop
+cuts the near baseline off. You cannot detect someone who isn't in the picture.
+
+### The radar is a formation view, not a measurement
+
+It shows who is up, who is back and who covers which side. It does **not** show
+distances in metres, and there are deliberately no metre markings on it.
+
+Why: a metric top-down map needs an image→court homography, and these cameras
+will not support one. The near baseline sits below the frame, so the fourth
+correspondence has to be guessed; and the lens has real barrel distortion (the
+far baseline bows up ~14px at mid-court, the near service line bows down ~40px)
+which no planar homography can represent. Anchoring the depth scale on different
+pairs of visible landmarks disagreed by ~10%, and some pairs put the near
+baseline *behind the camera*. So the tool measures only what it can actually
+see: sideline-relative position across (exact), and perspective-correct relative
+depth along. See the `CourtModel` docstring in `scripts/track_players.py`.
+
+### Always check the calibration image
+
+Every run writes `<out>-calibration.png` next to the video:
+
+- **green** — the fitted sidelines and the court's visible near/far edges
+- **red** — the net's ground line
+- **cyan** — evenly-spaced depth lines (uneven pixel gaps = perspective working)
+- **orange** — the polygon detections are filtered to
+
+If the green lines don't sit on the real court edges, the radar is wrong and the
+detection filter is letting spectators in. The court finder is an HSV gate on
+the **blue** playing surface — a green or terracotta court needs `--court-hsv`
+retuned, then `--dump-court` to save the result and `--court-json` to reuse it.
+
+### Options
+
+```
+--input FILE      source video                                  [required]
+--out FILE        output path                                   [required]
+--moment SEC      cut a window around this second first         [whole clip]
+--pre / --post    window either side of --moment                [25 / 5]
+--lock-sec SEC    when letters are assigned                     [2.0]
+--radar POS       bottom-left|bottom-right|top-left|top-right|off
+--model FILE      detector weights                              [yolo11s.pt]
+--keep-bars       don't strip letterbox bars
+--                pass any further flags straight to track_players.py
+```
+
+`yolo11s` is the default because it matched `yolo11m` box-for-box on this
+footage at ~3x the speed. Don't drop to `yolo11n`: far-court players are only
+~55px tall and it starts losing them. Expect roughly 1.5x realtime on an M-series
+laptop (45s for a 30s clip).
+
+### Don't put this on a streamer box
+
+It pulls torch + ultralytics and runs far slower than realtime on low-power
+hardware. `reframe_ball.py` is the code that ships to production; this is a
+laptop tool for marketing and analysis.
+
+---
+
+## 8. Troubleshooting
 
 | Symptom | Cause | Fix |
 |---|---|---|
@@ -242,7 +352,7 @@ Consequences:
 
 ---
 
-## 8. How this relates to the streamer's own reels
+## 9. How this relates to the streamer's own reels
 
 The streamer generates highlight reels on-box (ESP32 button → rolling buffer →
 reel). **The tracking step here is literally the same code** —
