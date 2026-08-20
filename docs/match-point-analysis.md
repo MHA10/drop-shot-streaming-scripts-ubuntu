@@ -338,10 +338,57 @@ Feature variants swept (band = full vs upper body, statistic = mean vs 99th
 percentile, mask dilation 15 vs 25) all land in 0.60-0.68 on a 25-point sample;
 none is clearly better, so the defaults are the simplest ones.
 
+### Ball tracking: where the attempt got to (start here, not from scratch)
+
+Progress made, not yet a feature:
+
+| Step | Result |
+|---|---|
+| Candidate gate: loose polygon, no background | 9 candidates/frame (median) |
+| + background subtraction vs the median frame | 5 |
+| + **strict** court polygon (no margin) | **4** |
+| Second-order DP tracker (velocity continuity) | nearest player == server **0.53** (chance 0.25), median error 186 px |
+
+**The green artificial-turf surround was the main false-positive source** — it is
+yellow-green and passes any ball colour gate. Excluding it by tightening the
+court polygon to zero margin more than halved the candidates.
+
+**Why it still fails: no gap handling.** Track length came out at a median of 2
+frames. Any frame with zero ball candidates breaks the chain outright, because
+the DP only links consecutive frames. Fixing that — allowing a skip with a
+penalty, so a track survives a missed detection — is the next concrete step, and
+it is what limits length today, not the tuning (rebalancing reward vs
+acceleration penalty changed nothing).
+
+Do NOT retry the pairwise-RANSAC-over-a-short-window approach: it found a
+"track" on 30/30 points, all spurious, landing a median 597 px from the known
+server — below the chance baseline.
+
 **Ball tracking is the single blocker for everything left** — last-contact
 player, stop-reason, and therefore who scored. A colour gate is not enough; this
 needs trajectory-based association across frames (a small ball moving fast on a
 fixed camera is the classic TrackNet-style problem).
+
+## Hand-labelled check (blind protocol)
+
+24 points sampled across the match, cropped to the serving pair only, three
+frames each (-0.25s, serve, +0.15s). Labelled without seeing the prediction,
+then compared:
+
+| | |
+|---|---|
+| Exact player agreement | **7/8** |
+| Team agreement | **8/8** |
+| Unlabelled (too small to call) | 1 far-end serve |
+
+The single disagreement was **the label being wrong, not the pipeline**: green
+was deep at the far baseline and orange-shorts was up at the net, and a net
+player cannot serve. Corrected on that rule, it is 8/8.
+
+Two honest caveats. The sample is 8 confident labels, not 30 — small. And
+labelling far-end serves from stills is itself unreliable, because the players
+are ~40 px tall; that is what produced the one error. A larger pass should use
+short clips rather than stills for far-end serves.
 
 ## What this does NOT do yet
 
