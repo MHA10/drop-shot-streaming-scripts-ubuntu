@@ -224,7 +224,7 @@ def main():
         if len(fr) < 2:
             continue
         obs[i] = serve_votes(fr, court.v_net)
-        serve_frames[i] = fr
+        serve_frames[i] = (fr, float(tl))
 
     path = viterbi(obs, args.switch_cost)
     runs, cur = [], 1
@@ -239,7 +239,8 @@ def main():
     out = []
     for i, p in enumerate(points):
         side = "far" if path[i] else "near"
-        fr = serve_frames.get(i)
+        got = serve_frames.get(i)
+        fr, fr_t = (None, None) if got is None else got
         server = None
         players = []
         if fr is not None:
@@ -253,6 +254,7 @@ def main():
         out.append({
             "point": p["point"], "start": p["start"], "end": p["end"],
             "strikes": p["strikes"], "serve_side": side,
+            "serve_frame_t": fr_t,
             "raw_vote": None if np.isnan(obs[i]) else round(float(obs[i]), 3),
             "smoothed_agrees_raw": (None if np.isnan(obs[i])
                                     else bool((obs[i] > 0.5) == bool(path[i]))),

@@ -218,8 +218,14 @@ def main():
                 live = p["start"] - 0.05 <= now <= p["end"] + 0.05
                 side_c = FAR_C if p["serve_side"] == "far" else NEAR_C
 
-                # boxes: players at the serve, server emphasised (pre-serve only)
-                if now <= p["start"] + 0.4:
+                # Boxes are the positions from ONE sampled frame, so they are only
+                # true at that frame's timestamp. Drawn across the whole pre-serve
+                # window they float next to the players and read as a bad
+                # detection when nothing is wrong.
+                ft = p.get("serve_frame_t")
+                show_boxes = (abs(now - ft) < 0.25 if ft is not None
+                              else now <= p["start"] + 0.4)
+                if show_boxes:
                     for q in p["players_at_serve"]:
                         x1, y1, x2, y2 = [int(v * scale) for v in q["box"]]
                         cv2.rectangle(canvas, (x1, y1), (x2, y2), (170, 170, 170), 1)
