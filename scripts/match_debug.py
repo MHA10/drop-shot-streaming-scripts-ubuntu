@@ -129,7 +129,7 @@ def draw_radar(canvas, x0, y0, w, h, v_net, players, server, side):
 
 def draw_strike_strip(canvas, x0, y0, w, h, p, now):
     """Ticks at each detected strike; the playhead sweeps across."""
-    t0, t1 = p["start"], p["end"]
+    t0, t1 = p.get("rally_start_disp", p["start"]), p["end"]
     span = max(0.5, t1 - t0)
     cv2.rectangle(canvas, (x0, y0), (x0 + w, y0 + h), (60, 52, 46), -1)
     cv2.rectangle(canvas, (x0, y0), (x0 + w, y0 + h), DIM, 1)
@@ -181,7 +181,13 @@ def main():
     v_net = sv["court"]["v_net"]
     pts = sv["points"]
     for p in pts:
-        p["strike_times"] = pj[p["point"]]["strike_times"]
+        src = pj[p["point"]]
+        p["strike_times"] = src["strike_times"]
+        # Refined files carry rally_start (first strike of the RALLY, after any
+        # serve attempts); plain point files do not.
+        p["rally_start_disp"] = src.get("rally_start", p["start"])
+        p["serve_attempts"] = src.get("serve_attempts")
+        p["refine_flags"] = src.get("flags", [])
 
     sel = [p for p in pts if (not args.only_overridden or p["smoothed_agrees_raw"] is False)]
     if args.limit:
@@ -237,13 +243,26 @@ def main():
                 # banner
                 cv2.rectangle(canvas, (0, 0), (VW, 34), (0, 0, 0), -1)
                 text(canvas, f"POINT {p['point']}/{len(pts)}", 12, 24, 0.66, FG, 2)
-                text(canvas, f"t={now:7.2f}s   {p['strikes']} strikes   "
-                             f"{p['end']-p['start']:.1f}s", 210, 24, 0.5, DIM)
+                # Running count, not just the total. A bare total printed from the
+                # first frame reads as "4 strikes have happened", when at that
+                # moment the point has not even started.
+                # Half-frame tolerance: `now` is reconstructed from a frame index,
+                # so a strike timestamped exactly on a frame lands a few
+                # microseconds ahead of it and the count reads one low precisely
+                # when its tick is flashing.
+                done = sum(1 for stt in p["strike_times"] if stt <= now + 0.5 / fps)
+                text(canvas, f"t={now:7.2f}s   strike {done}/{p['strikes']}   "
+                             f"rally {p['end']-p['rally_start_disp']:.1f}s",
+                     210, 24, 0.5, DIM)
                 text(canvas, f"SERVE: {p['serve_side'].upper()} END", VW - 330, 24, 0.62,
                      side_c, 2)
                 if live:
                     cv2.circle(canvas, (VW - 22, 17), 8, (90, 255, 120), -1)
                     text(canvas, "RALLY", VW - 100, 24, 0.5, (90, 255, 120))
+                elif now < p["start"]:
+                    text(canvas, "PRE-SERVE", VW - 130, 24, 0.5, (120, 190, 255))
+                else:
+                    text(canvas, "POINT OVER", VW - 140, 24, 0.5, DIM)
 
                 # panel
                 py = VH + 14
@@ -265,6 +284,13 @@ def main():
                              "   |   listen: each tick should land on a crack you hear",
                      14, py + 58, 0.42, DIM)
 
+                if p.get("serve_attempts") and p["serve_attempts"] > 1:
+                    text(canvas, f"{p['serve_attempts']} serve attempts absorbed "
+                                 f"(fault or pre-serve bounce)", 14, py + 78, 0.42,
+                         (120, 190, 255))
+                if p.get("refine_flags"):
+                    text(canvas, "flags: " + ",".join(p["refine_flags"]),
+                         660, py + 8, 0.44, WARN)
                 draw_strike_strip(canvas, 14, VH + 96, 620, 34, p, now)
                 draw_radar(canvas, VW - 210, VH + 20, 150, 140, v_net,
                            p["players_at_serve"], p["server"], p["serve_side"])
