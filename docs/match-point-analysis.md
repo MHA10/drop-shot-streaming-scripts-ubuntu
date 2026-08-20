@@ -287,6 +287,39 @@ corrected it.
 
 ---
 
+## Last contact: three routes measured, all failed
+
+Attributing the final strike to an end (let alone a player) does **not** work
+from audio, and the earlier claim that strike parity would make it easy was
+wrong. Recorded so it is not retried blind:
+
+| Route | Result |
+|---|---|
+| Pure parity (odd/even from the serve) | **0.498** vs loudness — chance |
+| Loudness, serve strikes | 64.7%; near/far median 0.606 vs 0.408 (1.48x) |
+| Loudness, rally strikes | confounded — see below |
+| Naive ball detection (colour + motion) | median **9** candidates per instant, max 57 |
+
+**Why parity fails:** far-end strikes are frequently too quiet to detect, so the
+alternation chain has missing links and everything after a gap flips to the
+wrong side.
+
+**Why loudness fails in-rally but works on serves:** every serve is the same
+stroke, so distance is the only variable left. Inside a rally it is not — the
+within-rally energy spread is **0.593** log-units against a near/far separation
+of **0.296**, so shot power outweighs distance 2:1. A smash and a defensive lob
+differ by more than the width of the court.
+
+`scripts/match_contacts.py` exists and carries the calibration and diagnostics,
+but its `last_contact_*` fields are flagged `unvalidated` and should not be
+quoted. With the serve anchored it reduces to strict alternation (rate 0.99);
+unanchored, it recovers the geometric serve end on only 49% of points.
+
+**Ball tracking is the single blocker for everything left** — last-contact
+player, stop-reason, and therefore who scored. A colour gate is not enough; this
+needs trajectory-based association across frames (a small ball moving fast on a
+fixed camera is the classic TrackNet-style problem).
+
 ## What this does NOT do yet
 
 | Field | State |
@@ -295,7 +328,7 @@ corrected it.
 | Strike count per point | done (audible strikes — a floor, not a total) |
 | Which **end** served | done, 93% geometry agreement |
 | Which **player** served | done — 0.941 rotation consistency |
-| Who made the last contact | timestamp yes; player now reachable via strike parity |
+| Who made the last contact | timestamp only — see below, three routes measured and failed |
 | Why the point stopped | not started |
 | Who scored | needs stop-reason first |
 
