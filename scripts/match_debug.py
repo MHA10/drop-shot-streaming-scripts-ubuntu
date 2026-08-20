@@ -166,6 +166,10 @@ def main():
                          "ticks are worthless without sound). Same timeline as --input.")
     ap.add_argument("--serves", required=True, help="JSON from match_serves.py")
     ap.add_argument("--points", required=True, help="JSON from match_points.py")
+    ap.add_argument("--players", default="", help="JSON from match_players.py")
+    ap.add_argument("--labels", default="",
+                    help="human names for the identities, e.g. "
+                         "'P1=WHITE,P2=GREEN,P3=NUM 10,P4=ORANGE SHORTS'")
     ap.add_argument("--output", required=True)
     ap.add_argument("--pre", type=float, default=3.0)
     ap.add_argument("--post", type=float, default=1.5)
@@ -188,6 +192,23 @@ def main():
         p["rally_start_disp"] = src.get("rally_start", p["start"])
         p["serve_attempts"] = src.get("serve_attempts")
         p["refine_flags"] = src.get("flags", [])
+
+    lab = {}
+    for part in filter(None, args.labels.split(",")):
+        k, _, v = part.partition("=")
+        lab[k.strip()] = v.strip()
+    srv_by_point, game_by_point, teams = {}, {}, None
+    if args.players:
+        pl = json.load(open(args.players))
+        teams = pl.get("teams")
+        for q in pl["points"]:
+            srv_by_point[q["point"]] = q["server_player"]
+        for gi, g in enumerate(pl.get("games", []), 1):
+            for pn in g["points"]:
+                game_by_point[pn] = (gi, g["server"], g["agreement"])
+    for p in pts:
+        p["server_player"] = srv_by_point.get(p["point"])
+        p["game_info"] = game_by_point.get(p["point"])
 
     sel = [p for p in pts if (not args.only_overridden or p["smoothed_agrees_raw"] is False)]
     if args.limit:
@@ -238,7 +259,9 @@ def main():
                     if p["server"]:
                         x1, y1, x2, y2 = [int(v * scale) for v in p["server"]["box"]]
                         cv2.rectangle(canvas, (x1, y1), (x2, y2), side_c, 3)
-                        text(canvas, "SERVER", x1, max(14, y1 - 8), 0.6, side_c, 2)
+                        who = p.get("server_player")
+                        cap = "SERVER" if not who else f"SERVER {lab.get(who, who)}"
+                        text(canvas, cap, x1, max(14, y1 - 8), 0.6, side_c, 2)
 
                 # banner
                 cv2.rectangle(canvas, (0, 0), (VW, 34), (0, 0, 0), -1)
@@ -254,8 +277,11 @@ def main():
                 text(canvas, f"t={now:7.2f}s   strike {done}/{p['strikes']}   "
                              f"rally {p['end']-p['rally_start_disp']:.1f}s",
                      210, 24, 0.5, DIM)
-                text(canvas, f"SERVE: {p['serve_side'].upper()} END", VW - 330, 24, 0.62,
-                     side_c, 2)
+                who = p.get("server_player")
+                cap = f"SERVE: {p['serve_side'].upper()} END"
+                if who:
+                    cap += f"  -  {lab.get(who, who)}"
+                text(canvas, cap, VW - 560, 24, 0.62, side_c, 2)
                 if live:
                     cv2.circle(canvas, (VW - 22, 17), 8, (90, 255, 120), -1)
                     text(canvas, "RALLY", VW - 100, 24, 0.5, (90, 255, 120))
@@ -291,6 +317,16 @@ def main():
                 if p.get("refine_flags"):
                     text(canvas, "flags: " + ",".join(p["refine_flags"]),
                          660, py + 8, 0.44, WARN)
+                gi = p.get("game_info")
+                if gi:
+                    g_no, g_srv, g_agr = gi
+                    text(canvas, f"game {g_no}: server {lab.get(g_srv, g_srv)} "
+                                 f"(agreement {g_agr:.2f} over the game)",
+                         660, py + 34, 0.46, (140, 220, 140) if g_agr >= 0.8 else WARN)
+                if teams:
+                    text(canvas, "teams  " + "  vs  ".join(
+                        "+".join(lab.get(x, x) for x in t) for t in teams),
+                        660, py + 58, 0.42, DIM)
                 draw_strike_strip(canvas, 14, VH + 96, 620, 34, p, now)
                 draw_radar(canvas, VW - 210, VH + 20, 150, 140, v_net,
                            p["players_at_serve"], p["server"], p["serve_side"])

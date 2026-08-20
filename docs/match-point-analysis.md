@@ -37,10 +37,16 @@ tools/reels/.venv-track/bin/python scripts/match_refine.py \
 tools/reels/.venv-track/bin/python scripts/match_serves.py \
   --input $S/court.mp4 --points refined.json --output serves.json --debug
 
+# 2b. name the four players and say WHICH one served                   (~30s)
+tools/reels/.venv-track/bin/python scripts/match_players.py \
+  --input $S/court.mp4 --serves serves.json --output players.json \
+  --montage players.png --debug
+
 # 3. a review reel you can actually watch                            (~3min)
 tools/reels/.venv-track/bin/python scripts/match_debug.py \
   --input $S/court.mp4 --audio-from $S/full.mp4 \
-  --serves serves.json --points refined.json \
+  --serves serves.json --points refined.json --players players.json \
+  --labels "P1=WHITE,P2=GREEN,P3=NUM-10,P4=ORANGE-SHORTS" \
   --output review.mp4 --debug
 ```
 
@@ -185,6 +191,74 @@ wrong — don't conclude the match was unusual.
 by *different* teams, because the teams swapped ends between them. Do not
 difference the runs to get who won a game.
 
+## Stage 2b — which PLAYER served
+
+Identity by kit, from the player's own pixels, validated against the rulebook.
+
+**Three descriptors were built; the first two failed.** Recording them so nobody
+rebuilds them:
+
+| Attempt | Result |
+|---|---|
+| Mean BGR over the torso box | 41% of four-player frames split into four clusters |
+| Shirt/shorts mean hue-sat-val, box-masked | clusters swapped at every changeover |
+| **Segmentation mask + hue histograms + kit cues** | **works** |
+
+The killer detail: a standing player is *thin*, so the bounding box is mostly
+blue court. Averaged, that drags the mean hue toward blue and swamps the kit —
+far-end shirt hue read 36.5 against near-end 108.6 for the same four kits.
+Segmentation masks fix it by using only the player's pixels. Then histograms
+rather than means, because a region contains kit *and* skin *and* shadow, so the
+mean of orange shorts plus bare legs is not orange.
+
+Even on masks, histograms alone confused the two light shirts with each other
+and the two dark shirts with each other. Four explicit kit cues — orange/red
+fraction, near-black fraction, green fraction, white/grey fraction — weighted
+3x above the histograms, separate them.
+
+Assignment is **bijective per frame**: never "which player is this?", always
+"what is the best way to hand out all four names in this instant?". Free k-means
+has no idea a frame holds one of each and will happily use one name twice.
+
+### How it is validated — the rulebook, not a guess
+
+Teams alternate serve every game, and within a team the two players alternate
+their service games. So the server sequence must be `X1, Y1, X2, Y2, X1, …`.
+Nothing in the identity model knows that, which makes it a real test:
+
+| | |
+|---|---|
+| Serve-rotation consistency | **0.941** (16 of 17 games) |
+| Per set | 1.0, 1.0, 0.75, 1.0, 1.0 |
+| Team pairing from court sides | `{P1,P3}` vs `{P2,P4}` |
+| Team pairing from serve rotation | `{P1,P3}` vs `{P2,P4}` — **same** |
+| Side consistency | 0.98 |
+| Mean within-game server agreement | 0.94 |
+
+Two independent routes to the same team pairing, and 16/17 games obeying a rule
+the model was never told, is the strongest evidence available without hand
+labels.
+
+Score rotation **per set**, not across the match: teams may pick their serve
+order afresh at a new set, and scoring globally reported 0.588 while set 1 was a
+flawless 7-game alternation.
+
+### The identities on the reference match
+
+| | Kit | Partner |
+|---|---|---|
+| P1 | white shirt, dark shorts | P3 |
+| P2 | dark green shirt | P4 |
+| P3 | black "10" jersey | P1 |
+| P4 | grey shirt, **orange shorts** | P2 |
+
+`P1..P4` are arbitrary labels — pass `--labels` to `match_debug.py` to show
+something human. **Quote `games[].server`, not the per-point name**: a game pools
+~6 points and the rules fix the server within it.
+
+Caveat: this keys on clothing. A kit change mid-match swaps an identity, and
+`team_side_consistency` is the number that drops when that happens.
+
 ## Stage 3 — the review reel
 
 Every detected point back to back, dead time cut, with the machine's reading
@@ -220,8 +294,8 @@ corrected it.
 | When each point started/ended | done; exact count ±15 (see Stage 1b) |
 | Strike count per point | done (audible strikes — a floor, not a total) |
 | Which **end** served | done, 93% geometry agreement |
-| Which **player** served | **blocked on identity** |
-| Who made the last contact | timestamp yes, player no — same blocker |
+| Which **player** served | done — 0.941 rotation consistency |
+| Who made the last contact | timestamp yes; player now reachable via strike parity |
 | Why the point stopped | not started |
 | Who scored | needs stop-reason first |
 
