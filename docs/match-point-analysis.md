@@ -315,6 +315,29 @@ but its `last_contact_*` fields are flagged `unvalidated` and should not be
 quoted. With the serve anchored it reduces to strict alternation (rate 0.99);
 unanchored, it recovers the geometric serve end on only 49% of points.
 
+### A fourth route: per-player swing motion — half the problem solved
+
+Measuring how much each player's own pixels change in the ~100 ms around a
+strike (inside their dilated segmentation mask) is the first thing that carries
+real information:
+
+| Question | Accuracy | Chance |
+|---|---|---|
+| Given the correct end, WHICH of its two players swung | **0.775** | 0.5 |
+| Which END the strike came from (unanchored) | 0.49 | 0.5 |
+
+So the problem splits cleanly in two, and exactly one half is solved. `scripts/
+match_lastshot.py` picks the right player out of a pair reliably enough to be
+useful; it cannot tell you which pair to look at.
+
+Note the trap: end agreement measured 0.68 on the first 25 points and 0.49 over
+all 102. The small sample lied — worth remembering before trusting any of these
+numbers off a short run.
+
+Feature variants swept (band = full vs upper body, statistic = mean vs 99th
+percentile, mask dilation 15 vs 25) all land in 0.60-0.68 on a 25-point sample;
+none is clearly better, so the defaults are the simplest ones.
+
 **Ball tracking is the single blocker for everything left** — last-contact
 player, stop-reason, and therefore who scored. A colour gate is not enough; this
 needs trajectory-based association across frames (a small ball moving fast on a
@@ -328,7 +351,7 @@ fixed camera is the classic TrackNet-style problem).
 | Strike count per point | done (audible strikes — a floor, not a total) |
 | Which **end** served | done, 93% geometry agreement |
 | Which **player** served | done — 0.941 rotation consistency |
-| Who made the last contact | timestamp only — see below, three routes measured and failed |
+| Who made the last contact | timestamp yes; player-within-a-pair 0.775; which pair — unsolved |
 | Why the point stopped | not started |
 | Who scored | needs stop-reason first |
 
