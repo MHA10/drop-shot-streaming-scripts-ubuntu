@@ -60,6 +60,12 @@ by its neighbours. That correction is what the Viterbi pass does.
   the recovered points-per-game. That number is the diagnostic: padel games
   average ~6.5 points, so a run structure implying 15 or 2 points per game
   means the cost is wrong, not that the match was unusual.
+- Do NOT run this over a file that holds MORE THAN ONE match. The Viterbi
+  smoothing assumes one continuous game sequence, so it smooths straight across
+  a match boundary where the two-game rule does not continue. A league-session
+  recording tested this: runs came out as [41,36,13,8,4,33,41] points implying
+  12.57 points per game, and smoothing overrode the raw geometry on 27% of
+  points against 1% on a single match. Segment the file into matches first.
 """
 
 import argparse
@@ -288,7 +294,8 @@ def main():
             f"match_serves: runs={runs}\n"
             f"match_serves: implied {d['implied_games']} games, "
             f"{d['implied_points_per_game']} points/game "
-            f"(padel averages ~6.5 - a wild number here means switch-cost is wrong)\n"
+            f"(padel averages ~6.5; a wild number means EITHER switch-cost is wrong "
+            f"OR the file is not a single match - see DO NOT)\n"
             f"match_serves: smoothing overrode raw geometry on "
             f"{100*(1-d['raw_agreement']):.0f}% of points\n")
     return 0

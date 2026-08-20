@@ -390,13 +390,58 @@ labelling far-end serves from stills is itself unreliable, because the players
 are ~40 px tall; that is what produced the one error. A larger pass should use
 short clips rather than stills for far-end serves.
 
+## Generalisation test: a second file (Ramadan League session, 86 min)
+
+Run end to end on a second Padel Central Court 1 stream. Same venue and camera,
+so this tested new footage and new players, **not** new geometry.
+
+**What transferred**
+
+| | |
+|---|---|
+| Court calibration | net y=232, v_net=0.504 (vs 232 / 0.495) — identical |
+| Strike detection | held; not fooled by music (intra-point spacing CV 0.42 vs 0.43) |
+| Point segmentation | plausible — median 6 strikes, 5.5s per point |
+
+**What broke, and why it is not a threshold**
+
+The file is **not one match**. Kit colours change across it — green-ish at
+3-16 min, orange/red at 23-50 min, green/teal at 56-83 min — because a league
+session is several matches with different players back to back.
+
+That invalidates by construction: identity (four fixed players), serve-side
+Viterbi (one continuous game sequence), and the points-per-game diagnostic that
+validates serve side in the first place.
+
+The diagnostics caught it rather than quietly producing numbers:
+
+| | Match 1 (final) | Match 2 (session) |
+|---|---|---|
+| Serve-end runs | [15,11,16,10,13,13,9,11,4] | **[41,36,13,8,4,33,41]** |
+| Implied points/game | 6.72 | **12.57** |
+| Smoothing overrode geometry | 1% | **27%** |
+| Refine flags (fast restart / orphan) | 4 / 14 of 102 | **40 / 57 of 176** |
+
+Corroborating: no gap in 86 minutes exceeds **40s**, so warmup was never dropped
+and no set breaks were found; and detected players per frame run **4-9** rather
+than 4, because this venue's courtside seating falls inside the court polygon.
+
+**The missing piece is a stage, not a tuning pass:** session segmentation, to
+split a recording into individual matches before identity or serve smoothing
+runs. Kit-colour change points and player-count transitions are both present in
+the data as signals.
+
+Note what this reorders: the risk was expected to be venue-specific thresholds
+(court HSV, music gate, near/far calibration) and those were fine. The actual
+risk was the one-match assumption, which no amount of retuning addresses.
+
 ## What this does NOT do yet
 
 | Field | State |
 |---|---|
 | When each point started/ended | done; exact count ±15 (see Stage 1b) |
 | Strike count per point | done (audible strikes — a floor, not a total) |
-| Which **end** served | done, 93% geometry agreement |
+| Which **end** served | done on a single match; needs session segmentation for multi-match files |
 | Which **player** served | done — 0.941 rotation consistency |
 | Who made the last contact | timestamp yes; player-within-a-pair 0.775; which pair — unsolved |
 | Why the point stopped | not started |
