@@ -25,16 +25,22 @@ ffmpeg -y -i $S/full.mp4 -vf crop=1920:862:0:108 \
 
 # 1. points, from the sound of the ball                              (~5s)
 tools/reels/.venv-track/bin/python scripts/match_points.py \
-  --input $S/full.mp4 --output points.json --csv points.csv --debug
+  --input $S/full.mp4 --output points.json --csv points.csv \
+  --emit-bursts --debug
+
+# 1b. refine those points with video: un-split rallies, absorb faults  (~50s)
+tools/reels/.venv-track/bin/python scripts/match_refine.py \
+  --input $S/court.mp4 --bursts points.json --output refined.json --debug
+#     (match_points.py must have been run with --emit-bursts)
 
 # 2. which END served each point, from player geometry                (~2min)
 tools/reels/.venv-track/bin/python scripts/match_serves.py \
-  --input $S/court.mp4 --points points.json --output serves.json --debug
+  --input $S/court.mp4 --points refined.json --output serves.json --debug
 
 # 3. a review reel you can actually watch                            (~3min)
 tools/reels/.venv-track/bin/python scripts/match_debug.py \
   --input $S/court.mp4 --audio-from $S/full.mp4 \
-  --serves serves.json --points points.json \
+  --serves serves.json --points refined.json \
   --output review.mp4 --debug
 ```
 
@@ -74,6 +80,75 @@ Two traps already hit and fixed, so nobody re-derives them:
 - One strike makes several onsets — the hit, its reverb off the glass, and the
   floor bounce right after. `--merge` collapses them, or every rally looks like a
   net exchange.
+
+## Stage 1b — refine the points with video
+
+Audio mis-counts points two ways, and both are settled by looking at the court:
+
+1. **A long lob puts 3s of silence mid-rally**, so one point is counted as two.
+2. **A serve fault is a burst of its own** — serve, then nothing — so a point
+   that took two serves is counted as two points.
+
+At a real point start somebody is deep in a back corner, partner up at the net,
+opponents waiting back. Mid-rally nobody is near that shape. Scoring that
+formation on a single frame just before each burst separates them:
+
+| | Formation score |
+|---|---|
+| Point starts | p10 = **0.639** |
+| Mid-rally | p90 = **0.610** |
+
+The default `--serve-threshold 0.625` sits in that measured gap. Each burst then
+attaches in exactly one direction:
+
+| Burst | Role | Attaches |
+|---|---|---|
+| serve-shaped, ≥3 strikes | rally start | opens a point |
+| serve-shaped, ≤2 strikes | serve attempt (fault *or* pre-serve bounce) | **forward**, to the next rally |
+| not serve-shaped | continuation | **backward**, if within `--max-continue` |
+
+Direction matters. An earlier version pushed a too-soon serve-shaped burst
+*backwards* as a continuation; bursts then chained and produced a 40-second and
+a 52-second "point". A serve formation 3s after a rally ended is the start of the
+next point, never the middle of the last one.
+
+### Two features that failed first — don't rebuild them
+
+Both were measured and both are dead:
+
+| Feature | Rally | 1-strike burst | Verdict |
+|---|---|---|---|
+| Total player path length / frame | 0.046 | 0.051 | no separation |
+| Post-serve displacement, non-servers | 0.075 | 0.105 | separates **backwards** |
+
+Between-point walking is as much motion as a rally, and a one-strike burst is
+often mid-walkabout while a short rally has players already set. The formation
+only exists in the *instant* before contact, which is why a single frame beats
+any window average.
+
+The service-box rule (padel alternates boxes between points, so a repeated box
+implies a fault) is also unused: measured alternation was 67% against an expected
+~77%, so it carries ~10 points of noise from the server-position estimate.
+
+### What it changed on the reference match
+
+| | Audio only | + video refine |
+|---|---|---|
+| Points | 121 | **102** |
+| Longest rally | — | 18.3s (was 51.9s pre-fix) |
+| Points with usable serve geometry | 118/121 | **102/102** |
+| Smoothing overrode geometry | 7% | **1%** |
+
+**The count is not settled.** 102 and 121 have errors in opposite directions:
+audio-only over-splits rallies, refine drops 72 stray bursts of which some were
+probably real short points. An independent estimate — 18 games (time-anchored
+from serve runs) × ~6.5 points/game — suggests **~117**, i.e. the truth is
+between the two and closer to the audio figure. The improvement in geometry
+coherence is partly circular, since refined points are *defined* as bursts with a
+serve formation.
+
+Settling it needs a hand-labelled sample. Watch `--only-overridden` plus the
+`fast_restart` and `orphan_attempt` flags first — those are where it is weakest.
 
 ## Stage 2 — which end served
 
@@ -142,7 +217,7 @@ corrected it.
 
 | Field | State |
 |---|---|
-| When each point started/ended | done |
+| When each point started/ended | done; exact count ±15 (see Stage 1b) |
 | Strike count per point | done (audible strikes — a floor, not a total) |
 | Which **end** served | done, 93% geometry agreement |
 | Which **player** served | **blocked on identity** |

@@ -216,6 +216,9 @@ def main():
     ap.add_argument("--break-gap", type=float, default=45.0,
                     help="quiet gap treated as a set break / changeover")
     ap.add_argument("--keep-warmup", action="store_true")
+    ap.add_argument("--emit-bursts", action="store_true",
+                    help="also emit EVERY strike burst, including the sub-threshold "
+                         "ones, for match_refine.py to classify with video")
     ap.add_argument("--debug", action="store_true")
     args = ap.parse_args()
 
@@ -234,11 +237,22 @@ def main():
         p["duration"] = round(p["end"] - p["start"], 2)
 
     play = sum(p["end"] - p["start"] for p in points)
+    all_bursts = []
+    if args.emit_bursts:
+        # Every burst, no min-strikes filter. A one-strike burst is a serve fault
+        # or a pre-serve bounce, and only video can tell those apart -- so the
+        # decision is deferred rather than made here by a threshold.
+        raw = np.split(strikes, np.where(np.diff(strikes) > args.point_gap)[0] + 1)
+        all_bursts = [{"start": float(b[0]), "end": float(b[-1]),
+                       "strikes": int(len(b)),
+                       "strike_times": [round(float(x), 3) for x in b]}
+                      for b in raw if len(b) >= 1]
     payload = {
         "input": args.input,
         "duration": round(dur, 1),
         "points": points,
         "warmup_rallies": len(warm),
+        "bursts": all_bursts,
         "breaks": [{"from": round(a, 1), "to": round(b, 1), "seconds": round(b - a, 1)}
                    for a, b in breaks],
         "totals": {
