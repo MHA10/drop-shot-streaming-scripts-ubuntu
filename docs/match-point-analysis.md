@@ -426,10 +426,43 @@ Corroborating: no gap in 86 minutes exceeds **40s**, so warmup was never dropped
 and no set breaks were found; and detected players per frame run **4-9** rather
 than 4, because this venue's courtside seating falls inside the court polygon.
 
-**The missing piece is a stage, not a tuning pass:** session segmentation, to
-split a recording into individual matches before identity or serve smoothing
-runs. Kit-colour change points and player-count transitions are both present in
-the data as signals.
+**Session segmentation was built** (`scripts/match_sessions.py`) and it works —
+it split the 86-minute recording into 3 matches (40 / 79 / 53 points) from
+kit-signature change points.
+
+**It did not fix serve detection**, and chasing that down found the real cause.
+
+### The real generalisation failure: club players do not take the net
+
+The serve-side model encodes a PROFESSIONAL formation — server deep in a corner,
+**partner up at the net**, both receivers back. Two of its three geometric votes
+depend on that net player.
+
+At club level both partners stay back. Measured, distance from the net of the
+closest player at serve:
+
+| | finals | session seg1 | seg2 | seg3 |
+|---|---|---|---|---|
+| Net-most player \|v - v_net\| | **0.144** | 0.241 | 0.214 | 0.249 |
+| Smoothing overrode geometry | **1%** | 20% | 30% | 24% |
+| Implied points/game | 6.72 | 20.0 | 13.2 | 13.3 |
+
+Confirmed by eye on sampled serve frames: nobody is at the net on any of them.
+So the "partner at net" vote contributes nothing, the "front-to-back spread"
+vote becomes meaningless because both players on both sides are deep, and only
+the weak "deepest player in a corner" vote is left.
+
+Note what this rules out. It is not multi-match (segmentation fixed that and the
+numbers did not move), not singles (2-far/2-near on 165 of 172 points), and not
+venue thresholds (calibration and strike detection transferred untouched). It is
+a **tactical assumption baked into the geometry**.
+
+The fix is not tuning: the end detector needs a cue that does not depend on
+where the partner chooses to stand. The obvious candidate is already measured —
+per-player swing motion at the serve instant (see match_lastshot.py, 0.775 at
+picking the right player of a pair). Whether it can pick the END at club level
+is the next thing to test, and it needs hand-labelled serve ends on club footage
+because the pipeline's own labels are what is in doubt.
 
 Note what this reorders: the risk was expected to be venue-specific thresholds
 (court HSV, music gate, near/far calibration) and those were fine. The actual
