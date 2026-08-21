@@ -256,8 +256,43 @@ flawless 7-game alternation.
 something human. **Quote `games[].server`, not the per-point name**: a game pools
 ~6 points and the rules fix the server within it.
 
-Caveat: this keys on clothing. A kit change mid-match swaps an identity, and
-`team_side_consistency` is the number that drops when that happens.
+### What if all four players wear the SAME kit?
+
+Identity breaks completely — and, importantly, **it does not fail loudly unless
+you look at the right number**. Measured by ablating the kit descriptor:
+
+| Descriptor | side-consistency | serve rotation | **end-swap** | verdict |
+|---|---|---|---|---|
+| Full | 0.979 | 0.941 | **0.454** | OK |
+| No kit cues | 0.773 | 0.785 | **0.113** | broken |
+| Identical kits (all colour removed) | **1.00** | 0.706 | **0.000** | broken |
+
+With no usable descriptor the bijective assignment degenerates to labelling by
+POSITION in the detection list, so P1/P2 are always the far pair and P3/P4
+always the near pair. Side-consistency then reads a **perfect 1.00 for having no
+identity at all** — it is measuring itself. Serve rotation reads 0.71, also
+inflated, because position-derived labels inherit the structure of the serve
+pattern.
+
+The honest check is `identity_end_swap`: players change ends at every
+changeover, so a real identity is seen at BOTH ends (~0.45 of appearances at its
+minority end). Position-derived labels never swap — 0.00. It is the only one of
+the three that separates all cases.
+
+Also measured: removing the hue histograms entirely changes nothing (0.979 /
+0.941, identical to full). The four explicit kit cues do all the work; the
+histograms are dead weight.
+
+**What still works with identical kits:** point segmentation, serve END, and
+TEAMS — teammates always share a side, so the pair on a half is a team without
+any appearance model. What is lost is naming a person and following them through
+a changeover.
+
+**Appearance-free routes, if it is ever needed:** physical attributes (height at
+known court depth, build, hair, shoes, caps), positional continuity across the
+gap between points (players walk, they do not teleport), or propagating one
+anchored observation through the rigid serve rotation. Jersey numbers are out —
+the "10" was legible only on a large near-side crop; far players are ~40 px.
 
 ## Stage 3 — the review reel
 

@@ -47,10 +47,15 @@ easier question and cannot produce two of the same player.
   crop is not motion-blurred and the box is not half a lunging limb.
 
 ── DO NOT ──
-- Do NOT assume identity survives a kit change. This keys on clothing; if
-  someone changes shirt between sets, their identity swaps and the labels after
-  that point are wrong. Check `team_side_consistency` in the output — it drops
-  sharply when identity has broken.
+- Do NOT use `team_side_consistency` to decide whether identity worked. It
+  cannot detect the main failure. When the descriptor carries no information the
+  assignment degenerates to labelling by position, which makes side-consistency
+  read 1.00 — a perfect score for having no identity at all. Measured by
+  ablation. Use `identity_end_swap` instead: it is the fraction of appearances
+  at a player's minority end, ~0.45 when identity is real and 0.00 when the
+  labels are just position.
+- Do NOT assume identity survives a kit change or a match where all four wear
+  the same kit. This keys on clothing. `identity_end_swap` is the canary.
 - Do NOT trust the per-point server name over the per-game one. A single point
   can be misassigned; a game pools ~6 points and the rules say the server is
   constant within it, so `games[].server` is the number to quote.
@@ -86,6 +91,9 @@ HUE_BINS, VAL_BINS = 12, 5
 # shorts, plain white, dark green, light shirt with ORANGE shorts), and orange
 # shorts in particular is the single most discriminative thing on the court.
 CUE_WEIGHT = 3.0
+
+
+ABLATE = ""
 
 
 def descriptor(img, mask):
@@ -129,6 +137,13 @@ def descriptor(img, mask):
             float(((H > 30) & (H < 90) & (S > 0.20)).mean()),       # green
             float(((V > 0.55) & (S < 0.35)).mean()),               # white/grey
         ], np.float32) * CUE_WEIGHT
+        if ABLATE in ("cues", "all"):
+            cues = cues * 0.0
+        if ABLATE in ("hue", "all"):
+            hh = hh * 0.0
+        if ABLATE == "all":
+            # Four identical kits: nothing but body/lighting noise is left.
+            vv = vv * 0.0
         feat.append(np.concatenate([hh, vv, cues]))
     return np.concatenate(feat).astype(np.float32)
 
@@ -251,6 +266,11 @@ def main():
     ap.add_argument("--input", required=True, help="letterbox-stripped match video")
     ap.add_argument("--serves", required=True, help="JSON from match_serves.py")
     ap.add_argument("--output", required=True)
+    ap.add_argument("--ablate", default="",
+                    help="drop part of the kit descriptor, to see what identity "
+                         "does when kits stop being distinguishable: "
+                         "'cues' (no explicit kit cues), 'hue' (no colour at all, "
+                         "value only) or 'all' (simulate four identical kits)")
     ap.add_argument("--seg-model", default="tools/reels/models/yolo11s-seg.pt",
                     help="segmentation weights; kit colour must come from the "
                          "player's own pixels, not the bounding box (a standing "
@@ -261,6 +281,11 @@ def main():
     ap.add_argument("--debug", action="store_true")
     args = ap.parse_args()
 
+    global ABLATE
+    ABLATE = args.ablate
+    if ABLATE:
+        sys.stderr.write(f"match_players: ABLATION '{ABLATE}' - simulating kits that "
+                         f"cannot be told apart\n")
     serves = json.load(open(args.serves))
     v_net = serves["court"]["v_net"]
     from ultralytics import YOLO
@@ -269,6 +294,24 @@ def main():
         sys.stderr.write(f"match_players: only {len(rows)} usable points; need more\n")
         return 4
     P, assign, cost = fit(rows)
+
+    # ── the real identity check: does each name appear at BOTH ends? ──
+    # Players swap ends at every changeover, so a genuine identity is seen at
+    # both. If the descriptor carries no information the bijective assignment
+    # degenerates to labelling by position in the detection list, which pins
+    # each name to one end forever. Measured by ablating the kit descriptor to
+    # zero: end-swap balance fell to 0.00 while team_side_consistency read 1.00
+    # and serve-rotation consistency read 0.71 -- both of those are inflated by
+    # position-derived labels and CANNOT detect this failure.
+    ends = {j: [0, 0] for j in range(4)}
+    for r, pm in zip(rows, assign):
+        for k in range(4):
+            ends[pm[k]][0 if r["players"][k]["v"] < v_net else 1] += 1
+    swap = []
+    for j in range(4):
+        tot = sum(ends[j])
+        swap.append(min(ends[j]) / tot if tot else 0.0)
+    end_swap = float(np.mean(swap))
 
     # ── teams: the pair sharing a half of the court ──
     pair_votes = Counter()
@@ -419,6 +462,8 @@ def main():
             "mean_game_agreement": round(float(np.mean([g["agreement"] for g in games])), 3)
             if games else 0.0,
             "serve_rotation_consistency": round(rot_best, 3),
+            "identity_end_swap": round(end_swap, 3),
+            "identity_ok": bool(end_swap >= 0.15),
             "distinct_servers": len(set(seq)),
         },
         "teams_from_serve_rotation": rot_pairing,
@@ -437,6 +482,9 @@ def main():
             f"match_players: {d['points_used']} points, assign cost {d['assign_cost']}\n"
             f"match_players: teams {payload['teams']}  "
             f"side-consistency {d['team_side_consistency']}\n"
+            f"match_players: identity end-swap {d['identity_end_swap']} "
+            f"({'OK' if d['identity_ok'] else 'BROKEN - labels are position, not '
+               'identity; kits are probably indistinguishable'})\n"
             f"match_players: {d['games_found']} games, mean server agreement "
             f"{d['mean_game_agreement']}\n"
             f"match_players: serve-rotation consistency {d['serve_rotation_consistency']} "
