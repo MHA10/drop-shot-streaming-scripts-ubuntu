@@ -196,8 +196,14 @@ def team_stats(mA, mB, span, fps, half):
     b = min(mA[4], mB[4], span[1])
     if b <= a:
         return None
-    XA, YA = mA[0][a:b + 1], mA[1][a:b + 1]
-    XB, YB = mB[0][a:b + 1], mB[1][a:b + 1]
+    XA, YA, sA = mA[0][a:b + 1], mA[1][a:b + 1], mA[2][a:b + 1]
+    XB, YB, sB = mB[0][a:b + 1], mB[1][a:b + 1], mB[2][a:b + 1]
+    # Only frames where BOTH partners were really detected. An interpolated
+    # off-frame position otherwise leaks a 5000 m separation into the percentile.
+    both = sA & sB
+    if both.sum() < 5:
+        both = np.ones(len(XA), bool)
+    XA, YA, XB, YB = XA[both], YA[both], XB[both], YB[both]
     sep = np.hypot(XA - XB, YA - YB)
     dt = 1.0 / fps
 
