@@ -2,7 +2,17 @@ import { Config } from "../../infrastructure/config/Config";
 
 export class HttpClient {
   private readonly config = Config.getInstance().get();
-  
+
+  // Base headers for DropShot backend calls, including the server-to-server
+  // auth key when configured. Sent only when STREAMING_API_KEY is set, so this
+  // stays backward-compatible with a backend that doesn't yet require it.
+  private backendHeaders(extra: Record<string, string> = {}): Record<string, string> {
+    const headers: Record<string, string> = { ...extra };
+    const key = this.config.server.streamingApiKey;
+    if (key) headers["x-streaming-api-key"] = key;
+    return headers;
+  }
+
   async goLiveYouTube(
     groundId: string,
     courtId: string,
@@ -20,9 +30,7 @@ export class HttpClient {
       try {
         const response = await fetch(url, {
           method: "GET",
-          headers: {
-            "Content-Type": "application/json",
-          },
+          headers: this.backendHeaders({ "Content-Type": "application/json" }),
         });
 
         // If we get a non-5xx response, return it (success or non-retryable error)
@@ -65,6 +73,41 @@ export class HttpClient {
     }
   }
 
+  /**
+   * Forward a court's current scoreboard state to the backend, which writes it
+   * to Supabase (the single source of truth the overlay already reads).
+   *
+   * ── WHY VIA THE BACKEND AND NOT SUPABASE DIRECTLY ──
+   * Writing Supabase from the box would need write credentials on every court
+   * machine. This reuses the x-streaming-api-key every box already has, and the
+   * backend validates the court actually belongs to this ground — a check the
+   * shared device key cannot make on its own.
+   *
+   * The state is ABSOLUTE, never a delta: mesh delivery is best-effort with no
+   * retry, so a dropped packet must be self-healing on the next update.
+   */
+  async postScoreboard(
+    groundId: string,
+    courtId: string,
+    body: {
+      mode?: string;
+      redScore: string;
+      blueScore: string;
+      redGames?: number;
+      blueGames?: number;
+    }
+  ): Promise<Response> {
+    const url = `${this.config.server.baseUrl}/api/v1/padel-grounds/${groundId}/courts/${courtId}/scoreboard`;
+    return fetch(url, {
+      method: "POST",
+      headers: this.backendHeaders({
+        accept: "application/json",
+        "Content-Type": "application/json",
+      }),
+      body: JSON.stringify(body),
+    });
+  }
+
   async sendHeartbeat(groundId: string): Promise<Response> {
     // POST request to send heartbeat
     const url = `${this.config.server.baseUrl}/api/v1/padel-grounds/heartbeat`;
@@ -72,10 +115,10 @@ export class HttpClient {
     try {
       const response = await fetch(url, {
         method: "POST",
-        headers: {
+        headers: this.backendHeaders({
           "accept": "application/json",
           "Content-Type": "application/json",
-        },
+        }),
         body: JSON.stringify({
           groundId: groundId
         }),
