@@ -1,3 +1,4 @@
+import * as path from "path";
 import { Stream } from "../../domain/entities/Stream";
 import { StreamId } from "../../domain/value-objects/StreamId";
 import { StreamUrl } from "../../domain/value-objects/StreamUrl";
@@ -7,6 +8,15 @@ import { Logger } from "../interfaces/Logger";
 import { HttpClient } from "../services/HttpClient";
 import { Config } from "../../infrastructure/config/Config";
 import { StreamState } from "../../domain/value-objects/StreamState";
+import { AdDownloaderService } from "../../infrastructure/services/AdDownloaderService";
+import {
+  AdRotator,
+  AdRotationRegistry,
+} from "../../infrastructure/services/AdRotator";
+import { HighlightSignalSource } from "../../domain/services/HighlightSignalSource";
+import { HighlightBufferManager } from "../../infrastructure/services/HighlightBufferManager";
+import { HighlightBufferRegistry } from "../../infrastructure/services/HighlightBufferRegistry";
+import { safeSegment } from "../../infrastructure/utils/paths";
 import { StopStreamUseCase } from "./StopStreamUseCase";
 import {
   ShouldStartStream,
@@ -23,7 +33,11 @@ export class StartStreamUseCase {
     private readonly streamRepository: StreamRepository,
     private readonly ffmpegService: FFmpegService,
     private readonly logger: Logger,
-    private readonly httpClient: HttpClient
+    private readonly httpClient: HttpClient,
+    private readonly adDownloader: AdDownloaderService,
+    private readonly adRotationRegistry: AdRotationRegistry,
+    private readonly highlightBufferRegistry: HighlightBufferRegistry,
+    private readonly highlightSignalSource?: HighlightSignalSource
   ) {}
 
   private async shouldStartNewStream(
@@ -242,6 +256,12 @@ export class StartStreamUseCase {
           this.logger.error("Stream can not be retried", {
             streamId: streamId.value,
           });
+          // No restart will follow, so tear down the rotator to avoid leaking
+          // its timers (which would keep overwriting slot files for a dead stream).
+          this.adRotationRegistry.stop(event.courtId);
+          // Same for the highlight buffer's retention sweep — stop it so it
+          // doesn't keep pruning a directory for a stream that won't restart.
+          this.highlightBufferRegistry.stop(event.courtId);
           return;
         }
 
@@ -253,6 +273,85 @@ export class StartStreamUseCase {
         await this.execute(request, stopUseCase);
       };
 
+      // Tear down any rotator left over from a previous run on this court now,
+      // before the (potentially slow) download, so the old rotator doesn't keep
+      // overwriting slot files during the download window.
+      this.adRotationRegistry.stop(request.courtId);
+      // Likewise stop any prior highlight buffer sweep for this court; a fresh
+      // one is started below once the new ffmpeg process is up.
+      this.highlightBufferRegistry.stop(request.courtId);
+
+      // Resolve the ad overlays before ffmpeg starts so the slot inputs exist.
+      // Two paths, both fail-soft (a missing slot file simply adds no ad input):
+      //  - Animated pool (any video/gif): pre-compose one looping MP4 per slot;
+      //    rotation is baked into the looping video, so no live rotator is needed
+      //    and the main encoder never restarts.
+      //  - Still-only pool: keep the live file-swap rotator (cheap, reshuffles).
+      const ads = request.ads ?? [];
+      let adOverlayPaths: { left?: string | null; right?: string | null } = {};
+      let rotator: AdRotator | null = null;
+
+      if (this.adDownloader.hasAnimatedAds(ads)) {
+        const slotVideos = await this.adDownloader.buildSlotVideos(
+          ads,
+          request.courtId,
+          this.config.ads
+        );
+        adOverlayPaths = { left: slotVideos.left, right: slotVideos.right };
+      } else if (ads.length > 0) {
+        const adPool = await this.adDownloader.downloadPool(ads, request.courtId);
+        const slotPaths = this.adDownloader.getSlotPaths(request.courtId);
+        rotator = new AdRotator(
+          request.courtId,
+          adPool,
+          slotPaths.left,
+          slotPaths.right,
+          this.config.ads,
+          this.logger
+        );
+        rotator.prepare(); // writes initial slot file(s) — must precede ffmpeg start
+        adOverlayPaths = { left: slotPaths.left, right: slotPaths.right };
+      }
+
+      // Per-court highlight buffer directory. Resolving it here (rather than
+      // inside NodeFFmpegService) keeps the "is highlight capture on for
+      // this court" decision at the application layer, alongside the other
+      // per-request feature toggles (scorecard, ads). null/absent means "no
+      // buffer branch" — NodeFFmpegService generates the command exactly as
+      // it does today.
+      //
+      // Highlight buffer enablement is AUTOMATIC and per-box: it runs only when
+      // the ESP32 highlight hardware is actually attached to this machine
+      // (detected via its serial heartbeat), so no per-box env is needed.
+      // `highlight.enabled` is only a force-off kill switch (default true).
+      //
+      // courtId comes straight from the SSE payload (unvalidated), so sanitize
+      // it before using it as a path segment — same rule AdDownloaderService
+      // applies for its per-court dir — so it can't traverse out of the buffer
+      // root (e.g. a courtId of "../..") or contain path-hostile characters.
+      // Also require a non-blank configured bufferDir: an explicit
+      // HIGHLIGHT_BUFFER_DIR="" would otherwise resolve to the process CWD.
+      const highlightHardwarePresent =
+        this.highlightSignalSource?.isDevicePresent() ?? false;
+      const highlightBufferBase = this.config.highlight.bufferDir.trim();
+      const highlightBufferDir =
+        this.config.highlight.enabled &&
+        highlightHardwarePresent &&
+        highlightBufferBase
+          ? path.join(highlightBufferBase, safeSegment(request.courtId))
+          : null;
+
+      // Observability: make the per-stream buffer decision explicit in logs so
+      // staging can see whether the highlight buffer turned on for this court
+      // and, if not, exactly which gate blocked it (config vs hardware vs dir).
+      this.logger.info("Highlight buffer decision", {
+        courtId: request.courtId,
+        active: highlightBufferDir !== null,
+        enabledConfig: this.config.highlight.enabled,
+        hardwarePresent: highlightHardwarePresent,
+        bufferDir: highlightBufferDir,
+      });
+
       const ffmpegProcess = await this.ffmpegService.startStream(
         cameraUrl,
         request.streamKey,
@@ -262,8 +361,32 @@ export class StartStreamUseCase {
           event: request,
           onRetryStream,
         },
-        request.isScorecardActivated
+        request.isScorecardActivated,
+        adOverlayPaths,
+        highlightBufferDir
       );
+
+      // Register first so any exception after start() still has the rotator
+      // tracked for cleanup, then begin rotation now that ffmpeg is up. The
+      // animated path has no rotator (rotation is baked into the slot videos).
+      if (rotator) {
+        this.adRotationRegistry.set(request.courtId, rotator);
+        rotator.start();
+      }
+
+      // Start the highlight buffer's retention sweep now that ffmpeg is writing
+      // segments. Registered so stop/retry/shutdown reliably clear its timer.
+      if (highlightBufferDir) {
+        const bufferManager = new HighlightBufferManager(
+          request.courtId,
+          highlightBufferDir,
+          this.config.highlight.bufferSegmentSec,
+          this.config.highlight.bufferRetentionSec,
+          this.logger
+        );
+        this.highlightBufferRegistry.set(request.courtId, bufferManager);
+        bufferManager.start();
+      }
 
       // Update stream with process ID
       stream.start(ffmpegProcess.pid);

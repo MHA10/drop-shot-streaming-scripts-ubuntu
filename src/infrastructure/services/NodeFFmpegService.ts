@@ -7,13 +7,17 @@ import {
   FFmpegService,
   FFmpegCommand,
   FFmpegProcess,
+  AdOverlayPaths,
 } from "../../domain/services/FFmpegService";
 import { StreamUrl } from "../../domain/value-objects/StreamUrl";
 import { Logger } from "../../application/interfaces/Logger";
 import { StartStreamRequest } from "../../application/interfaces/StartStreamUseCase.types";
 import { Config } from "../config/Config";
+import { ensureDirSync } from "../utils/paths";
 
 export class NodeFFmpegService implements FFmpegService {
+  private static readonly VIDEO_EXTS = new Set(["mp4", "gif", "webm", "mov", "avi", "mkv"]);
+
   private readonly runningProcesses: Map<number, FFmpegProcess> = new Map();
   private readonly clientLogoPath: string;
   private readonly scoreOverlayDir: string;
@@ -45,14 +49,18 @@ export class NodeFFmpegService implements FFmpegService {
       event: StartStreamRequest;
       onRetryStream: (event: StartStreamRequest) => Promise<void>;
     },
-    isScorecardActivated?: boolean
+    isScorecardActivated?: boolean,
+    adPaths?: AdOverlayPaths,
+    highlightBufferDir?: string | null
   ): Promise<FFmpegProcess> {
     const command = this.buildStreamCommand(
       cameraUrl,
       streamKey,
       hasAudio,
       courtId,
-      isScorecardActivated
+      isScorecardActivated,
+      adPaths,
+      highlightBufferDir
     );
     this.logger.info("Command full form", command);
 
@@ -304,9 +312,11 @@ export class NodeFFmpegService implements FFmpegService {
     streamKey: string,
     hasAudio: boolean,
     courtId: string,
-    isScorecardActivated?: boolean
+    isScorecardActivated?: boolean,
+    adPaths?: AdOverlayPaths,
+    highlightBufferDir?: string | null
   ): FFmpegCommand {
-    const rtmpUrl = `rtmp://a.rtmp.youtube.com/live2/${streamKey}`;
+    const rtmpUrl = `${this.config.get().stream.youtubeRtmpBase}/${streamKey}`;
     let fakeAudioInputCounter = 0;
 
     let args: string[] = [];
@@ -332,44 +342,155 @@ export class NodeFFmpegService implements FFmpegService {
     const dsInputIndex = 1 + fakeAudioInputCounter;
     args.push("-i", this.clientLogoPath); // Input 2: Client logo
     const clientInputIndex = 2 + fakeAudioInputCounter;
-    
+
+    let nextInputIndex = 3 + fakeAudioInputCounter;
+
     let filterComplex = "";
-    
+
+    // Optional scorecard overlay (top-left). Adds one input before any ads.
+    let scoreInputIndex: number | null = null;
     if (isScorecardActivated) {
       const scoreOverlayPath = this.getScoreOverlayPath(courtId);
-      this.ensureScoreOverlay(scoreOverlayPath);
-
+      // Always start from a fully transparent overlay so nothing is shown until
+      // the first live score update arrives. This also wipes any stale scorecard
+      // left on disk from a previous match on this court.
+      this.resetScoreOverlay(scoreOverlayPath);
       // Treat the overlay PNG as a continuously looping sequence of images
       // This allows FFmpeg to reflect file updates cleanly as they are overwritten
-      args.push("-f", "image2", "-loop", "1", "-i", scoreOverlayPath); 
-      const scoreInputIndex = 3 + fakeAudioInputCounter;
-
-      // position them correctly using filter complex
-      filterComplex = [
-        "[0:v] scale=1920:1080 [base];",
-        // Top-left score overlay
-        `[${scoreInputIndex}:v] scale=420:-1:force_original_aspect_ratio=decrease [score];`,
-        // Bottom-right DropShot watermark
-        `[${dsInputIndex}:v] scale=500:-1:force_original_aspect_ratio=decrease [ds];`,
-        // Top-right client logo
-        `[${clientInputIndex}:v] scale=350:-1:force_original_aspect_ratio=decrease [client];`,
-        "[base][score] overlay=30:30 [tmp0];",
-        "[tmp0][ds] overlay=main_w-overlay_w-10:main_h-overlay_h-10 [tmp1];",
-        "[tmp1][client] overlay=main_w-overlay_w-10:10",
-      ].join(" ");
-    } else {
-      filterComplex = [
-        "[0:v] scale=1920:1080 [base];",
-        // Bottom-right DropShot watermark
-        `[${dsInputIndex}:v] scale=500:-1:force_original_aspect_ratio=decrease [ds];`,
-        // Top-right client logo
-        `[${clientInputIndex}:v] scale=350:-1:force_original_aspect_ratio=decrease [client];`,
-        "[base][ds] overlay=main_w-overlay_w-10:main_h-overlay_h-10 [tmp1];",
-        "[tmp1][client] overlay=main_w-overlay_w-10:10",
-      ].join(" ");
+      args.push("-f", "image2", "-loop", "1", "-i", scoreOverlayPath);
+      scoreInputIndex = nextInputIndex++;
     }
 
+    // Resolve left/right ad paths and push each as a new input if present.
+    // These are fixed PNG "slot" files managed by AdRotator: it overwrites them
+    // on a timer to rotate the pool, and ffmpeg reflects each new file via the
+    // image2 loop below (same live-reload trick as the score overlay). A missing
+    // slot file simply means that side has no ad this session.
+    const leftAdPath =
+      adPaths?.left && fs.existsSync(adPaths.left) ? adPaths.left : null;
+    const rightAdPath =
+      adPaths?.right && fs.existsSync(adPaths.right) ? adPaths.right : null;
+
+    let leftAdInputIndex: number | null = null;
+    let rightAdInputIndex: number | null = null;
+
+    if (leftAdPath) {
+      args.push(...this.buildAdInputFlags(leftAdPath));
+      leftAdInputIndex = nextInputIndex++;
+    }
+    if (rightAdPath) {
+      args.push(...this.buildAdInputFlags(rightAdPath));
+      rightAdInputIndex = nextInputIndex++;
+    }
+
+    const hasAnyAd = leftAdInputIndex !== null || rightAdInputIndex !== null;
+
+    // Highlight buffer: when a buffer dir is configured, branch the scaled
+    // frame BEFORE any overlay is applied. One copy ([base]) continues into
+    // the existing overlay/RTMP chain completely unchanged; the other
+    // ([hlbuf]) becomes a second output that records a raw (no ads/logos)
+    // rolling buffer for later highlight-clip extraction. This keeps the
+    // camera connection count at exactly one — no second ffmpeg process, no
+    // proxy — the split happens inside this same command.
+    // Fail-soft: the highlight buffer is a non-critical, secondary output. If
+    // its directory can't be created (bad path, permissions, disk full), we
+    // must NOT let that abort the live stream — disable the buffer branch for
+    // this run and build the command exactly as if it were off. Without this,
+    // a throw here propagates up and leaves the stream wedged (the caller's
+    // catch doesn't reset state), blocking future starts for the court.
+    let highlightBufferEnabled = !!highlightBufferDir;
+    if (highlightBufferEnabled) {
+      try {
+        ensureDirSync(highlightBufferDir!);
+      } catch (error) {
+        this.logger.warn(
+          "Failed to create highlight buffer dir; continuing without highlight buffer",
+          {
+            highlightBufferDir,
+            error: error instanceof Error ? error.message : String(error),
+          }
+        );
+        highlightBufferEnabled = false;
+      }
+    }
+
+    // Build filter graph
+    const steps: string[] = highlightBufferEnabled
+      ? ["[0:v] scale=1920:1080 [scaled];", "[scaled] split=2 [base][hlbuf];"]
+      : ["[0:v] scale=1920:1080 [base];"];
+
+    if (scoreInputIndex !== null) {
+      steps.push(
+        `[${scoreInputIndex}:v] scale=420:-1:force_original_aspect_ratio=decrease [score];`
+      );
+    }
+    steps.push(
+      `[${dsInputIndex}:v] scale=500:140:force_original_aspect_ratio=decrease [ds];`,
+      `[${clientInputIndex}:v] scale=400:140:force_original_aspect_ratio=decrease [client];`
+    );
+    if (leftAdInputIndex !== null) {
+      steps.push(
+        `[${leftAdInputIndex}:v] scale=220:500:force_original_aspect_ratio=decrease [leftAd];`
+      );
+    }
+    if (rightAdInputIndex !== null) {
+      steps.push(
+        `[${rightAdInputIndex}:v] scale=220:500:force_original_aspect_ratio=decrease [rightAd];`
+      );
+    }
+
+    // Overlay chain: base → (score) → ds → client → (leftAd) → (rightAd)
+    if (scoreInputIndex !== null) {
+      steps.push(
+        "[base][score] overlay=30:30 [tmp0];",
+        "[tmp0][ds] overlay=main_w-overlay_w-10:main_h-overlay_h-10 [tmp1];"
+      );
+    } else {
+      steps.push("[base][ds] overlay=main_w-overlay_w-10:main_h-overlay_h-10 [tmp1];");
+    }
+
+    // After client overlay: label output [tmp2] if ads follow, else leave unlabeled (final output)
+    if (hasAnyAd) {
+      steps.push("[tmp1][client] overlay=main_w-overlay_w-10:10 [tmp2];");
+
+      const adSlots: Array<{ label: string; pos: string }> = [
+        leftAdInputIndex !== null ? { label: "leftAd", pos: "10:(main_h-overlay_h)/2" } : null,
+        rightAdInputIndex !== null ? { label: "rightAd", pos: "main_w-overlay_w-10:(main_h-overlay_h)/2" } : null,
+      ].filter((x): x is { label: string; pos: string } => x !== null);
+
+      let cur = "tmp2";
+      adSlots.forEach(({ label, pos }, i) => {
+        const isLast = i === adSlots.length - 1;
+        const next = isLast ? "vout" : `tmp${3 + i}`;
+        steps.push(`[${cur}][${label}] overlay=${pos} [${next}]${isLast ? "" : ";"}`);
+        cur = next;
+      });
+    } else if (highlightBufferEnabled) {
+      // The highlight buffer branch introduces a second named filtergraph
+      // pad ([hlbuf]), so the primary chain's output can no longer rely on
+      // ffmpeg's "auto-pick the single unlabeled filtergraph output"
+      // behavior — that becomes ambiguous with two named pads present. Label
+      // it explicitly and map it below, same as the ad-overlay path already
+      // has to.
+      steps.push("[tmp1][client] overlay=main_w-overlay_w-10:10 [vout]");
+    } else {
+      steps.push("[tmp1][client] overlay=main_w-overlay_w-10:10");
+    }
+
+    filterComplex = steps.join(" ");
+
     args.push("-filter_complex", filterComplex);
+
+    // Whether the primary chain terminates in an explicit [vout] label (vs.
+    // ffmpeg's implicit single-output selection) and whether we must emit an
+    // explicit -map for it are the SAME decision — derive both from one flag
+    // so a future output-adding feature can't update one site and forget the
+    // other (which would dangle the label or map a non-existent pad).
+    const needsExplicitVout = hasAnyAd || highlightBufferEnabled;
+    if (needsExplicitVout) {
+      args.push("-map", "[vout]");
+      args.push("-map", `${fakeAudioInputCounter}:a`);
+    }
 
     // audio & video output configurations
     args.push(
@@ -399,6 +520,40 @@ export class NodeFFmpegService implements FFmpegService {
     // Specify output format for RTMP streaming
     args.push("-f", "flv", rtmpUrl);
 
+    // Second output: the highlight buffer branch. Deliberately cheap encode
+    // (low bitrate, ultrafast, no audio) since this is an intermediate
+    // artifact that gets reframed/re-encoded again during highlight
+    // processing — quality parity with the broadcast output isn't needed.
+    // "-c copy" isn't an option here: [hlbuf] is decoded/filtered video, not
+    // an already-encoded bitstream, so it must be encoded to be written out.
+    if (highlightBufferEnabled) {
+      const segmentSec = this.config.get().highlight.bufferSegmentSec;
+      // Unique per stream run (and per retry, since retries rebuild the
+      // command). The segment muxer names files by whole-second wall clock
+      // (%s), so on a fast restart the respawned process's first segment could
+      // land on the same second as the dying process's last one and overwrite
+      // it. A per-run token in the name keeps runs from colliding while %s
+      // still carries the segment's start time for the buffer manifest.
+      const runToken = Date.now().toString(36);
+      args.push(
+        "-map", "[hlbuf]",
+        "-c:v", "libx264",
+        "-preset", "ultrafast",
+        "-b:v", "800k",
+        "-an",
+        // Force a keyframe exactly every segmentSec. The segment muxer can only
+        // cut at keyframes; without this, libx264's default GOP (~250 frames,
+        // ~8-10s) governs the real segment length and -segment_time is
+        // effectively ignored, producing segments far coarser than configured.
+        "-force_key_frames", `expr:gte(t,n_forced*${segmentSec})`,
+        "-f", "segment",
+        "-segment_time", String(segmentSec),
+        "-reset_timestamps", "1",
+        "-strftime", "1",
+        path.join(highlightBufferDir!, `seg-${runToken}-%s.ts`)
+      );
+    }
+
     const fullCommand = `ffmpeg ${args.join(" ")}`;
 
     return {
@@ -425,6 +580,19 @@ export class NodeFFmpegService implements FFmpegService {
     this.runningProcesses.clear();
   }
 
+  // Pick the right ffmpeg input flags for an ad file based on its extension.
+  // Animated formats loop via stream_loop; stills via image2 loop.
+  // For the looping concat slot video, "-stream_loop -1" makes the input
+  // infinite (it never EOFs, so the main encoder's clock never stalls), and
+  // "-fflags +genpts" smooths the PTS reset at each loop wrap.
+  private buildAdInputFlags(adPath: string): string[] {
+    const ext = path.extname(adPath).slice(1).toLowerCase();
+    if (NodeFFmpegService.VIDEO_EXTS.has(ext)) {
+      return ["-stream_loop", "-1", "-re", "-fflags", "+genpts", "-i", adPath];
+    }
+    return ["-f", "image2", "-loop", "1", "-i", adPath];
+  }
+
   private validateImageFiles(): void {
     const dsLogoPath = path.resolve("./public/ds.png");
     const clientLogoPath = path.resolve(this.clientLogoPath);
@@ -443,10 +611,11 @@ export class NodeFFmpegService implements FFmpegService {
     });
   }
 
-  private ensureScoreOverlay(scoreOverlayPath: string): void {
-    if (!fs.existsSync(scoreOverlayPath)) {
-      this.createDefaultScoreOverlay(scoreOverlayPath);
-    }
+  private resetScoreOverlay(scoreOverlayPath: string): void {
+    // Unconditionally (re)write the transparent placeholder. Unlike an
+    // ensure-if-missing check, this guarantees a clean slate on every stream
+    // start so a previous match's scorecard never shows on the new stream.
+    this.createDefaultScoreOverlay(scoreOverlayPath);
   }
 
   private getScoreOverlayPath(courtId: string): string {

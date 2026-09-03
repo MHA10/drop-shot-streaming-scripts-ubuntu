@@ -5,6 +5,9 @@ export interface SSEConnectionConfig {
   readonly baseUrl: string;
   readonly retryInterval: number;
   readonly maxRetries: number;
+  // Optional server-to-server auth key; when set, sent as x-streaming-api-key
+  // on the SSE connect. Absent/empty = not sent (backward-compatible).
+  readonly streamingApiKey?: string;
 }
 
 export interface SSEService {

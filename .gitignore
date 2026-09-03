@@ -1,10 +1,19 @@
-# ignoring all build modules
-**/dist/
-# ignoring all node js modules
-**/node_modules/
+
 # ignore public data with images
+# ignore runtime-downloaded ad files
+# ignoring all build modules
+# ignoring all node js modules
+**/dist/
+**/node_modules/
+.claude
+.env
+/ad/
 /public/
 
-.env
-
-.claude
+# marketing reel toolkit: local venv + generated reels are never committed
+tools/reels/.venv/
+local-reels/
+/reel-*.mp4
+/highlight-*.mp4
+**/__pycache__/
+.DS_Store

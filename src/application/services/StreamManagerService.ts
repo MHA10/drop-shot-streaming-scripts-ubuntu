@@ -56,6 +56,7 @@ export class StreamManagerService {
         ...sseConfig,
         groundId: this.config.get().groundInfo.groundId,
         baseUrl: this.config.get().server.baseUrl,
+        streamingApiKey: this.config.get().server.streamingApiKey,
       });
 
       this.logger.info("Stream Manager Service started successfully");
@@ -248,6 +249,7 @@ export class StreamManagerService {
         courtId: event.courtId,
         detectAudio: true,
         isScorecardActivated: event.isScorecardActivated,
+        ads: event.ads,
       },
       this.stopStreamUseCase
     );
