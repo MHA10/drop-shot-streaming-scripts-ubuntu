@@ -249,7 +249,13 @@ def main():
         q = sv.get(p["point"])
         if not q:
             continue
-        rally = [x for x in p["strike_times"] if x >= p["rally_start"] - 1e-6]
+        # strike_times are rounded to 3 dp, but rally_start is full precision, so the
+        # serve strike (== rally_start) can round to just BELOW it. A 1e-6 tolerance
+        # then dropped the serve on those points — losing it as shot 1 AND mis-anchoring
+        # the near/far alternation onto the return, which flips the early team labels.
+        # 1e-3 absorbs the rounding; genuine pre-serve strikes sit seconds earlier
+        # (separate bursts), so nothing spurious slips in.
+        rally = [x for x in p["strike_times"] if x >= p["rally_start"] - 1e-3]
         if len(rally) < 2:
             continue
         t0 = max(0.0, rally[0] - (HALF + 1) / fps)
