@@ -341,13 +341,34 @@ setup_log_rotation() {
         pm2 install pm2-logrotate || error_exit "Failed to install pm2-logrotate"
     fi
     
-    # Configure log rotation settings
-    pm2 set pm2-logrotate:max_days 3 || error_exit "Failed to set log retention days"
+    # Configure log rotation settings.
+    #
+    # pm2-logrotate 3.x has NO age-based deletion:
+    #   - `max_days` is not a setting it reads. This script used to set it to 3,
+    #     and it silently did nothing.
+    #   - `retain` counts rotated FILES, not days. With max_size 10M a noisy day
+    #     rotates many times, so a small retain pushes out older days early.
+    # So pm2-logrotate only ROTATES (daily, or at 10M). Age-based deletion is done
+    # by the cron job below, and retain is set high enough never to prune first.
+    pm2 set pm2-logrotate:retain 1000 || error_exit "Failed to set log retention count"
     pm2 set pm2-logrotate:compress true || error_exit "Failed to enable log compression"
     pm2 set pm2-logrotate:rotateInterval '0 0 * * *' || error_exit "Failed to set rotation interval"
     pm2 set pm2-logrotate:max_size 10M || error_exit "Failed to set max log size"
-    
-    log "INFO" "Log rotation configured: 3-day retention, daily rotation, compression enabled."
+    pm2 unset pm2-logrotate:max_days >/dev/null 2>&1 || true   # remove the old no-op setting
+
+    # Delete rotated logs older than LOG_RETENTION_DAYS (default 30) daily at 00:15,
+    # after pm2-logrotate's midnight rotation. Rewrites any previous DropShot entry
+    # so re-running the setup with a different retention updates it in place.
+    local retention_days="${LOG_RETENTION_DAYS:-30}"
+    local log_dir="$HOME/.pm2/logs"
+    local marker="# DropShot: delete rotated pm2 logs older than ${retention_days} days"
+    local cron_line="15 0 * * * find ${log_dir} -name '*__*.log*' -mtime +${retention_days} -delete"
+    local existing
+    existing="$(crontab -l 2>/dev/null | grep -vF '# DropShot: delete rotated pm2 logs' | grep -vF "${log_dir} -name" || true)"
+    printf '%s\n%s\n%s\n' "$existing" "$marker" "$cron_line" | sed '/^$/d' | crontab - \
+        || error_exit "Failed to install log cleanup cron"
+
+    log "INFO" "Log rotation configured: daily or 10M rotation, compression enabled, rotated logs deleted after ${retention_days} days (cron)."
 }
 
 #==============================================================================
