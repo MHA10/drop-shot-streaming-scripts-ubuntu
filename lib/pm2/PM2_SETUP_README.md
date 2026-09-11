@@ -379,6 +379,29 @@ pm2 link <public_key> <private_key> <machine_name>
 
 ### Log Rotation Testing & Verification
 
+#### Retention policy — 30 days
+
+Rotated logs are kept for **30 days**. That limit is enforced by a **cron job**,
+not by pm2-logrotate, because pm2-logrotate 3.x cannot delete by age:
+
+- `pm2-logrotate:retain` counts rotated **files**, not days. With `max_size 10M`
+  a noisy day rotates many times and can push out older days early, so it is set
+  to `1000` — high enough that the file count never prunes before the age limit.
+- `pm2-logrotate:max_days` is **not a setting pm2-logrotate reads**. Earlier
+  versions of `setup-pm2-ubuntu.sh` set it to `3`; it had no effect. Remove it on
+  existing boxes with `pm2 unset pm2-logrotate:max_days`.
+- `setup-pm2-ubuntu.sh` installs the cron below. Override the window with
+  `LOG_RETENTION_DAYS=<n>` when running the setup.
+
+```bash
+15 0 * * * find ~/.pm2/logs -name '*__*.log*' -mtime +30 -delete
+```
+
+```bash
+crontab -l                                            # confirm it is installed
+find ~/.pm2/logs -name '*__*.log*' -mtime +30         # preview what it would delete
+```
+
 #### Check Log Rotation Configuration
 ```bash
 # View current pm2-logrotate settings
