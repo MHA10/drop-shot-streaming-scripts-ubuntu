@@ -1,0 +1,17 @@
+{
+  "name": "dropshot-scoreboard-serial-tester",
+  "version": "1.0.0",
+  "description": "Desk test harness for the ESP32<->streamer scoreboard serial protocol (see STREAMER_INTEGRATION.md in the Arduino repo). Auto-connects to an ESP32 leader over USB, logs uplink score/heartbeat/log JSON, and provides a REPL for sending downlink names commands.",
+  "main": "index.js",
+  "scripts": {
+    "dev": "node index.js"
+  },
+  "keywords": ["dropshot", "scoreboard", "serial", "esp32"],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "dependencies": {
+    "@serialport/parser-readline": "^13.0.0",
+    "serialport": "^13.0.0"
+  }
+}

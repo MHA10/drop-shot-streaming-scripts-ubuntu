@@ -2,9 +2,12 @@
 # =============================================================================
 # Streamer Setup Script
 # Description: Complete automated setup for a new Ubuntu streamer machine
-# Usage: bash setup.sh
-# Or with presets: export DROPSHOT_GROUND_ID="your-id" BASE_URL="https://api.drop-shot.live" && bash setup.sh
-# BASE_URL defaults to staging if not provided
+# Usage: bash setup.sh   (prompts for the values below)
+# Or fully non-interactive:
+#   export DROPSHOT_GROUND_ID="your-id"
+#   export STREAMING_API_KEY="your-key"           # backend server-to-server auth
+#   export BASE_URL="https://api.drop-shot.live"  # defaults to staging if not provided
+#   bash setup.sh
 # =============================================================================
 
 set -e  # Exit on any error
@@ -76,6 +79,34 @@ if [ -z "${BASE_URL:-}" ]; then
 fi
 
 log_info "Base URL: $BASE_URL"
+echo ""
+
+# =============================================================================
+# STREAMING_API_KEY (server-to-server auth for the DropShot backend)
+# =============================================================================
+# Taken from the environment if exported, else prompted. NOTE: this cannot be
+# pulled from GitHub Actions secrets — secret VALUES are never readable outside
+# an Actions runner (the API exposes only name/created_at/updated_at). So the
+# value is supplied here, either by exporting it before running:
+#     export STREAMING_API_KEY="..." && bash setup.sh
+# or by pasting it at the prompt below.
+#
+# Not fatal when blank: the streamer omits the header when unset. But once the
+# backend enforces the guard, a box without this key gets 401 on SSE /
+# heartbeat / go-live / logs, so it must be set before then.
+if [ -z "${STREAMING_API_KEY:-}" ]; then
+    # -s so the key isn't echoed into the terminal/scrollback.
+    read -s -p "  Enter STREAMING_API_KEY (press Enter to skip): " STREAMING_API_KEY
+    echo ""
+    export STREAMING_API_KEY
+fi
+
+if [ -n "$STREAMING_API_KEY" ]; then
+    log_info "Streaming API key: set (${#STREAMING_API_KEY} chars)"
+else
+    log_info "Streaming API key: NOT set — backend calls will be unauthenticated."
+    log_info "  Add STREAMING_API_KEY to .env before the backend enforces auth."
+fi
 echo ""
 
 # =============================================================================
@@ -168,6 +199,16 @@ sudo apt-get install -y build-essential ffmpeg
 log_info "FFmpeg version: $(ffmpeg -version 2>&1 | head -1)"
 log_success "System dependencies installed."
 
+# Optional: Python + OpenCV for highlight ball-tracking reframe (Phase 5).
+# Only needed when HIGHLIGHT_BALL_TRACKING_ENABLED=true; the highlight feature
+# works without it (full-frame reel). NON-FATAL: a failure here must not abort
+# streamer setup, so it's wrapped to warn-and-continue despite `set -e`.
+log_info "Installing Python + OpenCV for highlight reframe (optional)..."
+{
+    sudo apt-get install -y python3 python3-pip &&
+    python3 -m pip install --break-system-packages opencv-python-headless numpy
+} || log_info "Python/OpenCV install skipped or failed (ball-tracking reframe will be unavailable; highlights still work full-frame)."
+
 # =============================================================================
 # STEP 6: Install PM2
 # =============================================================================
@@ -205,6 +246,11 @@ cat > "$REPO_DIR/.env" << ENVEOF
 # Server Configuration
 BASE_URL=$BASE_URL
 
+# Server-to-server auth key for the DropShot backend device routes (SSE,
+# heartbeat, go-live, logs, video upload). REQUIRED once the backend enforces
+# the guard — without it those calls get 401.
+STREAMING_API_KEY=$STREAMING_API_KEY
+
 # Streamer Ground ID
 DROPSHOT_GROUND_ID=$DROPSHOT_GROUND_ID
 
@@ -224,6 +270,21 @@ REACT_APP_CLOUDINARY_FOLDER=dropshot/padel-courts
 REACT_APP_CLOUDINARY_UPLOAD_PRESET=dropshot-partners
 CLOUDINARY_API_KEY=941851446579375
 CLOUDINARY_API_SECRET=IrdU2pOiXW9GwDeP7h5JV3MRdwM
+
+# Highlight Reel Capture (OFF by default — uncomment to enable on this box).
+# HIGHLIGHT_ENABLED=true
+#   Enables the rolling buffer + reel capture. Needs the ESP32 highlight
+#   hardware attached; to test WITHOUT it, also set the two debug knobs below.
+# HIGHLIGHT_FORCE_PRESENT=true            # pretend the ESP32 is present
+# HIGHLIGHT_TRIGGER_FILE=/tmp/hl-trigger  # `touch` this file to fire a highlight
+# HIGHLIGHT_BALL_TRACKING_ENABLED=true    # player-follow reel (needs python3+opencv, installed above)
+# HIGHLIGHT_UPLOAD_ENABLED=true           # upload finished reels to YouTube via the
+#                                         # backend (requires STREAMING_API_KEY above)
+# HIGHLIGHT_DELETE_AFTER_UPLOAD=false     # keep local reels after upload (default: delete)
+# HIGHLIGHT_REEL_ASPECT=4:5               # default 16:9 (full frame). 4:5 or 9:16 crop
+#                                         # to vertical; 9:16 is required for YouTube Shorts
+#   Once the two knobs above are set and the streamer restarted, fire a test
+#   reel with:  bash lib/highlight-trigger.sh
 ENVEOF
 log_info ".env file created at $REPO_DIR/.env"
 

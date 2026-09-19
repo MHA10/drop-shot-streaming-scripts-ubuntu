@@ -20,6 +20,7 @@ export class RemoteLogger implements Logger {
       maxMemoryUsage: number;
       retryAttempts: number;
       retryDelay: number;
+      streamingApiKey?: string;
     },
     logLevel: string = "debug"
   ) {
@@ -33,7 +34,8 @@ export class RemoteLogger implements Logger {
         remoteConfig.baseUrl,
         remoteConfig.sourceId,
         remoteConfig.retryAttempts,
-        remoteConfig.retryDelay
+        remoteConfig.retryDelay,
+        remoteConfig.streamingApiKey ?? ""
       );
 
       // Initialize log buffer for non-error logs
