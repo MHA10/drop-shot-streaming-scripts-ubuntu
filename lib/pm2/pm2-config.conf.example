@@ -35,9 +35,10 @@ PACKAGE_NAME="streamer-node"
 # Node.js Configuration
 #==============================================================================
 
-# Node.js major version to install (18, 20, etc.)
+# Node.js major version to install. 20 is the minimum: Supabase realtime (the
+# live score overlay) cannot open its websocket on Node 18, and fails silently.
 # The script will install the latest version of this major release
-NODE_VERSION="18"
+NODE_VERSION="22"
 
 #==============================================================================
 # Keymetrics Integration (Optional)
@@ -91,7 +92,7 @@ PM2_MAX_MEMORY_RESTART="500M"
 # MACHINE_NAME="${DROPSHOT_GROUND_ID:-groundA}-server"
 # GROUND_TAG="ground=${DROPSHOT_GROUND_ID:-groundA},location=building1"
 # PACKAGE_NAME="streamer-node"
-# NODE_VERSION="18"
+# NODE_VERSION="22"
 
 # Ground B Configuration (using environment variable):
 # export DROPSHOT_GROUND_ID="groundB"
@@ -99,7 +100,7 @@ PM2_MAX_MEMORY_RESTART="500M"
 # MACHINE_NAME="${DROPSHOT_GROUND_ID:-groundB}-server"
 # GROUND_TAG="ground=${DROPSHOT_GROUND_ID:-groundB},location=building2"
 # PACKAGE_NAME="streamer-node"
-# NODE_VERSION="18"
+# NODE_VERSION="22"
 
 # Premium Ground Configuration (using environment variable):
 # export DROPSHOT_GROUND_ID="premium-ground"
