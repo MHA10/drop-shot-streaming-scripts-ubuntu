@@ -35,8 +35,15 @@ jobs:
       - name: node
         uses: actions/setup-node@v2
         with:
-          node-version: 20
+          node-version: 22
           registry-url: https://registry.npmjs.org
+
+      # Trusted publishing: npm accepts this workflow's GitHub identity instead of
+      # a stored token, so there is no token to expire. Needs npm >= 11.5.1 on
+      # Node >= 22.14 (Node 22 ships npm 10). If the package has no trusted
+      # publisher set up on npmjs.com, npm silently uses NPM_AUTH_TOKEN instead.
+      - name: npm for trusted publishing
+        run: npm install -g npm@^11.5.1
 
       - name: configure git
         run: |
