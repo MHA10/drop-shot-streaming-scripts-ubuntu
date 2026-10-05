@@ -3,6 +3,20 @@ on:
   push:
     branches:
       - master
+  # Manual run with a choice of npm label. Venue boxes run `npx streamer-node@latest`
+  # and pick up whatever "latest" points to on their next restart, so "latest"
+  # reaches every venue. "next" reaches only a box switched to @next — use it to
+  # try a release on one venue, then promote with:
+  #   npm dist-tag add streamer-node@<version> latest
+  workflow_dispatch:
+    inputs:
+      dist_tag:
+        description: "npm label: next = test boxes only, latest = every venue"
+        type: choice
+        options:
+          - next
+          - latest
+        default: next
 
 permissions:
   contents: write
@@ -56,11 +70,15 @@ jobs:
         run: npm install && npm run build
 
       - name: publish
-        run: npm publish --access public
+        # Push runs have no inputs, so they keep publishing to "latest" as before.
+        run: npm publish --access public --tag "$DIST_TAG"
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_AUTH_TOKEN }}
+          DIST_TAG: ${{ inputs.dist_tag || 'latest' }}
 
       - name: notify server
+        # Only announce real releases; a "next" test build must not reach the server.
+        if: ${{ (inputs.dist_tag || 'latest') == 'latest' }}
         run: |
           # Get the new version from package.json
           NEW_VERSION=$(node -p "require('./package.json').version")
