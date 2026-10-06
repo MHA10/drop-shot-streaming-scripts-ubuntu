@@ -24,6 +24,7 @@ import { NullBallReframer } from "./infrastructure/services/NullBallReframer";
 import { PythonBallReframer } from "./infrastructure/services/PythonBallReframer";
 import { YouTubeUploadService } from "./infrastructure/services/YouTubeUploadService";
 import { CaptureHighlightUseCase } from "./application/use-cases/CaptureHighlightUseCase";
+import { redactSecrets } from "./infrastructure/utils/redact";
 
 class Application {
   private streamManager?: StreamManagerService;
@@ -135,7 +136,10 @@ class Application {
 
       // Initialize configuration
       const config = Config.getInstance();
-      this.logger.info("Configuration loaded", { config: config.get() });
+      // Masked: this line lands in every box's PM2 log files on every start.
+      this.logger.info("Configuration loaded", {
+        config: redactSecrets(config.get()),
+      });
 
       // Initialize dependencies
       const streamRepository = new FileSystemStreamRepository(
