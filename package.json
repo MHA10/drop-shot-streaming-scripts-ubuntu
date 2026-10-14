@@ -1,6 +1,6 @@
 {
   "name": "streamer-node",
-  "version": "1.0.39",
+  "version": "1.0.40",
   "description": "A lightweight TypeScript streaming system with Clean Architecture",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
@@ -14,6 +14,7 @@
   ],
   "scripts": {
     "build": "npx tsc && mkdir -p public && cp -r public dist/ && cp -r scripts dist/",
+    "test": "npm run build && node --test test/*.test.mjs",
     "start": "node dist/src/main.js",
     "dev": "npm run build && npm start",
     "monitor": "bash -c 'npm run dev 2>&1 | tee >(grep -E \"ERROR|WARN|INFO\" > node.logs) >(grep \"DEBUG\" | grep -v \"frame=\" > ffmpeg.logs)'",

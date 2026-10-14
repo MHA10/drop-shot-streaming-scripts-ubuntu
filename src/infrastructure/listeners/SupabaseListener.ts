@@ -16,6 +16,14 @@ export class SupabaseListener {
   private enabled: boolean;
   private readonly scoreImageDir: string;
   private lastRenderedTextByCourt: Map<string, string> = new Map();
+  // One promise chain per court, so overlay writes for the SAME court run strictly
+  // one-after-another. This is the load-bearing fix for the 8 Oct 2026 outage:
+  // two score updates arriving together both raced on the single `<court>.png.tmp`
+  // file — the first rename consumed it, the second threw ENOENT, and that
+  // rejection reached the process-level handler and exited the WHOLE streamer.
+  // Serialising per court means two writes can never touch the temp file at once,
+  // and scores always land in order (no older score overwriting a newer one).
+  private writeChainByCourt: Map<string, Promise<void>> = new Map();
 
   constructor(channelName: string, tableName: string) {
     this.supabaseService = SupabaseService.getInstance();
@@ -33,6 +41,18 @@ export class SupabaseListener {
 
     const channelName = `${this.channelName}-${courtId}`;
     const filter = `court_id=eq.${courtId}`;
+
+    // Idempotent subscribe: if a live channel already exists for this court, do
+    // NOT open a second one. Two channels on the same filter (court_id=eq.X) each
+    // deliver every UPDATE, so the overlay renders twice per score — the duplicate
+    // delivery seen in the 8 Oct incident (two identical UPDATE events at the same
+    // timestamp). subscribeToTable's own "remove old, add new" path cannot prevent
+    // this on its own: it removes the old channel WITHOUT awaiting, leaving a brief
+    // window where both are live. Skipping here closes that window at the source.
+    if (this.supabaseService.isChannelActive(channelName)) {
+      console.log(`↩️  Already subscribed to court ${courtId}; skipping duplicate subscription`);
+      return;
+    }
 
     // Drop any cached render text from a previous session on this court so the
     // first update after (re)subscribing always redraws the (freshly reset)
@@ -65,6 +85,18 @@ export class SupabaseListener {
 
     console.log(`🛑 Unsubscribing from Supabase updates for court: ${courtId}`);
     await this.supabaseService.unsubscribe(channelName);
+
+    // Drop this court's cached render text so the first update after a later
+    // resubscribe always redraws the (freshly reset) overlay.
+    //
+    // We deliberately do NOT delete the write chain here. A write may still be in
+    // flight, and the chain tail must stay reachable so that a write enqueued after a
+    // resubscribe chains BEHIND it rather than starting a fresh, parallel chain. If we
+    // dropped it here, a stop + immediate resubscribe could run the old in-flight write
+    // and the new write at the same time — both renaming the same `<court>.png.tmp`
+    // file, which is exactly the race this PR removes. The chain cleans itself up once
+    // it drains (see enqueueScoreWrite), so there is nothing to free here.
+    this.lastRenderedTextByCourt.delete(courtId);
   }
 
   /**
@@ -76,15 +108,71 @@ export class SupabaseListener {
     if (!score) {
       return;
     }
-    void this.writeScoreImage(
-      score.courtId,
-      score.left,
-      score.right,
-      score.leftGames,
-      score.rightGames,
-      score.leftTeam,
-      score.rightTeam,
-    );
+    this.enqueueScoreWrite(score);
+  }
+
+  /**
+   * Queue a score-overlay write, serialised per court and guarded against failure.
+   *
+   * ── WHY THIS EXISTS (change at your peril) ──
+   * writeScoreImage renders to one fixed temp file per court (`<court>.png.tmp`)
+   * and renames it into place. Firing two of them at once for the same court
+   * raced on that temp file: the losing rename threw ENOENT, and — called
+   * fire-and-forget — that became an unhandled rejection that exited the WHOLE
+   * streamer (8 Oct 2026 outage, 18 crashes in a day).
+   *
+   * Two guards here, both load-bearing:
+   *  - serialise: each court's writes are chained, so only one runs at a time.
+   *    No temp-file collision, and scores land in order (a slower older write can
+   *    never finish last and leave a stale scoreboard on screen).
+   *  - catch: an overlay write failing must NEVER reach the process. We log it and
+   *    move on; the next update redraws. This alone turns a stream-killing crash
+   *    into a logged warning.
+   */
+  private enqueueScoreWrite(score: {
+    courtId: string;
+    left: string;
+    right: string;
+    leftGames: string;
+    rightGames: string;
+    leftTeam: string;
+    rightTeam: string;
+  }): void {
+    const run = () =>
+      this.writeScoreImage(
+        score.courtId,
+        score.left,
+        score.right,
+        score.leftGames,
+        score.rightGames,
+        score.leftTeam,
+        score.rightTeam,
+      ).catch((err) => {
+        console.error(
+          `❌ Score overlay write failed for court ${score.courtId}; skipping this update:`,
+          err,
+        );
+      });
+
+    // Chain after this court's previous write. `run` always resolves (it catches),
+    // so the chain never rejects and a failed write can't break the writes after it.
+    const prev =
+      this.writeChainByCourt.get(score.courtId) ?? Promise.resolve();
+    const next = prev.then(run);
+    this.writeChainByCourt.set(score.courtId, next);
+
+    // Let the chain drop itself once it has fully drained — but ONLY if nothing new was
+    // queued behind it (i.e. this is still the tail). Keeping the entry alive until it
+    // settles is what preserves per-court serialisation across an unsubscribe +
+    // resubscribe: a write still in flight when the court is torn down stays the tail,
+    // so the next write chains behind it instead of racing it on the shared temp file.
+    // Deleting only when still-current also stops the map leaking one settled promise
+    // per court for the life of the process.
+    void next.then(() => {
+      if (this.writeChainByCourt.get(score.courtId) === next) {
+        this.writeChainByCourt.delete(score.courtId);
+      }
+    });
   }
 
   private extractScore(record: Record<string, unknown>): {
@@ -268,10 +356,18 @@ export class SupabaseListener {
     await fs.mkdir(path.dirname(scoreImagePath), { recursive: true });
     const buffer = canvas.encodeSync('png');
     
+    // One fixed temp path per court is safe ONLY because writes are serialised per
+    // court (see enqueueScoreWrite) — nothing else is touching this file right now.
     const tempPath = `${scoreImagePath}.tmp`;
     await fs.writeFile(tempPath, buffer);
     await fs.rename(tempPath, scoreImagePath);
-    
+
+    // Mark this score rendered only AFTER it has landed on disk. Serialisation
+    // means the court's next update runs after this line, so an identical score is
+    // correctly skipped by the guard above — while a write that FAILED never marks
+    // itself done (the error is caught in enqueueScoreWrite), so it simply redraws
+    // on the next update instead of being silently suppressed. This is why the
+    // marker stays here and is not moved before the awaits.
     this.lastRenderedTextByCourt.set(courtId, text);
   }
 
