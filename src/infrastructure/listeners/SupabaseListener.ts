@@ -86,9 +86,16 @@ export class SupabaseListener {
     console.log(`🛑 Unsubscribing from Supabase updates for court: ${courtId}`);
     await this.supabaseService.unsubscribe(channelName);
 
-    // Drop this court's per-court state. Any write already in flight still finishes
-    // (its promise resolves on its own); we just stop holding the chain tail.
-    this.writeChainByCourt.delete(courtId);
+    // Drop this court's cached render text so the first update after a later
+    // resubscribe always redraws the (freshly reset) overlay.
+    //
+    // We deliberately do NOT delete the write chain here. A write may still be in
+    // flight, and the chain tail must stay reachable so that a write enqueued after a
+    // resubscribe chains BEHIND it rather than starting a fresh, parallel chain. If we
+    // dropped it here, a stop + immediate resubscribe could run the old in-flight write
+    // and the new write at the same time — both renaming the same `<court>.png.tmp`
+    // file, which is exactly the race this PR removes. The chain cleans itself up once
+    // it drains (see enqueueScoreWrite), so there is nothing to free here.
     this.lastRenderedTextByCourt.delete(courtId);
   }
 
@@ -151,7 +158,21 @@ export class SupabaseListener {
     // so the chain never rejects and a failed write can't break the writes after it.
     const prev =
       this.writeChainByCourt.get(score.courtId) ?? Promise.resolve();
-    this.writeChainByCourt.set(score.courtId, prev.then(run));
+    const next = prev.then(run);
+    this.writeChainByCourt.set(score.courtId, next);
+
+    // Let the chain drop itself once it has fully drained — but ONLY if nothing new was
+    // queued behind it (i.e. this is still the tail). Keeping the entry alive until it
+    // settles is what preserves per-court serialisation across an unsubscribe +
+    // resubscribe: a write still in flight when the court is torn down stays the tail,
+    // so the next write chains behind it instead of racing it on the shared temp file.
+    // Deleting only when still-current also stops the map leaking one settled promise
+    // per court for the life of the process.
+    void next.then(() => {
+      if (this.writeChainByCourt.get(score.courtId) === next) {
+        this.writeChainByCourt.delete(score.courtId);
+      }
+    });
   }
 
   private extractScore(record: Record<string, unknown>): {

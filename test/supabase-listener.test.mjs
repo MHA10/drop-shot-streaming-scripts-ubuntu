@@ -144,6 +144,36 @@ test("public API is unchanged", () => {
     assert.equal(typeof l[m], "function", m + " still present");
 });
 
+// 7) GAP CLOSED: a write still in flight when a court is torn down must still
+//    serialise with the write that arrives right after a resubscribe — otherwise the
+//    two race on the same <court>.png.tmp file (the very collision this PR removes).
+//    Before the fix, unsubscribe deleted the chain, so the post-resubscribe write
+//    started a fresh parallel chain and both ran at once (maxActive === 2).
+test("unsubscribe + resubscribe keeps writes serialised (no parallel temp-file race)", async () => {
+  const dir = tmp();
+  const l = newListener(dir);
+  let active = 0, maxActive = 0;
+  const orig = l.writeScoreImage.bind(l);
+  l.writeScoreImage = async (...a) => {
+    active++; maxActive = Math.max(maxActive, active);
+    await new Promise((r) => setTimeout(r, 30));  // hold the write "in flight"
+    try { return await orig(...a); } finally { active--; }
+  };
+  const court = "court-7";
+  l.subscribeToCourt(court);
+  l.handleAllEvents(rec(court, 1, 0, 1, 1));       // write A: starts, now in flight
+  await l.unsubscribeFromCourt(court);             // tear the court down WHILE A runs
+  l.subscribeToCourt(court);                       // resubscribe immediately
+  l.handleAllEvents(rec(court, 2, 0, 1, 1));       // write B must queue BEHIND A
+  await drain(l, court);
+  await new Promise((r) => setTimeout(r, 60));     // let any trailing async settle
+
+  assert.equal(unhandled, null, "no unhandled rejection across teardown + resubscribe");
+  assert.equal(maxActive, 1, "A and B never ran at once (chain survived the teardown)");
+  assert.ok(existsSync(join(dir, court + ".png")), "overlay was still written");
+  rmSync(dir, { recursive: true, force: true });
+});
+
 after(async () => {
   await new Promise((r) => setTimeout(r, 50)); // let any stray async settle
   assert.equal(unhandled, null, "no unhandled rejection across the whole run");
