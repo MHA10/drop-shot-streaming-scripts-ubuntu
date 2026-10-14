@@ -231,26 +231,28 @@ def team_stats(mA, mB, span, fps, half):
     }
 
 
-def main():
-    ap = argparse.ArgumentParser(description=__doc__.split("\n")[1])
-    ap.add_argument("--tracks", required=True, help="JSON from track_players.py --dump-tracks")
-    ap.add_argument("--output", required=True)
-    ap.add_argument("--names", default="",
-                    help="label the players, e.g. 'A=Ali,B=Sara,C=Omar,D=Zara'")
-    ap.add_argument("--debug", action="store_true")
-    args = ap.parse_args()
+def compute_stats(data, names_arg=""):
+    """
+    Build the stats payload from an already-loaded tracks dict.
 
-    data = json.load(open(args.tracks))
+    This is the in-memory core shared by two callers: the CLI (main, below) and
+    the near-live reader (live_stats.py). The live reader holds the tracks in
+    memory already, so it calls this directly instead of shelling out to a fresh
+    python and re-reading the file from disk every few seconds — which on a
+    CPU-only box, every 2-second chunk, was pure wasted startup + parse cost.
+
+    Returns the payload dict, or None when the tracks carry no court calibration
+    (nothing can be expressed in metres without it).
+    """
     if not data.get("court"):
-        sys.stderr.write("player_stats: tracks have no court calibration\n")
-        return 3
+        return None
     c = data["court"]
     court = CourtModel(c["mL"], c["bL"], c["mR"], c["bR"], c["y_top"], c["y_bot"], c["y_net"])
     fps = data["fps"] or 30.0
     frames = data["frames"]
 
     names = {L: L for L in LABELS}
-    for part in filter(None, args.names.split(",")):
+    for part in filter(None, (names_arg or "").split(",")):
         k, _, v = part.partition("=")
         if k.strip().upper() in names:
             names[k.strip().upper()] = v.strip()
@@ -278,7 +280,7 @@ def main():
                 ts["players"] = [names[p], names[q]]
                 teams[half] = ts
 
-    payload = {
+    return {
         "source": data.get("video"),
         "duration_s": round(frames / fps, 1),
         "calibration": {
@@ -289,9 +291,26 @@ def main():
         "players": players,
         "teams": teams,
     }
+
+
+def main():
+    ap = argparse.ArgumentParser(description=__doc__.split("\n")[1])
+    ap.add_argument("--tracks", required=True, help="JSON from track_players.py --dump-tracks")
+    ap.add_argument("--output", required=True)
+    ap.add_argument("--names", default="",
+                    help="label the players, e.g. 'A=Ali,B=Sara,C=Omar,D=Zara'")
+    ap.add_argument("--debug", action="store_true")
+    args = ap.parse_args()
+
+    data = json.load(open(args.tracks))
+    payload = compute_stats(data, args.names)
+    if payload is None:
+        sys.stderr.write("player_stats: tracks have no court calibration\n")
+        return 3
     json.dump(payload, open(args.output, "w"), indent=2)
 
     if args.debug:
+        players, teams = payload["players"], payload["teams"]
         sys.stderr.write(f"player_stats: {len(players)} players, {len(teams)} teams, "
                          f"{payload['duration_s']}s\n")
         for L, st in players.items():

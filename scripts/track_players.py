@@ -453,11 +453,26 @@ def _static_people(med, model, imgsz, device):
 
 
 def detect_all(video, model_path, conf, imgsz, device, court, poly, every, verbose,
-               med=None):
-    """Pass 1 — person boxes per frame, filtered to the court and deduped."""
-    from ultralytics import YOLO
-    model = YOLO(model_path)
-    static = _static_people(med, model, imgsz, device)
+               med=None, model=None, static=None):
+    """
+    Pass 1 — person boxes per frame, filtered to the court and deduped.
+
+    `model` lets a long-running caller (the live stats reader) load the weights
+    ONCE and hand the same model in for every clip. Loading yolo11s costs a few
+    seconds; on short buffer chunks that reload would dwarf the actual work, so
+    reusing a resident model is the difference between keeping up and not.
+
+    `static` lets that same caller skip the empty-court scan. Finding the static
+    "people" (court-side banners, a seated ref) is one extra YOLO inference per
+    clip, but the background barely changes between adjacent 2-second chunks — so
+    the live reader computes it once every N chunks and hands the result back in,
+    saving ~1 inference per chunk. Pass None to compute it here as usual.
+    """
+    if model is None:
+        from ultralytics import YOLO
+        model = YOLO(model_path)
+    if static is None:
+        static = _static_people(med, model, imgsz, device)
     if verbose and static:
         sys.stderr.write(f"track_players: suppressing {len(static)} static "
                          f"person(s) found in the empty-court frame\n")
@@ -870,7 +885,12 @@ def render(video, output, tracks, court, trail_len, radar_pos, show_court, poly,
 def main():
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[1])
     ap.add_argument("--input", required=True)
-    ap.add_argument("--output", required=True)
+    ap.add_argument("--output", default="",
+                    help="rendered overlay video. Leave empty (or 'none') to skip "
+                         "the render entirely — the stats/heatmap path only needs "
+                         "--dump-tracks, and encoding a video we throw away is the "
+                         "single biggest cost on a CPU-only box (e.g. the live "
+                         "stats reader)")
     ap.add_argument("--model", default="yolo11s.pt",
                     help="ultralytics weights; yolo11s is the sweet spot here "
                          "(matches yolo11m on this footage, ~3x faster)")
@@ -904,6 +924,14 @@ def main():
     ap.add_argument("--show-court", action="store_true", help="outline the court filter polygon")
     ap.add_argument("--debug", action="store_true")
     args = ap.parse_args()
+
+    # Guard the "does expensive work, writes nothing" footgun: with neither an
+    # overlay video (--output) nor a tracks dump (--dump-tracks) requested, the
+    # full detect+track pass below would run and produce no artefact at all.
+    if (not args.output or args.output.lower() == "none") and not args.dump_tracks:
+        sys.stderr.write("track_players: nothing to produce — pass --output and/or "
+                         "--dump-tracks (refusing to run the detector for no output)\n")
+        return 2
 
     cap = cv2.VideoCapture(args.input)
     if not cap.isOpened():
@@ -996,11 +1024,15 @@ def main():
             json.dump(payload, fh)
         sys.stderr.write(f"track_players: wrote tracks to {args.dump_tracks}\n")
 
-    n = render(args.input, args.output, tracks, court if args.radar != "off" else None,
-               max(2, int(args.trail_sec * fps)), args.radar, args.show_court, poly, args.debug)
-    if n == 0:
-        sys.stderr.write("track_players: no frames written\n")
-        return 4
+    # Skip the render when no output path is given (or an explicit "none"): the
+    # stats/heatmap path only consumes --dump-tracks, and re-encoding a video we
+    # would throw away is the heaviest single step on a CPU-only box.
+    if args.output and args.output.lower() != "none":
+        n = render(args.input, args.output, tracks, court if args.radar != "off" else None,
+                   max(2, int(args.trail_sec * fps)), args.radar, args.show_court, poly, args.debug)
+        if n == 0:
+            sys.stderr.write("track_players: no frames written\n")
+            return 4
     return 0
 
 
