@@ -85,3 +85,44 @@ early and fell behind later; this version is built not to, but the soak is how w
 - Anything odd in `stats.json` / `heatmap.png`.
 
 That tells us the frame-rate/size to lock in for v1, and whether near-live is a go on this box.
+
+---
+
+## 6. Results so far
+
+### Processing speed — ground `75097349…` (2026-10-16)
+
+**Box:** the `ds` streamer (Dell OptiPlex 5050 class — 4 CPU cores, Intel HD 530, no
+separate graphics card). Setup was done in an isolated git worktree (`~/stats-test` on
+`feat/player-abcd-tracking`), separate from the live streamer, which kept running throughout.
+
+**Measured:** the player-finder runs at **~6.5 frames/sec** on this CPU at `--imgsz 960`
+with `--threads 2`. At the planned `--target-fps 3` (three looks per second) that is
+**×2.18 realtime** — it does the finding in well under half the time it has, so it keeps up
+with roughly **2× headroom**.
+
+**How this figure was taken (important):** the court was empty at test time, and the full
+reader deliberately skips any clip where it can't see all four players — so it never printed
+its own `(x… realtime)` line. The number above is from a **detector-only micro-benchmark**
+(timing the finder over 60 live sub-stream frames) at the same `imgsz`/`threads`. It's a safe
+stand-in for two reasons: the finder's time per frame is essentially fixed no matter how many
+people are in frame, and the detector is by far the heaviest part of processing a clip. The
+true end-to-end figure is a touch lower (it adds the light stats/heatmap step) but lands in
+the same ballpark, ~×2.
+
+**Verdict:** near-live stats are a **go** on this box. Lock in `--imgsz 960` +
+`--target-fps 3` as the v1 default for this hardware class — there's headroom to spare, and
+since the spec measured ~3 free CPU cores while streaming, the 2-thread finder should hold
+this pace during a live match too.
+
+### Still to confirm (needs a real 4-player match)
+
+The speed question is answered. These three need an actual match on court and have **not** been
+done yet:
+- **Per-player `seen` trust-scores** look reasonable (how often the camera actually sees each
+  of the four players).
+- **`stats.json` + `heatmap.png`** come out populated and sane.
+- **The live YouTube stream stays smooth** while the reader runs alongside it.
+
+Run the §3 soak command (drop `--max-clips`) during a match, pointed at the court that has
+players, to close these out.
