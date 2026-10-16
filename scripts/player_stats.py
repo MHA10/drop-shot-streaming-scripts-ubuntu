@@ -20,8 +20,19 @@ block per player plus one per team.
 - "At the net" and "at the back glass" are the front and back 3 m of a player's
   own half — the 3 m matches the real service line, so the zones are the ones a
   padel player already thinks in.
-- Teams are the two players sharing a half of the court: {A,B} far, {C,D} near.
-  Padel partners never cross the net, so this needs no appearance model.
+- Teams are the two partners {A,B} and {C,D} as labelled at the tracker's lock
+  frame (far pair / near pair at that moment). Partners never cross the net
+  DURING a game, but pairs CHANGE ENDS every two games, so over a match each
+  player spends long blocks on both halves.
+- Every position stat (net / back / coverage / side / average position /
+  formation) is measured on the player's OWN side, seen from behind him: far-end
+  frames are rotated 180° onto the near half ("folded"). Left/right is therefore
+  the player's own left/right — the way a padel player names his side — not the
+  camera's (decision 2026-10-16, after a player read his own card as backwards).
+- A label only means one person if the tracks follow that person across the
+  changeover. The near-live reader (live_stats.py) re-labels by END every chunk,
+  so there a label switches to the other team at each changeover — a known gap;
+  folding does not fix identity, only orientation.
 - Player separation and formation are TEAM stats, not player stats — they are
   about the pair, and the ~2 m separation threshold is the one the coaches use.
 
@@ -45,6 +56,18 @@ block per player plus one per team.
 - **Sprint is displacement over a 1 s WINDOW, not instantaneous speed.** A
   single-frame speed spike is usually a detection jump; a real sprint is
   sustained ground covered, which is exactly the coach's definition.
+- **Position stats are FOLDED onto the player's own side before any zone test.**
+  Testing zones against a fixed half breaks at the first changeover: on the
+  19-min finals clip player D was at the far end 68% of the time, every far-end
+  position passed the near-half "at the net" test (Y < 13), and he read 73% at
+  the net. Folded he is 13% net / 57% mid / 30% back — and the independent
+  shot-zone analysis of the same match says 13% / 50% / 37%.
+- **Which end a player is on is a ~10 s majority vote, not a per-frame test.** A
+  player at the net jitters across Y = 10 in the depth estimate; flipping per
+  frame would mirror his X and drop him on the wrong side of his own half.
+- **Distance, speed, sprints and lateral travel use the RAW (unfolded) track.**
+  The fold mirrors X at a changeover; integrating folded positions would add a
+  fake cross-court run every time the pair change ends.
 
 ── DO NOT ──
 - Do NOT present the metre and m/s figures as survey-accurate. Depth carries the
@@ -58,6 +81,8 @@ block per player plus one per team.
 - Do NOT run this on a clip where the tracker's identity was not stable. Garbage
   tracks in, garbage stats out; check track_players.py's per-player hit rate
   first.
+- Do NOT test zones, side or coverage on camera coordinates. Use own_side();
+  camera coordinates are only right for a player who never changes ends.
 """
 
 import argparse
@@ -121,7 +146,22 @@ def metric_track(track, court, fps):
     return _smooth(X, win), _smooth(Y, win), solid, have[0], have[-1]
 
 
-def player_stats(X, Y, solid, span, fps, half):
+def own_side(X, Y, fps):
+    """
+    The track re-expressed on the player's OWN half, seen from behind him.
+
+    Frames where he is on the far half are rotated 180° onto the near half
+    (X -> 10 - X, Y -> 20 - Y). Afterwards Y = 10 is always his net, Y = 20 his
+    back glass, and X = 0 his own left sideline: a near-half player faces away
+    from the camera, so camera-left is his left, and the rotation gives far-half
+    frames that same view. The end he is on is a ~10 s majority vote (see the
+    module header) so net-line jitter cannot mirror him mid-point.
+    """
+    far = _smooth((Y < NET_M).astype(float), max(3, int(round(10.0 * fps)))) > 0.5
+    return np.where(far, COURT_W_M - X, X), np.where(far, COURT_L_M - Y, Y)
+
+
+def player_stats(X, Y, solid, span, fps):
     """All the per-player metrics for one metric track."""
     a, b = span
     X, Y, solid = X[a:b + 1], Y[a:b + 1], solid[a:b + 1]
@@ -155,19 +195,17 @@ def player_stats(X, Y, solid, span, fps, half):
     # Position-based stats use CONFIRMED frames only. Off-frame excursions and
     # re-acquisition jumps put a player at impossible coordinates; counting those
     # as "coverage" or "time in a zone" invents court the player never stood on.
-    Xs, Ys = X[solid], Y[solid]
+    # Folded onto his own side (net Y=10, his back glass Y=20, X=0 his left).
+    XF, YF = own_side(X, Y, fps)
+    Xs, Ys = XF[solid], YF[solid]
     if len(Xs) < 2:
-        Xs, Ys = X, Y
-    if half == "far":         # baseline Y=0, net Y=10
-        at_net = Ys > (NET_M - ZONE_M)
-        at_back = Ys < ZONE_M
-    else:                     # baseline Y=20, net Y=10
-        at_net = Ys < (NET_M + ZONE_M)
-        at_back = Ys > (COURT_L_M - ZONE_M)
+        Xs, Ys = XF, YF
+    at_net = Ys < (NET_M + ZONE_M)
+    at_back = Ys > (COURT_L_M - ZONE_M)
 
     # coverage: fraction of a 1 m grid over the player's own 10x10 m half visited
     gx = np.clip((Xs / COURT_W_M * 10).astype(int), 0, 9)
-    gy = np.clip(((Ys - (0 if half == "far" else NET_M)) / NET_M * 10).astype(int), 0, 9)
+    gy = np.clip(((Ys - NET_M) / NET_M * 10).astype(int), 0, 9)
     cells = len(set(zip(gx.tolist(), gy.tolist())))
 
     # left/right: total lateral travel (clamped), and side favoured
@@ -176,7 +214,8 @@ def player_stats(X, Y, solid, span, fps, half):
 
     return {
         "distance_m": round(distance, 1),
-        "avg_position_xy_m": [round(float(np.mean(Xs)), 2), round(float(np.mean(Ys)), 2)],
+        # own side: x = metres from his left sideline, y = metres back from the net
+        "avg_position_xy_m": [round(float(np.mean(Xs)), 2), round(float(np.mean(Ys)) - NET_M, 2)],
         "court_coverage_pct": round(100.0 * cells / 100.0, 1),
         "mean_speed_ms": round(mean_speed, 2),
         "top_speed_ms": round(max_speed, 2),
@@ -187,10 +226,11 @@ def player_stats(X, Y, solid, span, fps, half):
         "time_at_back_pct": round(float(at_back.mean() * 100), 0),
         "lateral_distance_m": round(lateral, 1),
         "avg_side": "left" if np.mean(Xs) < COURT_W_M / 2 else "right",
+        "left_side_pct": round(float((Xs < COURT_W_M / 2).mean() * 100), 0),
     }
 
 
-def team_stats(mA, mB, span, fps, half):
+def team_stats(mA, mB, span, fps):
     """Separation and formation for one pair of partners."""
     a = max(mA[3], mB[3], span[0])
     b = min(mA[4], mB[4], span[1])
@@ -198,20 +238,21 @@ def team_stats(mA, mB, span, fps, half):
         return None
     XA, YA, sA = mA[0][a:b + 1], mA[1][a:b + 1], mA[2][a:b + 1]
     XB, YB, sB = mB[0][a:b + 1], mB[1][a:b + 1], mB[2][a:b + 1]
+    # Formation is judged on each partner's own side (folded before masking, so
+    # the 10 s end-vote sees the continuous track); spacing stays a physical
+    # distance on the raw positions.
+    YAo, YBo = own_side(XA, YA, fps)[1], own_side(XB, YB, fps)[1]
     # Only frames where BOTH partners were really detected. An interpolated
     # off-frame position otherwise leaks a 5000 m separation into the percentile.
     both = sA & sB
     if both.sum() < 5:
         both = np.ones(len(XA), bool)
     XA, YA, XB, YB = XA[both], YA[both], XB[both], YB[both]
+    YAo, YBo = YAo[both], YBo[both]
     sep = np.hypot(XA - XB, YA - YB)
-    dt = 1.0 / fps
 
-    # formation: front/back band membership per partner, per frame
-    if half == "far":
-        upA, upB = YA > NET_M - ZONE_M, YB > NET_M - ZONE_M
-    else:
-        upA, upB = YA < NET_M + ZONE_M, YB < NET_M + ZONE_M
+    # formation: front-band membership per partner, per frame, on his own side
+    upA, upB = YAo < NET_M + ZONE_M, YBo < NET_M + ZONE_M
     both_up = float((upA & upB).mean())
     both_back = float((~upA & ~upB).mean())
     staggered = float((upA ^ upB).mean())
@@ -266,7 +307,7 @@ def compute_stats(data, names_arg=""):
             continue
         metric[L] = m
         solid_rate = float(np.mean(m[2]))
-        st = player_stats(m[0], m[1], m[2], (m[3], m[4]), fps, half_of[L])
+        st = player_stats(m[0], m[1], m[2], (m[3], m[4]), fps)
         st["name"] = names[L]
         st["team"] = half_of[L]
         st["detection_rate"] = round(solid_rate, 2)
@@ -275,7 +316,7 @@ def compute_stats(data, names_arg=""):
     teams = {}
     for half, (p, q) in TEAMS.items():
         if p in metric and q in metric:
-            ts = team_stats(metric[p], metric[q], (0, frames - 1), fps, half)
+            ts = team_stats(metric[p], metric[q], (0, frames - 1), fps)
             if ts:
                 ts["players"] = [names[p], names[q]]
                 teams[half] = ts

@@ -79,8 +79,9 @@ The streamer wraps the computed stats in a small **envelope** that identifies th
         "time_at_net_pct": 24,    // whole %
         "time_at_back_s": 300.9,
         "time_at_back_pct": 41,   // whole %
-        "avg_position_xy_m": [4.8, 6.2],   // [x, y] metres
-        "avg_side": "right",      // "left" | "right"
+        "avg_position_xy_m": [4.8, 6.2],   // [x, y] metres on HIS OWN side (see field table)
+        "avg_side": "right",      // "left" | "right" — the player's own left/right
+        "left_side_pct": 38,      // % of time on his own left half (whole %)
         "detection_rate": 0.91    // 0–1, how often the camera actually saw this player (trust score)
       },
       "B": { … }, "C": { … }, "D": { … }
@@ -131,8 +132,11 @@ The streamer wraps the computed stats in a small **envelope** that identifies th
 | `sprints` | int | count | bursts of >4 m within any 1-second window |
 | `time_at_net_s` / `time_at_net_pct` | number | sec / % | time in the front 3 m of their half |
 | `time_at_back_s` / `time_at_back_pct` | number | sec / % | time in the back 3 m of their half |
-| `avg_position_xy_m` | [number, number] | metres | average `[x, y]` spot |
-| `avg_side` | string | — | `left` or `right` |
+| `avg_position_xy_m` | [number, number] | metres | average spot **on his own side, seen from behind him**: `x` = metres from his left sideline (0–10), `y` = metres back from the net (0–10) |
+| `avg_side` | string | — | `left` or `right` — **the player's own** left/right (how padel players name their side), not the camera's |
+| `left_side_pct` | number | % | share of time he spent on his own left half |
+
+> **Updated 2026-10-17:** pairs change ends every two games, so position stats (net/back time, coverage, side, average position, formation) are now measured on each player's own side. Before this fix, a player's net time was badly over-counted after a changeover (one test player read 73% at the net; the real figure was 13%). If you stored any earlier test payloads, re-run them.
 | `detection_rate` | number | 0–1 | camera-coverage / trust score — **see §6** |
 
 **Per team** (`stats.teams.{far,near}`):
