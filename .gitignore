@@ -12,6 +12,9 @@
 
 # marketing reel toolkit: local venv + generated reels are never committed
 tools/reels/.venv/
+# player tracker: ~2 GB venv and the downloaded detector weights
+tools/reels/.venv-track/
+tools/reels/models/
 local-reels/
 /reel-*.mp4
 /highlight-*.mp4

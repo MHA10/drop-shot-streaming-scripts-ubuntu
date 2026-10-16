@@ -1,0 +1,598 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<title>DropShot Detection Handbook</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wght@600;700;800&family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
+<style>
+:root{
+  --bg:#eef2f2; --surface:#ffffff; --surface-2:#e7edec; --raise:#ffffff;
+  --ink:#132120; --muted:#576664; --faint:#8496941a; --line:#d3dcdb;
+  --accent:#0d8a8f; --accent-2:#0a6a6e; --on-accent:#ffffff;
+  --audio:#c4552f; --video:#3f6fa6; --fused:#0d8a8f;
+  --ok:#1c8f5f; --ok-bg:#1c8f5f18; --partial:#b3781a; --partial-bg:#b3781a18; --pending:#6f7d7b; --pending-bg:#6f7d7b18;
+  --sh:0 1px 2px #1321200f, 0 8px 24px -14px #13212026;
+  --disp:"Archivo",system-ui,sans-serif; --body:"IBM Plex Sans",-apple-system,sans-serif; --mono:"IBM Plex Mono",ui-monospace,monospace;
+}
+@media (prefers-color-scheme:dark){ :root:not([data-theme="light"]){
+  --bg:#0c1514; --surface:#12201f; --surface-2:#162624; --raise:#1a2b29;
+  --ink:#e7efee; --muted:#93a4a2; --line:#263a38; --faint:#9db1af14;
+  --accent:#2bbdc2; --accent-2:#4fd3d7; --on-accent:#08201f;
+  --audio:#e6794f; --video:#6699cc; --fused:#2bbdc2;
+  --ok:#37b57e; --ok-bg:#37b57e1f; --partial:#d59a3a; --partial-bg:#d59a3a1f; --pending:#8b9997; --pending-bg:#8b99971f;
+  --sh:0 1px 2px #0006, 0 10px 30px -16px #000a;
+}}
+:root[data-theme="dark"]{
+  --bg:#0c1514; --surface:#12201f; --surface-2:#162624; --raise:#1a2b29;
+  --ink:#e7efee; --muted:#93a4a2; --line:#263a38; --faint:#9db1af14;
+  --accent:#2bbdc2; --accent-2:#4fd3d7; --on-accent:#08201f;
+  --audio:#e6794f; --video:#6699cc; --fused:#2bbdc2;
+  --ok:#37b57e; --ok-bg:#37b57e1f; --partial:#d59a3a; --partial-bg:#d59a3a1f; --pending:#8b9997; --pending-bg:#8b99971f;
+  --sh:0 1px 2px #0006, 0 10px 30px -16px #000a;
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);font-family:var(--body);font-size:15px;line-height:1.6;-webkit-font-smoothing:antialiased}
+h1,h2,h3{font-family:var(--disp);font-weight:700;letter-spacing:-.02em;text-wrap:balance;margin:0}
+a{color:var(--accent)}
+code,.mono{font-family:var(--mono)}
+.wrap{max-width:1120px;margin:0 auto;padding:0 24px}
+.eyebrow{font-family:var(--mono);font-size:11px;font-weight:500;letter-spacing:.16em;text-transform:uppercase;color:var(--accent-2)}
+.muted{color:var(--muted)}
+
+/* top bar */
+.topbar{position:sticky;top:0;z-index:20;background:color-mix(in srgb,var(--bg) 82%,transparent);backdrop-filter:blur(10px);border-bottom:1px solid var(--line)}
+.topbar .row{display:flex;align-items:center;gap:18px;height:56px}
+.mark{font-family:var(--mono);font-weight:600;font-size:13px;letter-spacing:.02em;display:flex;align-items:center;gap:8px}
+.mark .dot{width:9px;height:9px;border-radius:50%;background:var(--audio);box-shadow:0 0 0 3px color-mix(in srgb,var(--audio) 22%,transparent)}
+.topnav{display:flex;gap:4px;margin-left:auto;flex-wrap:wrap}
+.topnav a{font-family:var(--mono);font-size:12px;color:var(--muted);text-decoration:none;padding:6px 10px;border-radius:7px}
+.topnav a:hover{color:var(--ink);background:var(--surface-2)}
+.tgl{display:inline-flex;align-items:center;justify-content:center;width:34px;height:34px;border:1px solid var(--line);border-radius:9px;background:var(--surface);color:var(--muted);cursor:pointer}
+.tgl:hover{color:var(--ink)}
+
+/* hero */
+.hero{padding:52px 0 30px}
+.hero h1{font-size:clamp(34px,6vw,58px);font-weight:800;line-height:1.02}
+.hero .lede{font-size:18px;max-width:60ch;color:var(--muted);margin:16px 0 0}
+.hero .lede b{color:var(--ink);font-weight:600}
+.stack{margin-top:22px;font-family:var(--mono);font-size:12.5px;color:var(--muted);display:flex;flex-wrap:wrap;gap:6px 14px}
+.stack b{color:var(--ink);font-weight:500}
+
+.tiles{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-top:26px}
+.tile{background:var(--surface);border:1px solid var(--line);border-radius:13px;padding:15px 16px;box-shadow:var(--sh)}
+.tile .k{font-family:var(--mono);font-size:11px;letter-spacing:.06em;text-transform:uppercase;color:var(--muted)}
+.tile .v{font-family:var(--disp);font-weight:700;font-size:19px;margin-top:7px;display:flex;align-items:center;gap:8px}
+.tile .v .pip{width:9px;height:9px;border-radius:50%}
+
+section{padding:38px 0;border-top:1px solid var(--line)}
+.sechead{display:flex;align-items:baseline;gap:14px;flex-wrap:wrap;margin-bottom:6px}
+.sechead h2{font-size:25px}
+.sechead p{margin:0;color:var(--muted);max-width:56ch}
+.lead{color:var(--muted);max-width:64ch;margin:4px 0 24px}
+
+/* pipeline */
+.pipe{display:grid;grid-template-columns:1fr 1fr;gap:16px}
+.lane{border:1px solid var(--line);border-radius:14px;overflow:hidden;background:var(--surface);box-shadow:var(--sh)}
+.lane>.cap{display:flex;align-items:center;gap:9px;padding:12px 16px;font-family:var(--mono);font-size:12px;letter-spacing:.05em;text-transform:uppercase;border-bottom:1px solid var(--line)}
+.lane.audio>.cap{color:var(--audio);background:color-mix(in srgb,var(--audio) 9%,var(--surface))}
+.lane.video>.cap{color:var(--video);background:color-mix(in srgb,var(--video) 9%,var(--surface))}
+.lane .cap .dot{width:9px;height:9px;border-radius:50%}
+.lane.audio .cap .dot{background:var(--audio)} .lane.video .cap .dot{background:var(--video)}
+.steps{padding:14px;display:flex;flex-direction:column;gap:9px}
+.step{display:flex;gap:11px;align-items:flex-start;padding:10px 12px;background:var(--surface-2);border-radius:10px}
+.step .n{font-family:var(--mono);font-size:11px;color:var(--muted);padding-top:2px;min-width:16px}
+.step b{font-weight:600;font-size:14px} .step span{display:block;color:var(--muted);font-size:12.5px;line-height:1.45}
+.merge{margin:16px 0 0;border:1px dashed var(--accent);background:color-mix(in srgb,var(--accent) 7%,var(--surface));border-radius:14px;padding:16px 18px}
+.merge .cap{font-family:var(--mono);font-size:12px;letter-spacing:.05em;text-transform:uppercase;color:var(--accent-2);display:flex;align-items:center;gap:9px;margin-bottom:10px}
+.merge .cap .dot{width:9px;height:9px;border-radius:50%;background:var(--fused)}
+.outs{display:flex;flex-wrap:wrap;gap:8px}
+.chipout{font-family:var(--mono);font-size:12px;background:var(--surface);border:1px solid var(--line);border-radius:20px;padding:6px 13px}
+
+/* filters */
+.filters{display:flex;flex-wrap:wrap;gap:16px;align-items:center;margin:2px 0 22px}
+.fgroup{display:flex;gap:6px;align-items:center;flex-wrap:wrap}
+.fgroup .lbl{font-family:var(--mono);font-size:11px;letter-spacing:.08em;text-transform:uppercase;color:var(--muted);margin-right:2px}
+.chip{font-family:var(--mono);font-size:12px;border:1px solid var(--line);background:var(--surface);color:var(--muted);padding:6px 12px;border-radius:20px;cursor:pointer;transition:.14s}
+.chip:hover{color:var(--ink)}
+.chip[aria-pressed="true"]{background:var(--ink);color:var(--bg);border-color:var(--ink)}
+.chip.sig-audio[aria-pressed="true"]{background:var(--audio);border-color:var(--audio);color:#fff}
+.chip.sig-video[aria-pressed="true"]{background:var(--video);border-color:var(--video);color:#fff}
+.chip.sig-fused[aria-pressed="true"]{background:var(--fused);border-color:var(--fused);color:var(--on-accent)}
+
+.grouplabel{font-family:var(--mono);font-size:12px;letter-spacing:.1em;text-transform:uppercase;color:var(--muted);margin:26px 0 12px;display:flex;align-items:center;gap:12px}
+.grouplabel::after{content:"";flex:1;height:1px;background:var(--line)}
+.grouplabel:first-of-type{margin-top:0}
+
+.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(320px,1fr));gap:14px}
+.det{background:var(--surface);border:1px solid var(--line);border-radius:14px;padding:16px 17px;display:flex;flex-direction:column;gap:11px;box-shadow:var(--sh)}
+.det.hl{border-color:color-mix(in srgb,var(--accent) 45%,var(--line))}
+.det header{display:flex;align-items:flex-start;justify-content:space-between;gap:10px}
+.det h3{font-size:17px;letter-spacing:-.01em}
+.det .q{margin:0;font-size:13.5px;color:var(--muted);font-style:italic}
+.det dl{margin:0;display:flex;flex-direction:column;gap:8px}
+.det dt{font-family:var(--mono);font-size:10.5px;letter-spacing:.08em;text-transform:uppercase;color:var(--accent-2)}
+.det dd{margin:2px 0 0;font-size:13.5px;line-height:1.5}
+.det dd .cue{color:var(--ink);font-weight:600}
+.det footer{margin-top:auto;display:flex;align-items:center;justify-content:space-between;gap:8px;padding-top:11px;border-top:1px solid var(--line)}
+.det footer code{font-size:11.5px;color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.badge{font-family:var(--mono);font-size:10.5px;font-weight:600;letter-spacing:.04em;text-transform:uppercase;padding:4px 9px;border-radius:20px;white-space:nowrap}
+.badge.ok{color:var(--ok);background:var(--ok-bg)} .badge.partial{color:var(--partial);background:var(--partial-bg)} .badge.pending{color:var(--pending);background:var(--pending-bg)}
+.sig{font-family:var(--mono);font-size:10.5px;font-weight:600;letter-spacing:.05em;text-transform:uppercase;display:inline-flex;align-items:center;gap:6px}
+.sig::before{content:"";width:8px;height:8px;border-radius:50%}
+.sig.audio{color:var(--audio)} .sig.audio::before{background:var(--audio)}
+.sig.video{color:var(--video)} .sig.video::before{background:var(--video)}
+.sig.fused{color:var(--fused)} .sig.fused::before{background:var(--fused)}
+.empty{display:none;color:var(--muted);font-family:var(--mono);font-size:13px;padding:24px 0}
+
+/* two-col split */
+.split{display:grid;grid-template-columns:1fr 1fr;gap:16px}
+.panel{background:var(--surface);border:1px solid var(--line);border-radius:14px;padding:20px;box-shadow:var(--sh)}
+.panel h3{font-size:16px;margin-bottom:4px}
+.panel .sub{font-family:var(--mono);font-size:11px;letter-spacing:.06em;text-transform:uppercase;color:var(--muted);margin-bottom:14px}
+.mrow{display:flex;gap:12px;padding:11px 0;border-top:1px solid var(--line)}
+.mrow:first-of-type{border-top:0;padding-top:2px}
+.mrow .nm{font-weight:600;font-size:14px;min-width:0}
+.mrow .nm code{display:block;font-size:11px;color:var(--muted);font-weight:400;margin-top:2px}
+.mrow .st{margin-left:auto;flex-shrink:0}
+.mrow p{margin:4px 0 0;font-size:13px;color:var(--muted);line-height:1.5}
+.mrow .body{min-width:0}
+
+/* finetune */
+.ft{display:grid;grid-template-columns:1.1fr 1fr;gap:16px;align-items:stretch}
+.metrics{display:grid;grid-template-columns:repeat(2,1fr);gap:12px}
+.metric{background:var(--surface);border:1px solid var(--line);border-radius:13px;padding:15px 16px;box-shadow:var(--sh)}
+.metric .n{font-family:var(--disp);font-weight:800;font-size:30px;font-variant-numeric:tabular-nums;line-height:1}
+.metric .n.good{color:var(--ok)} .metric .n.bad{color:var(--partial)}
+.metric .l{font-size:12.5px;color:var(--muted);margin-top:7px;line-height:1.4}
+.bars{background:var(--surface);border:1px solid var(--line);border-radius:14px;padding:20px;box-shadow:var(--sh)}
+.bars h3{font-size:15px;margin-bottom:3px}
+.bars .sub{font-family:var(--mono);font-size:11px;letter-spacing:.05em;text-transform:uppercase;color:var(--muted);margin-bottom:18px}
+.bar{margin:14px 0}
+.bar .top{display:flex;justify-content:space-between;font-size:13px;margin-bottom:6px}
+.bar .top b{font-variant-numeric:tabular-nums;font-family:var(--mono)}
+.track{height:12px;border-radius:7px;background:var(--surface-2);overflow:hidden}
+.fill{height:100%;border-radius:7px}
+.fill.a{background:var(--video)} .fill.b{background:var(--audio)}
+.note{margin-top:14px;font-size:12.5px;color:var(--muted);line-height:1.55;border-top:1px solid var(--line);padding-top:12px}
+
+/* pending */
+.road{display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:14px}
+.rd{background:var(--surface);border:1px solid var(--line);border-left:3px solid var(--accent);border-radius:12px;padding:16px 17px}
+.rd h3{font-size:15px;margin-bottom:6px}
+.rd .why{font-size:11px;font-family:var(--mono);letter-spacing:.05em;text-transform:uppercase;color:var(--partial);margin-bottom:8px}
+.rd p{margin:0;font-size:13.5px;color:var(--muted);line-height:1.55}
+.rd.next{border-left-color:var(--audio)}
+.rd.next .why{color:var(--audio)}
+
+.callout{background:color-mix(in srgb,var(--accent) 6%,var(--surface));border:1px solid color-mix(in srgb,var(--accent) 30%,var(--line));border-radius:14px;padding:18px 20px;margin-top:6px}
+.callout b{color:var(--ink)}
+
+footer.foot{border-top:1px solid var(--line);padding:26px 0 40px;color:var(--muted);font-family:var(--mono);font-size:12px;display:flex;justify-content:space-between;flex-wrap:wrap;gap:10px}
+
+@media (max-width:820px){ .tiles{grid-template-columns:repeat(2,1fr)} .pipe,.split,.ft{grid-template-columns:1fr} .topnav{display:none} }
+@media (prefers-reduced-motion:reduce){*{transition:none!important;scroll-behavior:auto!important}}
+:focus-visible{outline:2px solid var(--accent);outline-offset:2px;border-radius:4px}
+html{scroll-behavior:smooth;scroll-padding-top:70px}
+.repo{display:grid;grid-template-columns:auto 1fr;gap:10px 20px;font-family:var(--mono);font-size:13.5px;align-items:baseline}
+.repo .rk{color:var(--accent-2);letter-spacing:.06em;text-transform:uppercase;font-size:11px;white-space:nowrap}
+.repo .rv{color:var(--ink);word-break:break-word}
+.repo .rv em{color:var(--muted);font-style:normal}
+.filemap{margin-top:18px;border-top:1px solid var(--line);padding-top:16px;display:grid;grid-template-columns:repeat(auto-fill,minmax(258px,1fr));gap:12px 22px}
+.fm code{font-family:var(--mono);font-size:12px;color:var(--accent-2)}
+.fm span{color:var(--muted);display:block;font-size:12.5px;line-height:1.45;margin-top:2px}
+[hidden]{display:none!important}
+img{max-width:100%}
+</style>
+</head>
+<body>
+
+
+<div class="topbar"><div class="wrap row">
+  <span class="mark"><span class="dot"></span>DROP&#8209;SHOT&nbsp;/&nbsp;detection</span>
+  <nav class="topnav">
+    <a href="#pipeline">Pipeline</a>
+    <a href="#catalog">What we detect</a>
+    <a href="#models">Models</a>
+    <a href="#finetune">Ball fine-tune</a>
+    <a href="#pending">Pending</a>
+    <a href="#code">Code</a>
+  </nav>
+  <button class="tgl" id="themeBtn" aria-label="Toggle light / dark" title="Toggle theme">◐</button>
+</div></div>
+
+<header class="hero"><div class="wrap">
+  <span class="eyebrow">System handbook &middot; compiled for the team</span>
+  <h1>How the padel detection works — and what's still open</h1>
+  <p class="lede">A plain-language reference for <b>every signal the system reads</b> off a match video: which shots, players, and stats it finds, <b>exactly how each one is identified</b>, which model or method does it, and what's left to build. Written so anyone can pick it up while Hamza is away.</p>
+  <div class="stack">
+    <span><b>Backbone:</b> match audio (paddle "crack")</span>
+    <span><b>Players:</b> YOLO11s + court homography</span>
+    <span><b>Ball:</b> TrackNet (tennis weights)</span>
+    <span><b>Auto-scoring:</b> beta</span>
+  </div>
+  <div class="tiles">
+    <div class="tile"><div class="k">Shot count &amp; team</div><div class="v"><span class="pip" style="background:var(--ok)"></span>Working</div></div>
+    <div class="tile"><div class="k">Player tracking &amp; stats</div><div class="v"><span class="pip" style="background:var(--ok)"></span>Working</div></div>
+    <div class="tile"><div class="k">Ball tracking</div><div class="v"><span class="pip" style="background:var(--partial)"></span>Partial</div></div>
+    <div class="tile"><div class="k">Ball fine-tune (our cam)</div><div class="v"><span class="pip" style="background:var(--partial)"></span>Pending</div></div>
+  </div>
+</div></header>
+
+<section id="pipeline"><div class="wrap">
+  <div class="sechead"><span class="eyebrow">01</span><h2>The pipeline, end to end</h2></div>
+  <p class="lead">Two independent inputs — the <b style="color:var(--audio)">match audio</b> and the <b style="color:var(--video)">match video</b> — are read separately, then fused. The audio says <em>when</em> a shot happened; the video says <em>where</em> everyone was. Almost everything downstream is built from those two facts.</p>
+  <div class="pipe">
+    <div class="lane audio">
+      <div class="cap"><span class="dot"></span>Audio lane — listening</div>
+      <div class="steps">
+        <div class="step"><span class="n">1</span><div><b>Find the cracks</b><span>Every carbon-paddle strike is a sharp broadband crack. Mark each one across the whole match.</span></div></div>
+        <div class="step"><span class="n">2</span><div><b>Group into rallies</b><span>A burst of cracks is a point; the quiet between bursts is the gap. No scoreboard is read.</span></div></div>
+        <div class="step"><span class="n">3</span><div><b>Attribute the end</b><span>The mic is nearer one end, so that end sounds louder — which tells us which side hit.</span></div></div>
+      </div>
+    </div>
+    <div class="lane video">
+      <div class="cap"><span class="dot"></span>Video lane — watching</div>
+      <div class="steps">
+        <div class="step"><span class="n">1</span><div><b>Calibrate the court</b><span>Colour-mask the blue court → a homography that turns any pixel into a court position.</span></div></div>
+        <div class="step"><span class="n">2</span><div><b>Track the four players</b><span>YOLO finds the people; each is given a fixed A/B/C/D letter and followed frame to frame.</span></div></div>
+        <div class="step"><span class="n">3</span><div><b>Read the ball (when visible)</b><span>TrackNet reads 3 stacked frames and guesses the ball's position — sparse on our camera.</span></div></div>
+      </div>
+    </div>
+  </div>
+  <div class="merge">
+    <div class="cap"><span class="dot"></span>Fused — the two lanes combined</div>
+    <div class="outs">
+      <span class="chipout">Shot count</span>
+      <span class="chipout">Which team</span>
+      <span class="chipout">Which player</span>
+      <span class="chipout">Attack vs defence</span>
+      <span class="chipout">Serve &amp; server</span>
+      <span class="chipout">Player heatmaps</span>
+      <span class="chipout">Per-player stats</span>
+      <span class="chipout">Rally boundaries</span>
+      <span class="chipout">Over-count cleanup</span>
+    </div>
+  </div>
+</div></section>
+
+<section id="catalog"><div class="wrap">
+  <div class="sechead"><span class="eyebrow">02</span><h2>What we detect, and how each one is identified</h2></div>
+  <p class="lead">The core of this handbook. Each card is one thing the system works out, the <b>method</b> behind it, and the <b>tell-tale cue</b> it keys on. Filter by how ready it is, or by which signal it comes from.</p>
+
+  <div class="filters">
+    <div class="fgroup"><span class="lbl">Status</span>
+      <button class="chip f-status" data-v="all" aria-pressed="true">All</button>
+      <button class="chip f-status" data-v="working" aria-pressed="false">Working</button>
+      <button class="chip f-status" data-v="partial" aria-pressed="false">Partial</button>
+      <button class="chip f-status" data-v="pending" aria-pressed="false">Pending</button>
+    </div>
+    <div class="fgroup"><span class="lbl">Signal</span>
+      <button class="chip f-signal" data-v="all" aria-pressed="true">All</button>
+      <button class="chip f-signal sig-audio" data-v="audio" aria-pressed="false">Audio</button>
+      <button class="chip f-signal sig-video" data-v="video" aria-pressed="false">Video</button>
+      <button class="chip f-signal sig-fused" data-v="fused" aria-pressed="false">Fused</button>
+    </div>
+  </div>
+
+  <div class="grouplabel">Shots &amp; scoring</div>
+  <div class="grid" data-grid>
+    <article class="det" data-signal="audio" data-st="working">
+      <header><h3>Shot timing</h3><span class="badge ok">Working</span></header>
+      <p class="q">When was each ball actually struck?</p>
+      <dl>
+        <dt>Method</dt><dd>Listens to the whole match and marks every paddle strike — no video, no scoreboard.</dd>
+        <dt>Tell-tale cue</dt><dd>A sudden energy spike (an <span class="cue">onset</span>) in the ~2.5–9&nbsp;kHz band, rising above a rolling baseline. Nothing else on a padel court sounds like a carbon paddle.</dd>
+      </dl>
+      <footer><span class="sig audio">Audio</span><code>match_points.py</code></footer>
+    </article>
+
+    <article class="det" data-signal="fused" data-st="working">
+      <header><h3>Rally boundaries</h3><span class="badge ok">Working</span></header>
+      <p class="q">Where does each point start and end?</p>
+      <dl>
+        <dt>Method</dt><dd>Groups cracks into bursts, then asks the video to settle the two cases audio gets wrong: a long lob (3&nbsp;s of silence mid-rally) and a serve fault (a lone burst).</dd>
+        <dt>Tell-tale cue</dt><dd>Gap length between strikes, checked against whether players stood in a <span class="cue">serve formation</span> at that moment.</dd>
+      </dl>
+      <footer><span class="sig fused">Fused</span><code>match_points.py · match_refine.py</code></footer>
+    </article>
+
+    <article class="det" data-signal="audio" data-st="working">
+      <header><h3>Which end hit</h3><span class="badge ok">Working</span></header>
+      <p class="q">Which side of the net played the shot?</p>
+      <dl>
+        <dt>Method</dt><dd>The mic sits nearer one end, so an identical shot is louder from that end. Loudness places each strike on an end.</dd>
+        <dt>Tell-tale cue</dt><dd>Relative <span class="cue">loudness between ends</span>, tightened by the rule that a padel ball must alternate ends every touch.</dd>
+      </dl>
+      <footer><span class="sig audio">Audio</span><code>match_contacts.py</code></footer>
+    </article>
+
+    <article class="det" data-signal="fused" data-st="working">
+      <header><h3>Which team</h3><span class="badge ok">Working</span></header>
+      <p class="q">Which of the two teams hit it?</p>
+      <dl>
+        <dt>Method</dt><dd>In padel each pair stays on its own half for the whole game, so the end already <em>is</em> the team — near = Team A, far = Team B.</dd>
+        <dt>Tell-tale cue</dt><dd>Court <span class="cue">end → fixed team</span> mapping. No extra detection needed.</dd>
+      </dl>
+      <footer><span class="sig fused">Fused</span><code>match_shots.py</code></footer>
+    </article>
+
+    <article class="det hl" data-signal="fused" data-st="working">
+      <header><h3>Which player</h3><span class="badge ok">Working</span></header>
+      <p class="q">Which of the four hit the ball?</p>
+      <dl>
+        <dt>Method</dt><dd>At the instant of the crack the striker is swinging and the other three are not, so their outline changes far more between frames. When the ball is detected, we correct to the player it's actually on.</dd>
+        <dt>Tell-tale cue</dt><dd>Biggest <span class="cue">frame-to-frame body motion</span> in the ~100&nbsp;ms around the strike (a "swing score"); confidence = the margin over the 2nd-biggest mover.</dd>
+      </dl>
+      <footer><span class="sig fused">Fused</span><code>match_lastshot.py</code></footer>
+    </article>
+
+    <article class="det" data-signal="video" data-st="working">
+      <header><h3>Attack vs defence</h3><span class="badge ok">Working</span></header>
+      <p class="q">Net shot, or a scramble off the back glass?</p>
+      <dl>
+        <dt>Method</dt><dd>Reads the hitter's depth on the court at the moment of contact and bands it at 3&nbsp;m — the service line.</dd>
+        <dt>Tell-tale cue</dt><dd>Within 3&nbsp;m of the net → <span class="cue">attacking</span>; within 3&nbsp;m of the back glass → <span class="cue">defending</span>.</dd>
+      </dl>
+      <footer><span class="sig video">Video</span><code>match_shots.py</code></footer>
+    </article>
+
+    <article class="det" data-signal="video" data-st="working">
+      <header><h3>Serve &amp; server</h3><span class="badge ok">Working</span></header>
+      <p class="q">Which end served each point, from where?</p>
+      <dl>
+        <dt>Method</dt><dd>At a point's start the four players form a giveaway shape; that shape plus the serve-rotation rule pins the serving end.</dd>
+        <dt>Tell-tale cue</dt><dd>Server <span class="cue">deep in a back corner</span>, partner at the net, opponents back — and the rule that the serving end holds two games, then flips.</dd>
+      </dl>
+      <footer><span class="sig video">Video</span><code>match_serves.py</code></footer>
+    </article>
+  </div>
+
+  <div class="grouplabel">Players &amp; tracking</div>
+  <div class="grid" data-grid>
+    <article class="det" data-signal="video" data-st="working">
+      <header><h3>Player tracking (A/B/C/D)</h3><span class="badge ok">Working</span></header>
+      <p class="q">Where is each of the four, every frame?</p>
+      <dl>
+        <dt>Method</dt><dd>YOLO detects the people; a letter is handed out once by starting corner (top-left = A …) and then belongs to the person, even across the court.</dd>
+        <dt>Tell-tale cue</dt><dd>Person boxes projected through the <span class="cue">court homography</span> to a top-down position.</dd>
+      </dl>
+      <footer><span class="sig video">Video</span><code>track_players.py · YOLO11s</code></footer>
+    </article>
+
+    <article class="det" data-signal="video" data-st="working">
+      <header><h3>Player identity</h3><span class="badge ok">Working</span></header>
+      <p class="q">Which real person is which, across a whole match?</p>
+      <dl>
+        <dt>Method</dt><dd>Recognises each by kit — shirt colour and shorts colour — so identity survives the change of ends.</dd>
+        <dt>Tell-tale cue</dt><dd>A <span class="cue">kit-colour signature</span> (a histogram over a shared colour codebook). Flagged automatically when two kits are too alike to separate.</dd>
+      </dl>
+      <footer><span class="sig video">Video</span><code>match_players.py</code></footer>
+    </article>
+
+    <article class="det" data-signal="video" data-st="working">
+      <header><h3>Heatmaps</h3><span class="badge ok">Working</span></header>
+      <p class="q">Where did each player spend the point?</p>
+      <dl>
+        <dt>Method</dt><dd>A long-exposure of each player's feet: accumulate their position over the clip and stain a top-down court.</dd>
+        <dt>Tell-tale cue</dt><dd><span class="cue">Dwell time per court cell</span> — green where they passed through, red where they camped.</dd>
+      </dl>
+      <footer><span class="sig video">Video</span><code>player_heatmap.py</code></footer>
+    </article>
+
+    <article class="det" data-signal="video" data-st="working">
+      <header><h3>Per-player stats</h3><span class="badge ok">Working</span></header>
+      <p class="q">Distance, speed, coverage, net-vs-back time.</p>
+      <dl>
+        <dt>Method</dt><dd>Falls straight out of the A/B/C/D tracks once you know where everyone was — no ball needed anywhere.</dd>
+        <dt>Tell-tale cue</dt><dd><span class="cue">Track geometry over time</span>: metres run, top speed, area covered, time at the net vs the glass, and how well a pair holds its shape.</dd>
+      </dl>
+      <footer><span class="sig video">Video</span><code>player_stats.py</code></footer>
+    </article>
+
+    <article class="det" data-signal="video" data-st="working">
+      <header><h3>Session split</h3><span class="badge ok">Working</span></header>
+      <p class="q">Is this one match, or a whole evening?</p>
+      <dl>
+        <dt>Method</dt><dd>Splits a long recording wherever the set of people on court changes and stays changed — so a league night isn't read as one impossible match.</dd>
+        <dt>Tell-tale cue</dt><dd>A shift in the <span class="cue">kit signature</span> across points.</dd>
+      </dl>
+      <footer><span class="sig video">Video</span><code>match_sessions.py</code></footer>
+    </article>
+  </div>
+
+  <div class="grouplabel">Ball &amp; court</div>
+  <div class="grid" data-grid>
+    <article class="det hl" data-signal="video" data-st="partial">
+      <header><h3>Ball position</h3><span class="badge partial">Partial</span></header>
+      <p class="q">Where is the ball right now?</p>
+      <dl>
+        <dt>Method</dt><dd>A neural tracker (TrackNet) reads 3 stacked frames → a heat-map of the likely ball → fits a circle. Filtered to inside the court and gap-filled between hits.</dd>
+        <dt>Tell-tale cue</dt><dd>The <span class="cue">3-frame motion signature</span> of a small, fast object. On tennis weights it catches the ball only where it's clearly moving — sparse and noisy on our camera.</dd>
+      </dl>
+      <footer><span class="sig video">Video</span><code>TrackNet · tracknet.pt</code></footer>
+    </article>
+
+    <article class="det" data-signal="video" data-st="working">
+      <header><h3>Court calibration</h3><span class="badge ok">Working</span></header>
+      <p class="q">Where is the court inside the frame?</p>
+      <dl>
+        <dt>Method</dt><dd>Colour-mask the blue playing surface, fit a homography, and turn any pixel into normalised court coordinates. Everything geometric leans on this.</dd>
+        <dt>Tell-tale cue</dt><dd>The court's <span class="cue">blue colour</span> and known rectangle → coordinates where the net sits at the halfway line.</dd>
+      </dl>
+      <footer><span class="sig video">Video</span><code>calibrate() · match_lastshot.py</code></footer>
+    </article>
+  </div>
+
+  <div class="grouplabel">Cleanup &amp; fusion — added this cycle</div>
+  <div class="grid" data-grid>
+    <article class="det" data-signal="fused" data-st="working">
+      <header><h3>Echo / wall over-count filter</h3><span class="badge ok">Working</span></header>
+      <p class="q">Was that "shot" real, or an echo / wall hit?</p>
+      <dl>
+        <dt>Method</dt><dd>Drops a counted shot only when all three hold at once — the fingerprint of a non-paddle sound.</dd>
+        <dt>Tell-tale cue</dt><dd><span class="cue">Unsure who hit</span> (low margin) <b>+</b> no ball nearby <b>+</b> crammed against another shot (&lt;0.7&nbsp;s). Took one rally from 15 → 11 real shots.</dd>
+      </dl>
+      <footer><span class="sig fused">Fused</span><code>rally cleanup</code></footer>
+    </article>
+
+    <article class="det" data-signal="fused" data-st="working">
+      <header><h3>Post-point noise filter</h3><span class="badge ok">Working</span></header>
+      <p class="q">Did the point already end?</p>
+      <dl>
+        <dt>Method</dt><dd>Once the ball is seen leaving play and not coming back, every later sound (a clap, the pick-up) is ignored.</dd>
+        <dt>Tell-tale cue</dt><dd>Ball detected <span class="cue">past a baseline with no return</span> for the rest of the rally.</dd>
+      </dl>
+      <footer><span class="sig fused">Fused</span><code>rally cleanup</code></footer>
+    </article>
+
+    <article class="det" data-signal="fused" data-st="working">
+      <header><h3>Teammate ball-fix</h3><span class="badge ok">Working</span></header>
+      <p class="q">Right team, but was it the right teammate?</p>
+      <dl>
+        <dt>Method</dt><dd>The motion-based player pick can grab the wrong same-side teammate. When the ball is visible, the box snaps to the player it's actually on.</dd>
+        <dt>Tell-tale cue</dt><dd><span class="cue">Ball-to-player distance</span> among the players on the hitting side.</dd>
+      </dl>
+      <footer><span class="sig fused">Fused</span><code>rally cleanup</code></footer>
+    </article>
+  </div>
+
+  <p class="empty" id="empty">No detectors match this filter.</p>
+</div></section>
+
+<section id="models"><div class="wrap">
+  <div class="sechead"><span class="eyebrow">03</span><h2>The models &amp; methods behind it</h2></div>
+  <p class="lead">Four building blocks carry the whole system, and a few approaches were tried and set aside. Being clear about the second list matters as much as the first — it's what we already know <em>not</em> to spend time on.</p>
+  <div class="split">
+    <div class="panel">
+      <h3>In use</h3>
+      <div class="sub">the working stack</div>
+      <div class="mrow"><div class="body"><div class="nm">Audio onset detection<code>custom DSP · the backbone</code></div><p>Finds the paddle crack. Everything about shots and rallies starts here. High precision; recall is good but not perfect.</p></div><span class="st"><span class="badge ok">Working</span></span></div>
+      <div class="mrow"><div class="body"><div class="nm">YOLO11s — people<code>track_players.py</code></div><p>Detects and tracks the four players every frame. Rock-solid on our footage.</p></div><span class="st"><span class="badge ok">Working</span></span></div>
+      <div class="mrow"><div class="body"><div class="nm">Court homography<code>colour mask → transform</code></div><p>Turns pixels into court positions. The quiet foundation under tracking, stats, heatmaps, serve and attack/defence.</p></div><span class="st"><span class="badge ok">Working</span></span></div>
+      <div class="mrow"><div class="body"><div class="nm">TrackNet — ball<code>tracknet.pt (tennis)</code></div><p>Neural ball tracker. Accurate where the ball is clearly moving, but sparse and noisy on our camera.</p></div><span class="st"><span class="badge partial">Partial</span></span></div>
+    </div>
+    <div class="panel">
+      <h3>Tried &amp; set aside</h3>
+      <div class="sub">dead ends, documented</div>
+      <div class="mrow"><div class="body"><div class="nm">YOLO for the ball</div><p>Locked onto a static court-side logo (zero motion) instead of the ball. A general object detector can't isolate a tiny, fast, low-contrast ball.</p></div><span class="st"><span class="badge pending">Rejected</span></span></div>
+      <div class="mrow"><div class="body"><div class="nm">Public padel ball weights</div><p>Padex / padel_analytics releases turned out to be tennis weights or missing entirely — no usable padel ball model exists off the shelf.</p></div><span class="st"><span class="badge pending">None found</span></span></div>
+      <div class="mrow"><div class="body"><div class="nm">Ball-based veto of shots</div><p>Using the noisy tennis ball to <em>cancel</em> shots wrongly killed real ones. Reworked into additive cues (attribute / clean up), never a veto.</p></div><span class="st"><span class="badge pending">Reworked</span></span></div>
+      <div class="mrow"><div class="body"><div class="nm">WPT padel fine-tune, deployed as-is</div><p>Trained well (see next section) but doesn't transfer to our camera. Kept as a starting point, not shipped.</p></div><span class="st"><span class="badge pending">Held</span></span></div>
+    </div>
+  </div>
+</div></section>
+
+<section id="finetune"><div class="wrap">
+  <div class="sechead"><span class="eyebrow">04</span><h2>The ball fine-tune — what happened</h2></div>
+  <p class="lead">We re-trained the tennis ball-finder on 100k labelled padel frames (pro-tour footage) on a free cloud GPU. It worked — and then taught us something important about why it still isn't enough.</p>
+  <div class="ft">
+    <div class="metrics">
+      <div class="metric"><div class="n bad">0.007</div><div class="l">First score — the model found a lazy shortcut and predicted "no ball" everywhere (most frames have no ball).</div></div>
+      <div class="metric"><div class="n good">0.78</div><div class="l">Best score after removing the shortcut (train only on frames that <em>have</em> a ball). Genuinely good on pro footage.</div></div>
+      <div class="metric"><div class="n">~80%</div><div class="l">Of visible balls found, on the pro-tour validation video it practised on.</div></div>
+      <div class="metric"><div class="n bad">1/3</div><div class="l">As many detections on <em>our</em> camera vs the plain tennis model — it got worse, not better, here.</div></div>
+    </div>
+    <div class="bars">
+      <h3>Detections on our own footage</h3>
+      <div class="sub">rally 18 · same clip · same pipeline</div>
+      <div class="bar"><div class="top"><span>Tennis model</span><b>204</b></div><div class="track"><div class="fill a" style="width:100%"></div></div></div>
+      <div class="bar"><div class="top"><span>Padel model (pro-trained)</span><b>63</b></div><div class="track"><div class="fill b" style="width:31%"></div></div></div>
+      <p class="note"><b>The lesson:</b> a padel dataset isn't enough — the ball-finder has to practise on <em>our</em> camera. The pro model learned padel balls in a bright, close, TV-broadcast look; our fixed, dim, security-style angle is a different visual world, so it transfers poorly. Input-geometry tweaks were tested and ruled out — it's the domain, not a setting.</p>
+    </div>
+  </div>
+</div></section>
+
+<section id="pending"><div class="wrap">
+  <div class="sechead"><span class="eyebrow">05</span><h2>What's pending</h2></div>
+  <p class="lead">The audio-driven side (shots, teams, players, stats, heatmaps) is solid today. The open items all trace back to one thing: a ball-finder that works on our own camera.</p>
+  <div class="road">
+    <div class="rd next"><div class="why">The real fix — do first</div><h3>Fine-tune on our own footage</h3><p>Label a few hundred frames from the Padel Central camera and continue training <em>from</em> the pro model. This unlocks the two items below. Bottleneck is human marking time, not video count or compute.</p></div>
+    <div class="rd"><div class="why">Gated on the ball</div><h3>Metal-net &amp; wall veto</h3><p>Flag the "shot" that was really a ball into the fence. Needs a ball reliably detected at the contact instant — which today's tracker misses exactly there.</p></div>
+    <div class="rd"><div class="why">Gated on the ball</div><h3>Rally-tail robustness</h3><p>The end-of-point cases (ball dead / picked up) rely on a ball track that currently flip-flops at the tail. A reliable ball makes the post-point filter trustworthy.</p></div>
+    <div class="rd"><div class="why">Validation</div><h3>Match-wide threshold check</h3><p>The cleanup filters (echo, post-point) are tuned on one rally. Run them across the full match and spot-check before trusting the numbers everywhere.</p></div>
+  </div>
+  <div class="callout"><b>One-line status:</b> the listening-based detection — counting shots, teams, players, stats, heatmaps — works and is now much cleaner. Everything still open comes down to teaching the ball-finder to see our specific camera, and we've mapped exactly how to do it.</div>
+</div></section>
+
+<section id="code"><div class="wrap">
+  <div class="sechead"><span class="eyebrow">06</span><h2>Where the code lives</h2></div>
+  <p class="lead">Everything in this handbook is real, running code in one private repo. Ask Hamza for access — he adds you as a GitHub collaborator (repo → Settings → Collaborators). Every script has a plain-words header that reads like these cards.</p>
+  <div class="panel">
+    <div class="repo">
+      <span class="rk">Repo</span><span class="rv">github.com/MHA10/drop-shot-streaming-scripts-ubuntu &nbsp;<em>· private</em></span>
+      <span class="rk">Branch</span><span class="rv">feat/player-abcd-tracking</span>
+      <span class="rk">Core</span><span class="rv">scripts/ — the detection pipeline</span>
+      <span class="rk">Fine-tune</span><span class="rv">padel-ball-finetune/ — the Kaggle training scripts</span>
+    </div>
+    <div class="filemap">
+      <div class="fm"><code>scripts/match_points.py</code><span>Find the paddle cracks; group into rallies.</span></div>
+      <div class="fm"><code>scripts/match_refine.py</code><span>Fix lob / serve-fault miscounts using the video.</span></div>
+      <div class="fm"><code>scripts/match_contacts.py</code><span>Which end hit — from mic loudness.</span></div>
+      <div class="fm"><code>scripts/match_lastshot.py</code><span>Which player hit (swing motion) + court calibration.</span></div>
+      <div class="fm"><code>scripts/match_shots.py</code><span>Shot count, team, attack vs defence.</span></div>
+      <div class="fm"><code>scripts/match_serves.py</code><span>Serving end &amp; server, from player geometry.</span></div>
+      <div class="fm"><code>scripts/match_players.py</code><span>Stable player identity by kit colour.</span></div>
+      <div class="fm"><code>scripts/match_sessions.py</code><span>Split a recording into separate matches.</span></div>
+      <div class="fm"><code>scripts/track_players.py</code><span>YOLO A/B/C/D tracking + top-down radar.</span></div>
+      <div class="fm"><code>scripts/player_stats.py</code><span>Per-player match stats from the tracks.</span></div>
+      <div class="fm"><code>scripts/player_heatmap.py</code><span>Per-player court heatmaps.</span></div>
+      <div class="fm"><code>padel-ball-finetune/kaggle_finetune_padel.py</code><span>The ball fine-tune (runs on a Kaggle GPU).</span></div>
+    </div>
+  </div>
+</div></section>
+
+<footer class="foot"><div class="wrap" style="display:flex;justify-content:space-between;flex-wrap:wrap;gap:10px;width:100%">
+  <span>DropShot · Detection handbook · compiled 10 Sep 2026</span>
+  <span>Internal reference · drop-shot.live</span>
+</div></footer>
+
+<script>
+(function(){
+  var root=document.documentElement, btn=document.getElementById('themeBtn');
+  function sysDark(){return window.matchMedia&&window.matchMedia('(prefers-color-scheme:dark)').matches;}
+  try{var s=localStorage.getItem('ds-theme'); if(s) root.setAttribute('data-theme',s);}catch(e){}
+  function cur(){return root.getAttribute('data-theme')|| (sysDark()?'dark':'light');}
+  btn.addEventListener('click',function(){
+    var next=cur()==='dark'?'light':'dark';
+    root.setAttribute('data-theme',next);
+    try{localStorage.setItem('ds-theme',next);}catch(e){}
+  });
+
+  // filters
+  var status='all', signal='all';
+  var cards=[].slice.call(document.querySelectorAll('.det'));
+  var empty=document.getElementById('empty');
+  function apply(){
+    var shown=0;
+    cards.forEach(function(c){
+      var okS = status==='all' || c.getAttribute('data-st')===status;
+      var okG = signal==='all' || c.getAttribute('data-signal')===signal;
+      var vis = okS&&okG; c.hidden=!vis; if(vis) shown++;
+    });
+    // hide empty group labels
+    document.querySelectorAll('[data-grid]').forEach(function(g){
+      var any=[].slice.call(g.querySelectorAll('.det')).some(function(c){return !c.hidden;});
+      g.style.display=any?'':'none';
+      var lbl=g.previousElementSibling;
+      if(lbl&&lbl.classList.contains('grouplabel')) lbl.style.display=any?'':'none';
+    });
+    empty.style.display=shown?'none':'block';
+  }
+  function wire(sel,set){
+    var group=document.querySelectorAll(sel);
+    group.forEach(function(ch){ ch.addEventListener('click',function(){
+      group.forEach(function(o){o.setAttribute('aria-pressed','false');});
+      ch.setAttribute('aria-pressed','true'); set(ch.getAttribute('data-v')); apply();
+    });});
+  }
+  wire('.f-status',function(v){status=v;});
+  wire('.f-signal',function(v){signal=v;});
+})();
+</script>
+
+</body>
+</html>

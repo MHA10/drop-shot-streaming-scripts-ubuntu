@@ -1,0 +1,13 @@
+Yaar the videos and the compute are great, but that's not the bottleneck — the model doesn't learn from raw videos. It learns from frames where someone's marked where the ball is.
+
+How training works: you show it a frame, it guesses where the ball is, you compare that guess to the human mark, and it corrects itself a bit. Do that over thousands of frames and it slowly learns. So yeah — we manually mark where the ball is, and that marking IS the training.
+
+The catch: raw video teaches it nothing by itself. No mark = no answer for it to check against. So auto-ingesting 500 streams doesn't help the learning part.
+
+The real cost is the marking time, not videos or GPUs. But we don't need all 500 videos or every frame — a few hundred to a couple thousand marked frames from our own camera is enough to adapt it.
+
+And we can make the marking fast: let the current ball-finder pre-mark each frame and a human just fixes the wrong ones, and only every 5th–10th frame instead of all of them.
+
+Your setup still matters a lot though — the compute makes the training run fast, and once the finder's trained, your ingestion pipeline is perfect for running it across all 500 videos to auto-pull the shots and stats.
+
+So the plan: I set up a quick marking tool, we label a few hundred frames from our own camera, train on those, then your pipeline runs it on everything.
