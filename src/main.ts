@@ -24,9 +24,11 @@ import { NullBallReframer } from "./infrastructure/services/NullBallReframer";
 import { PythonBallReframer } from "./infrastructure/services/PythonBallReframer";
 import { YouTubeUploadService } from "./infrastructure/services/YouTubeUploadService";
 import { CaptureHighlightUseCase } from "./application/use-cases/CaptureHighlightUseCase";
+import { MatchStatsService } from "./infrastructure/services/MatchStatsService";
 
 class Application {
   private streamManager?: StreamManagerService;
+  private matchStats?: MatchStatsService;
   private supabaseListener?: SupabaseListener;
   private highlightSignalSource?: SerialHighlightListener;
   private readonly adRotationRegistry = new AdRotationRegistry();
@@ -343,6 +345,18 @@ class Application {
         this.logger.info("Supabase is disabled via configuration");
       }
 
+      // Near-live match stats — built ONLY when enabled, so a box with stats
+      // off has zero new runtime behaviour. Started before the stream manager
+      // so it has tidied up after the last run before any start event lands.
+      if (config.get().stats.enabled) {
+        this.matchStats = new MatchStatsService(
+          config.get(),
+          this.httpClient,
+          this.logger
+        );
+        await this.matchStats.start();
+      }
+
       // Initialize stream manager
       this.streamManager = new StreamManagerService(
         streamRepository,
@@ -353,7 +367,8 @@ class Application {
         this.logger,
         config,
         this.httpClient,
-        supabaseListener
+        supabaseListener,
+        this.matchStats
       );
 
       // Start the stream manager
@@ -380,6 +395,8 @@ class Application {
         this.adRotationRegistry.stopAll();
         // Stop all highlight buffer retention sweeps.
         this.highlightBufferRegistry.stopAll();
+        // Ask stats readers to save and stop; their matches resume after restart.
+        this.matchStats?.shutdown();
         if (this.streamManager) {
           await this.streamManager.stop();
         }

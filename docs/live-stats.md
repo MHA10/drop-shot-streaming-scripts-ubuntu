@@ -95,12 +95,55 @@ Each chunk logs something like:
 > These numbers are illustrative. **The real figures come from the first run on the box** — the
 > whole point of that logged line is to measure it on the actual processor.
 
-## Run it
+## Run it from the streamer (the v1 way)
+
+Since 2026-10-18 the streamer app runs the reader itself, so nobody starts it by hand:
+
+1. **Court goes live** (backend's start event) → the streamer starts a reader for that court,
+   in a new match folder under `STATS_OUTPUT_DIR/<courtId>/`. It reads the camera's **low-res
+   stream**, worked out from the stream's camera address (Hikvision `…/Channels/101` → `…/102`,
+   Dahua `subtype=0` → `subtype=1`). Unknown camera brand → no stats for that court, logged.
+2. **Court stops** (backend's stop event) → the reader is asked to finish, writes its final
+   `stats.json` + `heatmap.png`, and the folder joins the **outbox**.
+3. **Outbox** → uploads the heatmap to Cloudinary, sends the numbers + picture link to the
+   backend (`docs/stats-db-handoff.md`), and deletes the folder once the backend says "got it".
+   No answer, or an error → it keeps the folder and tries again (1 min, doubling up to 1 h).
+
+Safe by design: stream retries and repeated start events don't restart the reader (that would
+split the match); an app restart mid-match picks the same folder back up; a reader that keeps
+crashing gives up for that match without touching the stream.
+
+**Settings** (the streamer's environment; everything is off unless `STATS_ENABLED=true`):
+
+| setting | default | what it does |
+|---|---|---|
+| `STATS_ENABLED` | `false` | master switch — off means no readers, no outbox, nothing |
+| `STATS_PYTHON` | `python3` | the Python that has `ultralytics`/`opencv`/`numpy` (usually a venv) |
+| `STATS_MODEL_PATH` | `./yolo11s.pt` | the player-finder weights (not shipped in the npm package) |
+| `STATS_OUTPUT_DIR` | `./match-stats` | match folders + outbox |
+| `STATS_TARGET_FPS` / `STATS_IMGSZ` / `STATS_THREADS` / `STATS_CLIP_SEC` | `3` / `960` / `2` / `30` | reader dials (ds-box result) |
+| `STATS_MAX_READERS` | `1` | courts that may run a reader at once — **raise only after a speed check on that box** |
+| `STATS_ALLOW_MAIN_STREAM` | `false` | if the low-res address can't be worked out, read the HD stream instead (heavier) |
+| `STATS_MAX_MATCH_MIN` | `240` | finish a reader whose stop event never came |
+| `STATS_SEND_ENABLED` | `false` | send to the backend. **Leave off until the backend route exists** — matches wait in the outbox meanwhile |
+| `STATS_SEND_PATH` | `/api/v1/padel-grounds/{groundId}/courts/{courtId}/stats` | backend route; change it here if the backend names it differently |
+| `STATS_KEEP_DAYS` | `14` | outbox entries older than this are deleted unsent (protects the disk) |
+
+Heatmap upload uses the existing `CLOUDINARY_API_KEY` / `CLOUDINARY_API_SECRET`; without them the
+numbers still go, with `heatmapUrl: null`.
+
+**Don't also run the pm2 reader below on a box with `STATS_ENABLED=true`** — that's two readers
+on one court, double the CPU.
+
+Each match folder holds `reader.log` (the reader's own log, including the "are we keeping up?"
+lines) while the match runs — the first place to look if a court's stats look wrong.
+
+## Run it by hand (testing)
 
 **One-time setup on the box:** install the same Python vision libraries `track_players.py` needs
 (`ultralytics` + `opencv`) and have `yolo11s.pt` present.
 
-**Reuse the streamer's buffer chunks (preferred):**
+**Reuse the streamer's buffer chunks:**
 
 ```bash
 python3 scripts/live_stats.py --source buffer \
@@ -161,5 +204,9 @@ treated as a previous match and it starts fresh.
 - **The fancy share-card** (the 9:16 card with a highlight clip playing in the middle) is still
   made the old way, from a saved clip at match end (`player_heatmap.py`). This live card is the
   four court maps only — no centre clip — because it spans the whole match and keeps no video.
-- **Outputs are local files.** Pushing `stats.json` to the product / Supabase is a deliberate
-  next step, not in this version.
+- **Sending is built but off.** The streamer queues each finished match and sends it to the
+  backend once `STATS_SEND_ENABLED=true` — which waits on the backend's receiving route and
+  match id (`docs/stats-db-handoff.md` §3).
+- **One label can hold different people over a full match.** Pairs change ends every two games
+  and the reader labels players by which end they're on, so after a changeover slot `C` holds a
+  player from the other pair. Open; needs a full continuous match recording to build and test.

@@ -15,6 +15,10 @@ tools/reels/.venv/
 # player tracker: ~2 GB venv and the downloaded detector weights
 tools/reels/.venv-track/
 tools/reels/models/
+# near-live stats: local test venv (numpy/opencv/ultralytics) at the repo root
+.venv-stats/
+# near-live stats: per-match working folders + the send outbox (STATS_OUTPUT_DIR)
+match-stats/
 local-reels/
 /reel-*.mp4
 /highlight-*.mp4

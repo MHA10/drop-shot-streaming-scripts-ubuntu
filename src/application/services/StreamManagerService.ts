@@ -12,6 +12,7 @@ import * as fs from "fs/promises";
 import * as path from "path";
 import * as https from "https";
 import { SupabaseListener } from "../../infrastructure/listeners/SupabaseListener";
+import { MatchStatsService } from "../../infrastructure/services/MatchStatsService";
 import { v2 as cloudinaryClient } from "cloudinary";
 
 export class StreamManagerService {
@@ -27,7 +28,8 @@ export class StreamManagerService {
     private readonly logger: Logger,
     private readonly config: Config,
     private readonly httpClient: HttpClient,
-    private readonly supabaseListener?: SupabaseListener
+    private readonly supabaseListener?: SupabaseListener,
+    private readonly matchStats?: MatchStatsService
   ) {}
 
   public async start(): Promise<void> {
@@ -261,6 +263,17 @@ export class StreamManagerService {
       });
       this.supabaseListener.subscribeToCourt(event.courtId);
     }
+
+    // Near-live stats for this court's match. A repeat start for a court that
+    // already has a reader is a no-op inside, so duplicates are safe here.
+    if (result && result.streamId && this.matchStats) {
+      this.matchStats.onStreamStarted({
+        courtId: event.courtId,
+        cameraUrl: event.cameraUrl,
+        streamId: result.streamId,
+        matchId: event.matchId,
+      });
+    }
   }
 
   private async handleStopEvent(event: SSEStreamEvent) {
@@ -291,6 +304,10 @@ export class StreamManagerService {
         streamKey: event.streamKey,
       });
     }
+
+    // The backend's stop is the end of the match, even if the stream had
+    // already died on its own — so finish the court's stats either way.
+    this.matchStats?.onStreamStopped(event.courtId);
   }
 
   private startHealthCheck(): void {

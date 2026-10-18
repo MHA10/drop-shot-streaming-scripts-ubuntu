@@ -57,6 +57,9 @@ export interface SSEStreamEvent extends DomainEvent {
   readonly reconciliationMode?: boolean;
   readonly isScorecardActivated?: boolean;
   readonly ads?: AdSpec[];
+  // Backend's id for this match, if it sends one; echoed in the match stats
+  // record (docs/stats-db-handoff.md §3). Absent today.
+  readonly matchId?: string;
 }
 
 export type StreamDomainEvent =

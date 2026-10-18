@@ -285,6 +285,10 @@ export class NodeSSEService extends EventEmitter implements SSEService {
         reconciliationMode: parsedData.reconciliation_mode || false,
         isScorecardActivated: parsedData.isScorecardActivated,
         ads: this.parseAds(parsedData.ads),
+        matchId:
+          typeof parsedData.matchId === "string" && parsedData.matchId
+            ? parsedData.matchId
+            : undefined,
       };
 
       this.logger.info("Processing SSE stream event", {

@@ -1,6 +1,6 @@
 # Player Stats → DB / Server Handoff
 
-**Status:** ready for backend build · **For:** Farooq (backend/DB) · **From:** streaming · **Last updated:** 2026-10-16
+**Status:** ready for backend build · **For:** Farooq (backend/DB) · **From:** streaming · **Last updated:** 2026-10-18
 **Pairs with:** [`docs/v1-stats-spec.md`](./v1-stats-spec.md) (plain-English meaning + accuracy of every field).
 
 ---
@@ -208,9 +208,17 @@ These don't change storage, but they matter for how the product uses the numbers
 - [ ] Create the stats table (§5) and the receiving route (§1).
 - [ ] Validate `x-streaming-api-key` + court-belongs-to-ground, same as the scoreboard route.
 
-**Streamer (me), once the route + match-id decision land:**
-- [ ] On match end, assemble the envelope (§2): tag with `groundId` + `courtId` (+ `matchId` if backend supplies it) + `capturedAt`.
-- [ ] Upload the heatmap to Cloudinary, set `heatmapUrl`.
-- [ ] POST the payload to the route with the per-box API key.
+**Streamer (me) — built 2026-10-18, switched off until your route is live:**
+- [x] On match end, assemble the envelope (§2): tag with `groundId` + `courtId` (+ `matchId` if backend supplies it) + `capturedAt`.
+- [x] Upload the heatmap to Cloudinary, set `heatmapUrl`.
+- [x] POST the payload to the route with the per-box API key.
+
+How the streamer behaves, so your route can match it:
+- **Match id:** if your stream **start** event carries a string field **`matchId`**, the streamer echoes it in the payload. No field → `null`.
+- **Route path** is a per-box setting (`STATS_SEND_PATH`), defaulting to the path in §1 — tell me the final one.
+- **Success** = any 2xx. The streamer then deletes its copy, so only answer 2xx once the row is saved.
+- **400 / 413 / 422** = "this record is wrong, don't resend" — the streamer parks it and stops.
+- **Anything else** (401, 404, 429, 5xx, timeout) is retried: 1 min, doubling up to every hour, for up to 14 days. So a duplicate POST of the same match is possible (e.g. your reply got lost). A resend is the identical body with the same `streamId`, so treat a repeat of the same `(groundId, courtId, streamId)` as a replace.
+- A match whose camera never clearly saw the players sends **nothing** (no empty rows).
 
 The data contract in §2 is final and ready to build against now — the only thing blocking a clean start is the match-identity call in §3.

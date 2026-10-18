@@ -121,6 +121,44 @@ export interface AppConfig {
     // opened if EITHER is on — one device, one reader.
     scoreForwardingEnabled: boolean;
   };
+  stats: {
+    // Near-live player stats (heatmap + per-player/team numbers), one Python
+    // reader (scripts/live_stats.py) per live court. Default OFF: the reader
+    // needs a Python env with the vision libraries + model weights installed on
+    // the box, and it shares the CPU with the live encode. Off = zero new
+    // runtime behaviour.
+    enabled: boolean;
+    // Interpreter with ultralytics/opencv/numpy installed (usually a venv).
+    pythonPath: string;
+    // yolo11s weights — not shipped in the npm package, so point at them.
+    modelPath: string;
+    // Per-match working folders + the send outbox live here.
+    outputDir: string;
+    // Reader dials, proven on the ds box (docs/live-stats-staging.md §6).
+    targetFps: number;
+    imgsz: number;
+    threads: number;
+    clipSec: number;
+    // How many courts may run a reader at once. Default 1: the x2.18 speed
+    // result is for ONE reader next to the encode on a 4-core box; two readers
+    // would double the CPU taken from the live stream. Raise only after a
+    // per-box speed check.
+    maxReaders: number;
+    // The reader must use the camera's low-res second stream. If we can't work
+    // that URL out from the stream's camera URL, stats are skipped for that
+    // court unless this is true (then it reads the HD stream — heavier).
+    allowMainStream: boolean;
+    // Safety stop: a reader whose stop event never came is finished after this.
+    maxMatchMin: number;
+    // Send finished stats to the backend. Default OFF until the backend route
+    // exists — finished matches wait in the outbox and go out once it's on.
+    sendEnabled: boolean;
+    // Backend route, with {groundId}/{courtId} filled in per match. A setting
+    // so the final path can change without a release.
+    sendPath: string;
+    // Outbox entries older than this are deleted unsent (bounds the disk).
+    keepDays: number;
+  };
   environment: string;
 }
 
@@ -278,6 +316,26 @@ export class Config {
       esp32: {
         scoreForwardingEnabled:
           this.getEnvVar("ESP32_SCORE_FORWARDING_ENABLED", "false") === "true",
+      },
+      stats: {
+        enabled: this.getEnvVar("STATS_ENABLED", "false") === "true",
+        pythonPath: this.getEnvVar("STATS_PYTHON", "python3"),
+        modelPath: this.getEnvVar("STATS_MODEL_PATH", "./yolo11s.pt"),
+        outputDir: this.getEnvVar("STATS_OUTPUT_DIR", "./match-stats"),
+        targetFps: this.parseIntEnv("STATS_TARGET_FPS", 3),
+        imgsz: this.parseIntEnv("STATS_IMGSZ", 960),
+        threads: this.parseIntEnv("STATS_THREADS", 2),
+        clipSec: this.parseIntEnv("STATS_CLIP_SEC", 30),
+        maxReaders: this.parseIntEnv("STATS_MAX_READERS", 1),
+        allowMainStream:
+          this.getEnvVar("STATS_ALLOW_MAIN_STREAM", "false") === "true",
+        maxMatchMin: this.parseIntEnv("STATS_MAX_MATCH_MIN", 240),
+        sendEnabled: this.getEnvVar("STATS_SEND_ENABLED", "false") === "true",
+        sendPath: this.getEnvVar(
+          "STATS_SEND_PATH",
+          "/api/v1/padel-grounds/{groundId}/courts/{courtId}/stats"
+        ),
+        keepDays: this.parseIntEnv("STATS_KEEP_DAYS", 14),
       },
       environment: this.getEnvVar("NODE_ENV", "development"),
     };
