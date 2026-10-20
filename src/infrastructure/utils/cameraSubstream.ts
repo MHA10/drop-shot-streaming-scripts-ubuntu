@@ -39,7 +39,10 @@ export function toSubstreamUrl(cameraUrl: string): string | null {
  * Hide the user:password part of any URLs inside `text` (safe to log).
  * Runs to the LAST "@" before the path: camera passwords can contain "@"
  * (ffmpeg accepts it raw), and stopping at the first one leaked the rest.
+ * Wide on purpose (quotes, backslashes and all): feed it plain text, not
+ * JSON text — redact.ts cleans log metadata value by value for that reason.
+ * Anchored at a word start so a long run of letters can't make it slow.
  */
 export function maskCameraUrl(text: string): string {
-  return text.replace(/(\w+:\/\/)[^\s/?#]*@/g, "$1***:***@");
+  return text.replace(/\b(\w+:\/\/)[^\s/?#]*@/g, "$1***:***@");
 }

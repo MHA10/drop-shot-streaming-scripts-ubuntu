@@ -100,6 +100,36 @@ except Exception as exc:  # noqa: BLE001
     sys.exit(2)
 
 
+# Decode threads for the videos the detector reads. None = OpenCV's default,
+# one per CPU core (measured 2026-10-20: 10 threads on a 10-core Mac), which
+# cv2.setNumThreads does NOT limit. The live reader sets this so decoding stays
+# inside its --threads budget next to the live broadcast (live_stats.py).
+DECODE_THREADS = None
+
+
+_warned_no_cap = False
+
+
+def open_video(path):
+    """
+    cv2.VideoCapture, with the DECODE_THREADS cap when one is set. Falls back to
+    a plain open if the capped one fails (an OpenCV build without FFmpeg), and
+    says once when this OpenCV is too old (< 4.7) to cap — never silently.
+    """
+    global _warned_no_cap
+    if DECODE_THREADS:
+        if hasattr(cv2, "CAP_PROP_N_THREADS"):
+            cap = cv2.VideoCapture(path, cv2.CAP_FFMPEG, [cv2.CAP_PROP_N_THREADS, int(DECODE_THREADS)])
+            if cap.isOpened():
+                return cap
+            cap.release()
+        elif not _warned_no_cap:
+            _warned_no_cap = True
+            sys.stderr.write(f"track_players: WARNING OpenCV {cv2.__version__} can't cap video-decode "
+                             f"threads (needs 4.7+); decoding uses every core\n")
+    return cv2.VideoCapture(path)
+
+
 # ── court model ──
 # The radar is a FORMATION view, not a metrology tool. See CourtModel for why
 # this stops short of a metric homography on these cameras.
@@ -196,7 +226,7 @@ class CourtModel:
 
 def median_frame(path, samples=9):
     """Empty-court frame: pixelwise median kills anything that moved."""
-    cap = cv2.VideoCapture(path)
+    cap = open_video(path)
     total = int(cap.get(cv2.CAP_PROP_FRAME_COUNT)) or 0
     frames = []
     if total > 1:
@@ -477,7 +507,7 @@ def detect_all(video, model_path, conf, imgsz, device, court, poly, every, verbo
         sys.stderr.write(f"track_players: suppressing {len(static)} static "
                          f"person(s) found in the empty-court frame\n")
 
-    cap = cv2.VideoCapture(video)
+    cap = open_video(video)
     if not cap.isOpened():
         raise SystemExit("track_players: cannot open input")
     frame_w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))

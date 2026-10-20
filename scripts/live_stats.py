@@ -47,6 +47,10 @@ can see at a glance whether the box is keeping up.
   per chunk would cost more than the chunk itself and the reader could never keep up.
   We load it once at startup and feed every chunk to the same model (track_players.
   detect_all(..., model=resident)). This is THE reason buffer-reuse is viable.
+- VIDEO DECODING IS CAPPED TOO, to the same --threads. OpenCV decodes with one thread per
+  core no matter what cv2.setNumThreads says (measured 2026-10-20), so every video this
+  reader decodes through OpenCV goes through track_players.open_video with the cap (needs
+  OpenCV 4.7+; older ones log a warning). Not capped: the optional --reencode slicer.
 - THE DETECTOR'S THREADS ARE CAPPED (default 2). Without a cap, torch/OpenCV grab every
   core; on this 4-core box they would fight the live ffmpeg encode for CPU and the
   BROADCAST ITSELF would hitch. We leave cores for ffmpeg + the OS on purpose. If you
@@ -82,6 +86,10 @@ can see at a glance whether the box is keeping up.
   we JUMP to the newest ready chunk and drop the stale ones (the stats are cumulative, so a
   few dropped sample-chunks cost almost nothing; staleness costs the whole point). In buffer
   mode dropped chunks may anyway be evicted by the reel system before we would reach them.
+- THE MASTER KEEPS ONLY FOOT + SOLID per sample, written as compact JSON. The box outline is
+  only needed for the photo cut-outs, which use the fresh chunk, never the master. Measured
+  2026-10-20 on synthetic tracks: at 2 h the checkpoint was 13 MB rewritten every minute
+  (~0.8 GB/h of disk writes next to the live encode), 26 MB at 4 h.
 - THE MASTER IS DOWNSAMPLED to the detection rate and its fps set to match. track_players
   holds each detection across skipped frames (sample-and-hold), so slicing to the real
   detection points keeps the file small AND keeps player_stats' speed/time windows honest.
@@ -235,7 +243,9 @@ class TrackEngine:
         sys.path.insert(0, SCRIPTS_DIR)
         # Cap threads BEFORE/at model load so torch's pools size small (see header).
         import cv2
+        import track_players
         cv2.setNumThreads(max(1, threads))
+        track_players.DECODE_THREADS = max(1, threads)   # header: decoding is capped too
         try:
             import torch
             torch.set_num_threads(max(1, threads))
@@ -276,8 +286,8 @@ class TrackEngine:
             import cv2
             from track_players import (LABELS as TL, detect_all, assign_slots,
                                        smooth_tracks, calibrate, median_frame,
-                                       _static_people)
-            cap = cv2.VideoCapture(path)
+                                       _static_people, open_video)
+            cap = open_video(path)
             if not cap.isOpened():
                 return None
             fps = cap.get(cv2.CAP_PROP_FPS) or 30.0
@@ -454,7 +464,8 @@ class PhotoState:
             if not picks:
                 return
             import cv2
-            cap = cv2.VideoCapture(clip_path)
+            from track_players import open_video
+            cap = open_video(clip_path)
             try:
                 pos = 0                    # next frame index the decoder will return
                 for idx in sorted(picks):
@@ -540,7 +551,9 @@ def merge_into_master(master, clip_payload, swap_margin):
         _maybe_swap(master["tracks"], ds, "A", "B", swap_margin)
         _maybe_swap(master["tracks"], ds, "C", "D", swap_margin)
     for L in LABELS:
-        master["tracks"][L].extend(ds[L])
+        # Only what stats and heat use (header 'THE MASTER KEEPS ONLY FOOT + SOLID').
+        master["tracks"][L].extend(
+            None if s is None else {"foot": s["foot"], "solid": s["solid"]} for s in ds[L])
     master["frames"] = len(master["tracks"]["A"])
     return ds
 
@@ -648,7 +661,7 @@ def write_master(master, path):
     }
     tmp = path + ".tmp"
     with open(tmp, "w") as fh:
-        json.dump(payload, fh)
+        json.dump(payload, fh, separators=(",", ":"))
     os.replace(tmp, path)   # atomic — a reader never sees a half-written master
 
 

@@ -193,7 +193,7 @@ treated as a previous match and it starts fresh.
 | `--clip-sec` / `CLIP_SEC` | 30 | (camera mode) seconds per captured slice |
 | `--target-fps` / `TARGET_FPS` | 3 | Finder rate — **the main processor dial** |
 | `--imgsz` / `IMGSZ` | 960 | Finder input size. 640 loses far players, 1280 is heavy, 960 is the middle |
-| `--threads` / `THREADS` | 2 | **Cap on detector CPU threads** so the live ffmpeg keeps its cores. **Do not raise blindly** — the stream matters more than the stats |
+| `--threads` / `THREADS` | 2 | **Cap on CPU threads for the player-finder and for video decoding** (decoding needs OpenCV 4.7+; older versions log a warning) so the live ffmpeg keeps its cores. **Do not raise blindly** — the stream matters more than the stats |
 | `--stats-every` / `STATS_EVERY` | 0 (auto) | Recompute stats + heatmap every N chunks. Auto = 12 in buffer mode (~2s chunks → refresh ~25s), 1 in camera mode (~30s chunks) |
 | `--checkpoint-sec` / `CHECKPOINT_SEC` | 60 | How often the crash-resume file is saved (it is **not** rewritten every chunk any more) |
 | `--drop-backlog` / `DROP_BACKLOG` | 6 | If more than this many chunks are queued, jump to the newest and drop the stale ones to **stay live** |
