@@ -39,6 +39,13 @@ import {
  *   only proven speed result is one reader on a 4-core box).
  * - The reader only ever reads the camera's low-res stream; if we can't work
  *   out its address, that court gets no stats (unless STATS_ALLOW_MAIN_STREAM).
+ * - The record names its scored match (the backend's live_match id) so the
+ *   stats land on the right game. The backend tells us which match is active
+ *   on each court in `match_state` events, not in the start event (ds-backend
+ *   staging, MatchSignalService, checked 2026-10-20). No match seen = matchId
+ *   null, and the backend picks the match by time instead.
+ * - If a second scored match starts during one stream, the record is filed
+ *   under the newest match (same choice the backend makes when it guesses).
  * - Known v1 gap, out of scope here: the reader labels players by which END
  *   they are on, and pairs change ends every two games, so over a full match
  *   one label can hold different people (memory: stats-end-change-bug).
@@ -58,10 +65,18 @@ import {
  *   would treat its saved progress as a previous match and start from zero.
  * - A safety timer finishes a reader whose stop event never arrives
  *   (STATS_MAX_MATCH_MIN), so a lost event can't keep the CPU busy forever.
+ * - At stream start, a match id is only used if the backend confirmed it in
+ *   the last MATCH_STATE_FRESH_MS. The backend repeats match_state every
+ *   minute only while a match is active and sends "no match" just once; if
+ *   this box missed that one message (SSE reconnect), an ended match's id
+ *   would linger and the next stream's stats would be filed under it.
+ * - Ending a match (activeMatchId null) does NOT clear the id from the
+ *   record: the stats go out after the stream stops, which is usually after
+ *   the scorer ends the match.
  *
  * ── DO NOT ──
- * - Do NOT throw from onStreamStarted/onStreamStopped — they sit in the live
- *   stream's start/stop path. Stats must never break a stream.
+ * - Do NOT throw from onStreamStarted/onStreamStopped/onMatchState — they sit
+ *   in the live stream's event path. Stats must never break a stream.
  * - Do NOT finish a court's reader from the stream-retry path; only the
  *   backend's stop event (or the safety timer) ends a match.
  */
@@ -83,9 +98,12 @@ const RESUME_DEADLINE_MS = 10 * 60_000;
 const READER_RESUME_WINDOW_SEC = 15 * 60;
 const FINISH_GRACE_MS = 120_000;
 const FLUSH_EVERY_MS = 60_000;
+// Backend repeats match_state every minute; 3 min tolerates two lost repeats.
+const MATCH_STATE_FRESH_MS = 3 * 60_000;
 
 export class MatchStatsService {
   private readonly readers = new Map<string, ActiveReader>();
+  private readonly activeMatch = new Map<string, { matchId: string | null; seenAt: number }>();
   private readonly resumable = new Map<string, { matchDir: string; deadline: number }>();
   private readonly rootDir: string;
   private readonly readerSettings: LiveStatsReaderSettings;
@@ -209,14 +227,16 @@ export class MatchStatsService {
 
       let matchDir: string;
       let resumed = false;
+      const matchId = info.matchId ?? this.freshMatchId(courtId);
       const open = this.resumable.get(courtId);
       if (open) this.resumable.delete(courtId);
       if (open && Date.now() < open.deadline) {
         matchDir = open.matchDir;
         resumed = true;
+        if (matchId) this.attachMatch(courtId, matchDir, matchId);
       } else {
         if (open) this.outbox.enqueue(open.matchDir, new Date(lastActivityMs(open.matchDir)));
-        matchDir = this.newMatchDir(info);
+        matchDir = this.newMatchDir(info, matchId);
       }
 
       const runner = new LiveStatsRunner(courtId, matchDir, cameraUrl, this.readerSettings, this.logger);
@@ -235,6 +255,7 @@ export class MatchStatsService {
         courtId,
         resumed,
         matchDir,
+        matchId,
         camera: maskCameraUrl(cameraUrl),
       });
     } catch (error) {
@@ -270,6 +291,20 @@ export class MatchStatsService {
       );
   }
 
+  /** Backend match_state: the scored match now active on a court. Never throws. */
+  public onMatchState(courtId: string, activeMatchId: string | null): void {
+    try {
+      this.activeMatch.set(courtId, { matchId: activeMatchId, seenAt: Date.now() });
+      const active = this.readers.get(courtId);
+      if (active && activeMatchId) this.attachMatch(courtId, active.matchDir, activeMatchId);
+    } catch (error) {
+      this.logger.warn("Could not record the court's match", {
+        courtId,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+
   /** App shutdown: ask every reader to stop, leave folders open to resume. */
   public shutdown(): void {
     if (this.timer) clearInterval(this.timer);
@@ -302,7 +337,30 @@ export class MatchStatsService {
     }
   }
 
-  private newMatchDir(info: MatchStartInfo): string {
+  private freshMatchId(courtId: string): string | null {
+    const seen = this.activeMatch.get(courtId);
+    if (!seen?.matchId || Date.now() - seen.seenAt > MATCH_STATE_FRESH_MS) return null;
+    return seen.matchId;
+  }
+
+  // Name the scored match in the folder's record; the outbox sends it from there.
+  private attachMatch(courtId: string, matchDir: string, matchId: string): void {
+    const file = path.join(matchDir, MATCH_FILE);
+    const record = readJson<MatchRecord>(file);
+    if (!record || record.matchId === matchId) return;
+    if (record.matchId) {
+      this.logger.info("A new scored match started during this stream; stats will go to the newest", {
+        courtId,
+        previousMatchId: record.matchId,
+        matchId,
+      });
+    } else {
+      this.logger.info("Match stats linked to the scored match", { courtId, matchId });
+    }
+    writeJsonAtomic(file, { ...record, matchId });
+  }
+
+  private newMatchDir(info: MatchStartInfo, matchId: string | null): string {
     // Timestamp first, so folder names sort oldest-first.
     const stamp = new Date().toISOString().replace(/[:.]/g, "-");
     const dir = path.join(
@@ -314,7 +372,7 @@ export class MatchStatsService {
     const record: MatchRecord = {
       groundId: this.groundId,
       courtId: info.courtId,
-      matchId: info.matchId ?? null,
+      matchId,
       streamId: info.streamId,
       startedAt: new Date().toISOString(),
     };

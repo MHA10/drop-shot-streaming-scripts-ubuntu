@@ -104,7 +104,9 @@ Since 2026-10-18 the streamer app runs the reader itself, so nobody starts it by
    stream**, worked out from the stream's camera address (Hikvision `…/Channels/101` → `…/102`,
    Dahua `subtype=0` → `subtype=1`). Unknown camera brand → no stats for that court, logged.
 2. **Court stops** (backend's stop event) → the reader is asked to finish, writes its final
-   `stats.json` + `heatmap.png`, and the folder joins the **outbox**.
+   `stats.json` + `heatmap.png`, and the folder joins the **outbox**. While it runs, the
+   backend's `match_state` events tell it which scored match is on the court; that id goes
+   in the record so the stats land on the right game.
 3. **Outbox** → uploads the heatmap to Cloudinary, sends the numbers + picture link to the
    backend (`docs/stats-db-handoff.md`), and deletes the folder once the backend says "got it".
    No answer, or an error → it keeps the folder and tries again (1 min, doubling up to 1 h).
@@ -205,8 +207,9 @@ treated as a previous match and it starts fresh.
   made the old way, from a saved clip at match end (`player_heatmap.py`). This live card is the
   four court maps only — no centre clip — because it spans the whole match and keeps no video.
 - **Sending is built but off.** The streamer queues each finished match and sends it to the
-  backend once `STATS_SEND_ENABLED=true` — which waits on the backend's receiving route and
-  match id (`docs/stats-db-handoff.md` §3).
+  backend once `STATS_SEND_ENABLED=true`. The backend's receiving route is on staging since
+  2026-10-20; the streamer names the match from the backend's `match_state` events
+  (`docs/stats-db-handoff.md` §3).
 - **One label can hold different people over a full match.** Pairs change ends every two games
   and the reader labels players by which end they're on, so after a changeover slot `C` holds a
   player from the other pair. Open; needs a full continuous match recording to build and test.

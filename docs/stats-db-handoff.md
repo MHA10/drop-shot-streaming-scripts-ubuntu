@@ -1,6 +1,6 @@
 # Player Stats → DB / Server Handoff
 
-**Status:** ready for backend build · **For:** Farooq (backend/DB) · **From:** streaming · **Last updated:** 2026-10-18
+**Status:** backend built (ds-backend `staging`, checked 2026-10-20) · **For:** Farooq (backend/DB) · **From:** streaming · **Last updated:** 2026-10-20
 **Pairs with:** [`docs/v1-stats-spec.md`](./v1-stats-spec.md) (plain-English meaning + accuracy of every field).
 
 ---
@@ -157,7 +157,12 @@ The streamer wraps the computed stats in a small **envelope** that identifies th
 
 ---
 
-## 3. Match identity — the one open decision (needs you + backend)
+## 3. Match identity — decided 2026-10-20: the backend's `match_state` event
+
+**What was built (ds-backend `staging`, `MatchSignalService`):** the backend does not put the match id in the start event. It sends a separate `match_state` event on the ground's event channel — `{ eventType: "match_state", courtId, activeMatchId, at }` — whenever a scored match starts or ends on a court, and repeats it every minute while one is active. It only does this when the backend setting `MATCH_STATE_EVENTS=true`. The streamer listens for it and sends that id as `matchId`. With no id, the backend picks the scored match that was on the court at `capturedAt` (started before it, ended no more than 5 minutes before it).
+
+The original question, kept for the record:
+
 
 The streamer can reliably tag a record with **`groundId`** (its env var) and **`courtId`** (from the stream event). It does **not** have a stable **match id** — there is no `matchId`/`match_id` anywhere in the streamer today, and `streamId` is a throwaway value generated locally per stream session (not shared with the backend, not stable).
 
@@ -203,22 +208,23 @@ These don't change storage, but they matter for how the product uses the numbers
 
 ## 7. Who does what
 
-**Backend (you):**
-- [ ] Decide match identity (§3) and tell me the plan.
-- [ ] Create the stats table (§5) and the receiving route (§1).
-- [ ] Validate `x-streaming-api-key` + court-belongs-to-ground, same as the scoreboard route.
+**Backend (you) — built, on staging (checked 2026-10-20):**
+- [x] Match identity (§3): `match_state` event.
+- [x] Stats tables (`match_stats` + one row per player) and the receiving route (§1).
+- [x] Validate `x-streaming-api-key` + court-belongs-to-ground.
+- [ ] Open: with no `matchId` and no scored match in the time window, every send creates a new row (repeats are only merged by match id, and `streamId` isn't stored). Please treat the same court + `streamId` as a replace in that case.
 
 **Streamer (me) — built 2026-10-18, switched off until your route is live:**
-- [x] On match end, assemble the envelope (§2): tag with `groundId` + `courtId` (+ `matchId` if backend supplies it) + `capturedAt`.
+- [x] On match end, assemble the envelope (§2): tag with `groundId` + `courtId` + `matchId` (from `match_state`) + `capturedAt`.
 - [x] Upload the heatmap to Cloudinary, set `heatmapUrl`.
 - [x] POST the payload to the route with the per-box API key.
 
 How the streamer behaves, so your route can match it:
-- **Match id:** if your stream **start** event carries a string field **`matchId`**, the streamer echoes it in the payload. No field → `null`.
-- **Route path** is a per-box setting (`STATS_SEND_PATH`), defaulting to the path in §1 — tell me the final one.
+- **Match id:** the latest `activeMatchId` the backend sent in `match_state` while the court was streaming. If a second scored match starts during one stream, the newest id wins. At stream start it only uses an id the backend confirmed in the last 3 minutes, so a missed "match ended" message can't attach stats to an old match. Only a UUID is passed on. None seen → `null`.
+- **Route path** is a per-box setting (`STATS_SEND_PATH`); its default is the route you built.
 - **Success** = any 2xx. The streamer then deletes its copy, so only answer 2xx once the row is saved.
 - **400 / 413 / 422** = "this record is wrong, don't resend" — the streamer parks it and stops.
 - **Anything else** (401, 404, 429, 5xx, timeout) is retried: 1 min, doubling up to every hour, for up to 14 days. So a duplicate POST of the same match is possible (e.g. your reply got lost). A resend is the identical body with the same `streamId`, so treat a repeat of the same `(groundId, courtId, streamId)` as a replace.
 - A match whose camera never clearly saw the players sends **nothing** (no empty rows).
 
-The data contract in §2 is final and ready to build against now — the only thing blocking a clean start is the match-identity call in §3.
+The data contract in §2 matches what you built (field names, A–D slots, `far`/`near` teams).

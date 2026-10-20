@@ -151,7 +151,8 @@ export interface AppConfig {
     // Safety stop: a reader whose stop event never came is finished after this.
     maxMatchMin: number;
     // Send finished stats to the backend. Default OFF until the backend route
-    // exists — finished matches wait in the outbox and go out once it's on.
+    // is live where this box points (staging only, 2026-10-20) — finished
+    // matches wait in the outbox and go out once it's on.
     sendEnabled: boolean;
     // Backend route, with {groundId}/{courtId} filled in per match. A setting
     // so the final path can change without a release.

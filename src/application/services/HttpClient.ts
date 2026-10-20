@@ -111,9 +111,10 @@ export class HttpClient {
   /**
    * Send one finished match's stats to the backend, which stores them
    * (contract: docs/stats-db-handoff.md). Same auth as the scoreboard route.
-   * The body is the COMPLETE final record, so a resend after a lost reply
-   * replaces rather than duplicates. The route path is a setting
-   * (STATS_SEND_PATH) because the backend hasn't fixed it yet.
+   * The body is the COMPLETE final record. The backend replaces a resend only
+   * when it can tie the record to a scored match; with no match a resend is
+   * a second row (raised with the backend 2026-10-20). The route path is a
+   * setting (STATS_SEND_PATH) so it can change without a release.
    */
   async postMatchStats(
     groundId: string,

@@ -21,11 +21,14 @@ import { safeSegment } from "../utils/paths";
  *   (docs/stats-db-handoff.md §0–§2, decided 2026-10-16). The envelope fields
  *   (groundId, courtId, matchId, streamId, capturedAt, heatmapUrl) wrap the
  *   reader's stats.json unchanged under `stats`.
- * - matchId is null until the backend supplies one in the start event (§3).
+ * - matchId is the backend's scored-match id, learned from its match_state
+ *   events (MatchStatsService). Null when no scored match was seen; the
+ *   backend then picks the match by capturedAt.
  * - The picture is optional: no Cloudinary keys, or repeated upload failures,
  *   send heatmapUrl null and the numbers still go (§4).
- * - Nothing is sent while STATS_SEND_ENABLED is off — the backend route
- *   doesn't exist yet. Finished matches wait here and go out once it's on.
+ * - Nothing is sent while STATS_SEND_ENABLED is off — the backend route is
+ *   only on staging so far (2026-10-20). Finished matches wait here and go
+ *   out once it's on.
  *
  * ── WHY IT'S BUILT THIS WAY (change at your peril) ──
  * - The queue lives on disk, not in memory. The app is restarted by deploys

@@ -218,6 +218,11 @@ export class StreamManagerService {
     this.sseService.onStreamEvent(async (event: SSEStreamEvent) => {
       await this.handleStreamEvent(event);
     });
+
+    // Which scored match is on each court, so the stats can name their match.
+    this.sseService.onMatchState((event) => {
+      this.matchStats?.onMatchState(event.courtId, event.activeMatchId);
+    });
   }
 
   private async handleStreamEvent(event: SSEStreamEvent): Promise<void> {

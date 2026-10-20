@@ -57,9 +57,19 @@ export interface SSEStreamEvent extends DomainEvent {
   readonly reconciliationMode?: boolean;
   readonly isScorecardActivated?: boolean;
   readonly ads?: AdSpec[];
-  // Backend's id for this match, if it sends one; echoed in the match stats
-  // record (docs/stats-db-handoff.md §3). Absent today.
+  // Backend's id for this match, if it sends one in the start event. The
+  // backend sends it in `match_state` instead (SSEMatchStateEvent); this field
+  // stays as a fallback in case it is ever added here too.
   readonly matchId?: string;
+}
+
+// Backend `match_state` event: which scored match (live_match id) is active
+// on a court right now. Sent when a match starts or ends, and repeated every
+// minute while one is active. Null = no active match on that court.
+export interface SSEMatchStateEvent extends DomainEvent {
+  readonly eventType: "SSEMatchStateEvent";
+  readonly courtId: string;
+  readonly activeMatchId: string | null;
 }
 
 export type StreamDomainEvent =
@@ -68,4 +78,5 @@ export type StreamDomainEvent =
   | StreamFailedEvent
   | AudioDetectedEvent
   | SSEConnectionEvent
-  | SSEStreamEvent;
+  | SSEStreamEvent
+  | SSEMatchStateEvent;
