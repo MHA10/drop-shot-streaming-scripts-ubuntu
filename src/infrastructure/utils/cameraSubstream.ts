@@ -35,7 +35,11 @@ export function toSubstreamUrl(cameraUrl: string): string | null {
   return null;
 }
 
-/** Hide the user:password part of any URLs inside `text` (safe to log). */
+/**
+ * Hide the user:password part of any URLs inside `text` (safe to log).
+ * Runs to the LAST "@" before the path: camera passwords can contain "@"
+ * (ffmpeg accepts it raw), and stopping at the first one leaked the rest.
+ */
 export function maskCameraUrl(text: string): string {
-  return text.replace(/(\w+:\/\/)[^\s/@:]*:[^\s/@]*@/g, "$1***:***@");
+  return text.replace(/(\w+:\/\/)[^\s/?#]*@/g, "$1***:***@");
 }

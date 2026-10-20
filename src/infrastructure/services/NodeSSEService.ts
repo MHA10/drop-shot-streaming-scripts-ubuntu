@@ -306,7 +306,7 @@ export class NodeSSEService extends EventEmitter implements SSEService {
         isScorecardActivated: parsedData.isScorecardActivated,
         ads: this.parseAds(parsedData.ads),
         matchId:
-          typeof parsedData.matchId === "string" && parsedData.matchId
+          typeof parsedData.matchId === "string" && UUID_RE.test(parsedData.matchId)
             ? parsedData.matchId
             : undefined,
       };

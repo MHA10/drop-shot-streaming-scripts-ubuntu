@@ -60,6 +60,12 @@ export interface LiveStatsReaderSettings {
 }
 
 const MAX_QUICK_RESTARTS = 5;
+// After the reader exits, how long "close" may lag before we treat it as gone.
+const CLOSE_WAIT_MS = 5_000;
+// Boot clean-up: grace for a leftover reader before a hard kill. Short on
+// purpose — boot runs before any stream restarts (MatchStatsService header);
+// the reader checkpoints every 60 s, so a hard kill loses at most that.
+const ORPHAN_GRACE_POLLS = 4; // × 500 ms
 // A run that lasted this long was healthy; a crash after it resets the count.
 const HEALTHY_RUN_MS = 5 * 60_000;
 
@@ -125,8 +131,9 @@ export class LiveStatsRunner {
       });
       this.proc.kill("SIGKILL");
       await exited;
-      await killStraySegmenter(this.matchDir);
     }
+    // Also after a clean exit: if the reader died hard mid-finish, its slicer lives on.
+    await killStraySegmenter(this.matchDir);
   }
 
   private spawnReader(): void {
@@ -174,19 +181,23 @@ export class LiveStatsRunner {
       flags: "a",
     });
     logFile.on("error", () => {}); // a full disk must not crash the app
+    // Masked line by line: ffmpeg errors echo the camera URL with its password,
+    // and this file stays on disk for up to STATS_KEEP_DAYS.
     let partial = "";
     proc.stderr?.on("data", (chunk: Buffer) => {
-      const text = chunk.toString();
-      logFile.write(text);
-      const lines = (partial + text).split("\n");
+      const lines = (partial + chunk.toString()).split("\n");
       partial = lines.pop() ?? "";
-      for (const line of lines) this.forwardLine(line);
+      for (const line of lines) {
+        logFile.write(`${maskCameraUrl(line)}\n`);
+        this.forwardLine(line);
+      }
     });
 
     let settled = false;
     const onGone = (code: number | null, signal: string | null, error?: Error) => {
       if (settled) return;
       settled = true;
+      if (partial) logFile.write(`${maskCameraUrl(partial)}\n`);
       logFile.end();
       if (this.proc === proc) this.proc = null;
       const waiters = this.exitWaiters;
@@ -196,10 +207,25 @@ export class LiveStatsRunner {
         this.logger.info("Stats reader finished", { courtId: this.courtId, code, signal });
         return;
       }
-      this.scheduleRestart(Date.now() - startedAt, code, signal, error);
+      // A reader killed hard (e.g. out of memory) never stops its own camera
+      // slicer, which runs in its own process group; without this each restart
+      // adds another camera connection and two writers share segments/.
+      const ranMs = Date.now() - startedAt;
+      void killStraySegmenter(this.matchDir).then(() =>
+        this.scheduleRestart(ranMs, code, signal, error)
+      );
     };
     // "close", not "exit": it fires after stderr is drained, so the last lines
-    // (the reader's "done." summary) reach the log before we end it.
+    // (the reader's "done." summary) reach the log before we end it. But the
+    // reader's camera slicer inherits that stderr and lives in its own process
+    // group: if the reader dies hard, the slicer keeps the pipe open and
+    // "close" never comes — no restart, no finish, a camera connection held
+    // and clips piling up. So on "exit" kill the slicer (which lets "close"
+    // fire) and don't wait for "close" more than a few seconds.
+    proc.on("exit", (code, signal) => {
+      void killStraySegmenter(this.matchDir);
+      setTimeout(() => onGone(code, signal), CLOSE_WAIT_MS).unref();
+    });
     proc.on("close", (code, signal) => onGone(code, signal));
     proc.on("error", (error) => onGone(null, null, error));
 
@@ -216,6 +242,7 @@ export class LiveStatsRunner {
     signal: string | null,
     error?: Error
   ): void {
+    if (this.finishing) return; // finish()/requestStop() came in meanwhile
     if (ranMs >= HEALTHY_RUN_MS) this.quickRestarts = 0;
     this.quickRestarts++;
     if (this.quickRestarts > MAX_QUICK_RESTARTS) {
@@ -281,7 +308,7 @@ export async function killOrphanReader(matchDir: string): Promise<void> {
     } catch {
       // already gone
     }
-    for (let i = 0; i < 30 && (await psCommand(pid)); i++) {
+    for (let i = 0; i < ORPHAN_GRACE_POLLS && (await psCommand(pid)); i++) {
       await new Promise((resolve) => setTimeout(resolve, 500));
     }
     if (await psCommand(pid)) {

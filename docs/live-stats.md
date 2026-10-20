@@ -133,6 +133,7 @@ crashing gives up for that match without touching the stream.
 | `STATS_ALLOW_MAIN_STREAM` | `false` | if the low-res address can't be worked out, read the HD stream instead (heavier) |
 | `STATS_MAX_MATCH_MIN` | `240` | finish a reader whose stop event never came |
 | `STATS_SEND_ENABLED` | `false` | send to the backend. **Leave off until the backend route exists** — matches wait in the outbox meanwhile |
+| `STATS_SEND_PHOTOS` | `false` | upload the player photo sheets and send their links. **Leave off until the backend stores `photoUrls`** — otherwise photos of real people sit on public links nothing records |
 | `STATS_SEND_PATH` | `/api/v1/padel-grounds/{groundId}/courts/{courtId}/stats` | backend route; change it here if the backend names it differently |
 | `STATS_KEEP_DAYS` | `14` | outbox entries older than this are deleted unsent (protects the disk) |
 

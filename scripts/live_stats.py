@@ -72,6 +72,12 @@ can see at a glance whether the box is keeping up.
   longer the newest. In buffer mode we also NEVER delete a chunk — the streamer/buffer
   manager owns their lifecycle (retention + pinning); we only read. In camera mode we own
   the files and delete each after processing.
+- A CAMERA THAT KEEPS REFUSING US IS RETRIED WITH A GROWING WAIT (3 s doubling to
+  SEGMENTER_MAX_WAIT_SEC, back to 3 s after a run that stayed connected for at least one
+  full chunk). A flat 3 s retry against a
+  camera that refuses the low-res address is ~1,200 connection attempts an hour on the
+  same camera the broadcast reads, plus a warning line each time. The wait is cut short
+  by a stop request, so a stop is never held up by it.
 - WE STAY LIVE WHEN WE FALL BEHIND. If the queue of ready chunks grows past --drop-backlog,
   we JUMP to the newest ready chunk and drop the stale ones (the stats are cumulative, so a
   few dropped sample-chunks cost almost nothing; staleness costs the whole point). In buffer
@@ -90,7 +96,13 @@ can see at a glance whether the box is keeping up.
   and keeping the crops on disk (not in memory) means a restart mid-match keeps them.
   At most one crop per player per chunk, at least PHOTO_GAP_SEC apart, never a box that
   overlaps another player — so each cut-out shows one person in different moments, not
-  six near-copies of the same frame.
+  six near-copies of the same frame. The frame is reached by READING FORWARD, the way
+  detect_all counted frames, not by seeking to a frame number: OpenCV turns a frame number
+  into a time using the average frame rate, and a camera's uneven timing would land on a
+  different frame than the box came from.
+- PHOTO SHEETS ARE REDRAWN ONLY WHEN A CUT-OUT WAS ADDED, and the logo is loaded once
+  (player_heatmap._logo_for). Both run every chunk next to the live encode; nothing reads
+  the pictures before the match ends, so redrawing unchanged ones was pure waste.
 - A CROP MUST BE ON ITS LABEL'S SIDE OF THE NET (A/B far, C/D near; teams never cross the
   net) AND OF TYPICAL SIZE for that player in the chunk, not the biggest. Tested 2026-10-20:
   picking the biggest box put a near player on far player A's sheet — when the tracker
@@ -334,6 +346,8 @@ class TrackEngine:
 
 
 # ── player photos: a few cut-outs of each player, so a person can say "A is me" ──
+SEGMENTER_MAX_WAIT_SEC = 300   # longest wait between camera reconnects (header)
+
 PHOTO_MAX = 6              # cut-outs per player on the photo sheet
 PHOTO_GAP_SEC = 20.0       # min tracked-play seconds between two cut-outs of one player
 PHOTO_WINDOW_SEC = 360.0   # only from the first 6 min of tracked play (header: DO NOT)
@@ -384,12 +398,14 @@ class PhotoState:
         self.dir = os.path.join(out_dir, "photos")
         self.count = {}
         self.last_t = {}
+        self.drawn = {}            # cut-out count each photo sheet was last drawn with
         self._scan()
 
     def _scan(self):
         for L in LABELS:
             self.count[L] = len(glob.glob(os.path.join(self.dir, L, "*.jpg")))
             self.last_t[L] = float("-inf")
+            self.drawn[L] = -1
 
     def reset(self):
         """New match: drop the previous match's cut-outs and photo sheets."""
@@ -440,11 +456,14 @@ class PhotoState:
             import cv2
             cap = cv2.VideoCapture(clip_path)
             try:
+                pos = 0                    # next frame index the decoder will return
                 for idx in sorted(picks):
-                    cap.set(cv2.CAP_PROP_POS_FRAMES, idx)
-                    ok, frame = cap.read()
+                    while pos < idx and cap.grab():   # read forward (header 'PHOTO CROPS')
+                        pos += 1
+                    ok, frame = cap.read() if pos == idx else (False, None)
                     if not ok:
-                        continue
+                        break
+                    pos += 1
                     for L, box, t in picks[idx]:
                         crop = _crop(frame, box)
                         if crop is None:
@@ -470,6 +489,9 @@ def render_photo_sheets(photos, out_dir, names_map):
         cw, ch = PHOTO_CELL
         gap, head = 8, 44
         for L in LABELS:
+            out = os.path.join(out_dir, f"photo-{L}.jpg")
+            if photos.drawn[L] == photos.count[L] and os.path.exists(out):
+                continue                   # nothing new (header 'PHOTO SHEETS')
             files = sorted(glob.glob(os.path.join(photos.dir, L, "*.jpg")))[:PHOTO_MAX]
             imgs = [im for im in (cv2.imread(f) for f in files) if im is not None]
             if not imgs:
@@ -485,10 +507,10 @@ def render_photo_sheets(photos, out_dir, names_map):
                 r, c = divmod(i, cols)
                 x, y = gap + c * (cw + gap), head + gap + r * (ch + gap)
                 base[y:y + ch, x:x + cw] = _fit(img, cw, ch)
-            out = os.path.join(out_dir, f"photo-{L}.jpg")
             tmp = out + ".tmp.jpg"
             cv2.imwrite(tmp, base, [cv2.IMWRITE_JPEG_QUALITY, 90])
             os.replace(tmp, out)
+            photos.drawn[L] = photos.count[L]
         return True
     except Exception as exc:   # noqa: BLE001
         sys.stderr.write(f"[live_stats] photo sheet failed: {exc}\n")
@@ -956,12 +978,26 @@ def main():
     processed = set()          # camera mode: names consumed (buffer mode uses high_water)
     done = 0
     last_ckpt = time.time()
+    seg_fails = 0              # segmenter exits in a row that didn't last one full chunk
+    seg_started = time.time()
     try:
         while not stop["flag"]:
             if own_files and seg.poll() is not None:
-                sys.stderr.write(f"[live_stats] camera segmenter exited rc={seg.returncode}; restarting in 3s\n")
-                time.sleep(3)
+                # Healthy = stayed connected for a full chunk. Not "a clip file
+                # appeared" (a camera that sends a moment then drops leaves a tiny
+                # one), and not "players found" (an empty court is not a broken
+                # camera) — header.
+                seg_fails = 0 if time.time() - seg_started >= args.clip_sec else seg_fails + 1
+                wait = min(SEGMENTER_MAX_WAIT_SEC, 3 * 2 ** max(0, seg_fails - 1))
+                sys.stderr.write(f"[live_stats] camera segmenter exited rc={seg.returncode}; "
+                                 f"restarting in {wait}s\n")
+                until = time.time() + wait
+                while time.time() < until and not stop["flag"]:
+                    time.sleep(0.5)
+                if stop["flag"]:
+                    break
                 seg = start_segmenter(args.camera, src_dir, args.clip_sec, args.reencode, args.ffmpeg_loglevel)
+                seg_started = time.time()
 
             files = sorted(glob.glob(os.path.join(src_dir, src_glob)), key=_sort_key)
             ready = files[:-1]     # never the newest — it is still being written

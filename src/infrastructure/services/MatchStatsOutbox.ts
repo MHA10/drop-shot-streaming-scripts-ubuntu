@@ -28,15 +28,20 @@ import { safeSegment } from "../utils/paths";
  * - Pictures (§4): heatmap.png → heatmapUrl (four maps in one picture);
  *   heatmap-A..D.png → heatmapUrls (the backend shows these on each player's
  *   card); photo-A..D.jpg → photoUrls (cut-outs of each player, so the venue
- *   or the player can match A–D to real people — 2026-10-20). The backend
- *   doesn't store photoUrls yet (asked 2026-10-20); it ignores fields it
- *   doesn't know (no whitelist on its ValidationPipe), so sending it early
- *   is harmless.
+ *   or the player can match A–D to real people — 2026-10-20).
+ * - Photos of people are only uploaded when STATS_SEND_PHOTOS is on (default
+ *   off): the backend doesn't store photoUrls yet (asked 2026-10-20), and a
+ *   link nobody records is a photo of a real person on a public URL that no
+ *   one can find to remove. Turn it on once the backend keeps the field.
  * - Pictures are optional: no Cloudinary keys, or repeated upload failures,
  *   send without the missing links and the numbers still go.
  * - Nothing is sent while STATS_SEND_ENABLED is off — the backend route is
  *   only on staging so far (2026-10-20). Finished matches wait here and go
  *   out once it's on.
+ * - A record that is never delivered (rejected, or expired unsent) has its
+ *   uploaded pictures deleted from Cloudinary, for the same reason. A delete
+ *   that fails is kept and retried hourly (for up to PICTURE_DELETE_GIVE_UP_MS
+ *   more), never silently dropped.
  *
  * ── WHY IT'S BUILT THIS WAY (change at your peril) ──
  * - The queue lives on disk, not in memory. The app is restarted by deploys
@@ -45,6 +50,12 @@ import { safeSegment } from "../utils/paths";
  * - Each picture uploads under a fixed name per match with overwrite on, so a
  *   retry replaces the same image instead of piling up copies, and each link
  *   is saved after its first success so a retry only uploads what's missing.
+ * - At most ONE match's pictures upload per PICTURE_PACE_MS (about a minute,
+ *   counted by time, not per pass), and never sooner than PICTURE_GAP_MS
+ *   after the previous upload FINISHED (a slow line can take minutes). A box whose sending was off for days has a
+ *   backlog of ~1 MB per match; sent in one burst it would compete with the
+ *   live streams for the venue's upload line. A match with nothing to upload
+ *   (no pictures, or no Cloudinary keys) is not held back.
  * - 400/413/422 mean "this record itself is wrong" — resending can't fix it,
  *   so it is parked as rejected.json (kept for a look, then expired). Every
  *   other failure, including 404 (route not deployed yet) and 401 (key not
@@ -57,6 +68,8 @@ import { safeSegment } from "../utils/paths";
  *   stream. Every failure is logged and retried.
  * - Do NOT delete a folder before a 2xx — that is the only proof the backend
  *   has the record.
+ * - Do NOT touch a folder without match.json: STATS_OUTPUT_DIR is a setting,
+ *   and a wrong one must not get some other folder deleted.
  */
 
 export const MATCH_FILE = "match.json";
@@ -64,6 +77,8 @@ export const PENDING_FILE = "pending.json";
 export const REJECTED_FILE = "rejected.json";
 export const STATS_FILE = "stats.json";
 export const HEATMAP_FILE = "heatmap.png";
+// Written at stop, before the background finish (MatchStatsService header).
+export const ENDED_FILE = "ended.json";
 
 /** Written when the reader starts; who/where this match is. */
 export interface MatchRecord {
@@ -71,13 +86,24 @@ export interface MatchRecord {
   courtId: string;
   matchId: string | null;
   streamId: string | null;
+  // Hash of the booking's YouTube key: a different one = a different booking.
+  streamKeyHash?: string | null;
   startedAt: string;
+}
+
+/** A send the backend refused; kept for a look, its pictures deleted. */
+interface RejectedSend extends PendingSend {
+  status: number;
+  response: string;
+  rejectedAt: number;
 }
 
 /** Written when the match ends; the send's progress. */
 interface PendingSend extends MatchRecord {
   capturedAt: string;
   pictureUrls: Record<string, string>; // picture key -> uploaded link
+  pictureIds?: Record<string, string>; // picture key -> Cloudinary id (to delete)
+  pictureDeleteAt?: number; // when to retry deletes that failed (not the send retry)
   picturesDone: boolean;
   attempts: number;
   nextAttemptAt: number;
@@ -93,6 +119,7 @@ const WORKING_FILES = [
   "photos", // raw cut-outs; the photo sheets built from them stay
   "reader.pid",
   "court.json",
+  ENDED_FILE,
 ];
 const SLOTS = ["A", "B", "C", "D"] as const;
 type Slot = (typeof SLOTS)[number];
@@ -104,9 +131,14 @@ const PICTURES: Array<{ key: string; file: string }> = [
 ];
 const PERMANENT_REJECT = new Set([400, 413, 422]);
 const PICTURE_UPLOAD_TRIES = 3;
+const PICTURE_PACE_MS = 55_000; // from the last upload's START; just under the 60 s pass
+const PICTURE_GAP_MS = 20_000; // and from its END, so a slow upload still leaves a pause
+const PICTURE_DELETE_RETRY_MS = 3600_000;
+const PICTURE_DELETE_GIVE_UP_MS = 7 * 24 * 3600_000;
 
 export interface OutboxSettings {
   sendEnabled: boolean;
+  sendPhotos: boolean;
   keepDays: number;
 }
 
@@ -120,6 +152,8 @@ export class MatchStatsOutbox {
   private flushing = false;
   private flushAgain = false;
   private loggedSendOff = false;
+  private lastPictureUploadAt = 0; // when the last upload started
+  private lastPictureUploadEndAt = 0;
 
   constructor(
     private readonly rootDir: string,
@@ -205,10 +239,19 @@ export class MatchStatsOutbox {
   }
 
   private async processDir(dir: string): Promise<void> {
+    if (!fs.existsSync(path.join(dir, MATCH_FILE))) return; // not ours (DO NOT)
     const keepMs = this.settings.keepDays * 24 * 3600_000;
     const rejectedPath = path.join(dir, REJECTED_FILE);
     if (fs.existsSync(rejectedPath)) {
-      if (Date.now() - fs.statSync(rejectedPath).mtimeMs > keepMs) {
+      const rejected = readJson<RejectedSend>(rejectedPath);
+      const since = rejected?.rejectedAt ?? fs.statSync(rejectedPath).mtimeMs;
+      if (rejected && this.picturesLeft(rejected) && Date.now() >= (rejected.pictureDeleteAt ?? 0)) {
+        await this.discardPictures(rejected);
+        writeJsonAtomic(rejectedPath, rejected);
+      }
+      const picturesLeft = !!rejected && this.picturesLeft(rejected);
+      if (Date.now() > since + keepMs + (picturesLeft ? PICTURE_DELETE_GIVE_UP_MS : 0)) {
+        if (picturesLeft) this.logGaveUp(rejected!);
         fs.rmSync(dir, { recursive: true, force: true });
       }
       return;
@@ -224,6 +267,15 @@ export class MatchStatsOutbox {
     }
 
     if (Date.now() - pending.queuedAt > keepMs) {
+      if (this.picturesLeft(pending)) {
+        if (Date.now() < (pending.pictureDeleteAt ?? 0)) return;
+        await this.discardPictures(pending);
+        if (this.picturesLeft(pending) && Date.now() - pending.queuedAt < keepMs + PICTURE_DELETE_GIVE_UP_MS) {
+          writeJsonAtomic(pendingPath, pending); // try those deletes again later (header)
+          return;
+        }
+        if (this.picturesLeft(pending)) this.logGaveUp(pending);
+      }
       this.logger.warn("Match stats never sent; deleting after keep period", {
         courtId: pending.courtId,
         matchDir: dir,
@@ -233,6 +285,18 @@ export class MatchStatsOutbox {
       fs.rmSync(dir, { recursive: true, force: true });
       return;
     }
+
+    // Cheap checks first: this runs every minute over every queued folder.
+    if (!this.settings.sendEnabled) {
+      if (!this.loggedSendOff) {
+        this.loggedSendOff = true;
+        this.logger.info("Match stats sending is off (STATS_SEND_ENABLED); keeping them queued", {
+          rootDir: this.rootDir,
+        });
+      }
+      return;
+    }
+    if (Date.now() < pending.nextAttemptAt) return;
 
     const stats = readJson<object>(path.join(dir, STATS_FILE));
     if (!stats) {
@@ -245,19 +309,18 @@ export class MatchStatsOutbox {
       return;
     }
 
-    if (!this.settings.sendEnabled) {
-      if (!this.loggedSendOff) {
-        this.loggedSendOff = true;
-        this.logger.info("Match stats sending is off (STATS_SEND_ENABLED); keeping them queued", {
-          rootDir: this.rootDir,
-        });
-      }
-      return;
-    }
-    if (Date.now() < pending.nextAttemptAt) return;
-
     if (!pending.picturesDone) {
-      const upload = await this.uploadPictures(dir, pending);
+      const todo = this.picturesToUpload(dir, pending);
+      if (todo.length > 0 && this.hasKeys()) {
+        // one match's pictures per PICTURE_PACE_MS, with a PICTURE_GAP_MS pause (header)
+        if (Date.now() - this.lastPictureUploadAt < PICTURE_PACE_MS) return;
+        if (Date.now() - this.lastPictureUploadEndAt < PICTURE_GAP_MS) return;
+        this.lastPictureUploadAt = Date.now();
+      }
+      const upload = await this.uploadPictures(todo, dir, pending);
+      // On a slow line one match's pictures can take minutes; the next must
+      // still leave a pause after it, not start straight away (header).
+      if (todo.length > 0 && this.hasKeys()) this.lastPictureUploadEndAt = Date.now();
       writeJsonAtomic(pendingPath, pending); // keep the links that did upload
       if (!upload.done) {
         this.recordFailure(pendingPath, pending, `picture upload failed: ${upload.error}`);
@@ -312,7 +375,14 @@ export class MatchStatsOutbox {
         response: responseText,
         matchDir: dir,
       });
-      writeJsonAtomic(rejectedPath, { ...pending, status: res.status, response: responseText });
+      const rejected: RejectedSend = {
+        ...pending,
+        status: res.status,
+        response: responseText,
+        rejectedAt: Date.now(),
+      };
+      await this.discardPictures(rejected);
+      writeJsonAtomic(rejectedPath, rejected);
       fs.rmSync(pendingPath, { force: true });
       return;
     }
@@ -336,16 +406,23 @@ export class MatchStatsOutbox {
   // Upload every picture not uploaded yet, saving each link in pending. done=false
   // means "try again later"; done=true means "send now with whatever links we have"
   // (no keys, nothing to upload, or failures that kept repeating).
+  private picturesToUpload(dir: string, pending: PendingSend): typeof PICTURES {
+    return PICTURES.filter(
+      (p) =>
+        (this.settings.sendPhotos || !p.key.startsWith("photo-")) &&
+        !pending.pictureUrls[p.key] &&
+        fs.existsSync(path.join(dir, p.file))
+    );
+  }
+
   private async uploadPictures(
+    todo: typeof PICTURES,
     dir: string,
     pending: PendingSend
   ): Promise<{ done: boolean; error?: string }> {
-    const todo = PICTURES.filter(
-      (p) => !pending.pictureUrls[p.key] && fs.existsSync(path.join(dir, p.file))
-    );
     if (todo.length === 0) return { done: true };
     const c = this.cloudinary;
-    if (!c.cloudName || !c.apiKey || !c.apiSecret) {
+    if (!this.hasKeys()) {
       this.logger.warn("Cloudinary keys not set; sending match stats without pictures", {
         courtId: pending.courtId,
       });
@@ -367,6 +444,7 @@ export class MatchStatsOutbox {
           timeout: 60_000,
         });
         pending.pictureUrls[picture.key] = result.secure_url;
+        (pending.pictureIds ??= {})[picture.key] = result.public_id;
       } catch (error) {
         firstError ??= `${picture.key}: ${error instanceof Error ? error.message : JSON.stringify(error)}`;
       }
@@ -380,6 +458,59 @@ export class MatchStatsOutbox {
       return { done: true };
     }
     return { done: false, error: firstError };
+  }
+
+  private hasKeys(): boolean {
+    const c = this.cloudinary;
+    return !!(c.cloudName && c.apiKey && c.apiSecret);
+  }
+
+  private picturesLeft(rec: PendingSend): boolean {
+    return Object.keys(rec.pictureIds ?? {}).length > 0;
+  }
+
+  // Delete this record's uploaded pictures (it will never be delivered, so
+  // nothing would ever point at them). Ids whose delete failed stay in
+  // rec.pictureIds and are retried after PICTURE_DELETE_RETRY_MS. Never throws.
+  private async discardPictures(rec: PendingSend): Promise<void> {
+    const ids = rec.pictureIds ?? {};
+    if (Object.keys(ids).length === 0) return;
+    const left: Record<string, string> = {};
+    if (!this.hasKeys()) {
+      Object.assign(left, ids);
+    } else {
+      const c = this.cloudinary;
+      cloudinaryClient.config({ cloud_name: c.cloudName, api_key: c.apiKey, api_secret: c.apiSecret });
+      for (const [key, id] of Object.entries(ids)) {
+        try {
+          // invalidate: also drop the copies Cloudinary's CDN still serves.
+          const result = await cloudinaryClient.uploader.destroy(id, {
+            resource_type: "image",
+            invalidate: true,
+          });
+          if (result?.result !== "ok" && result?.result !== "not found") {
+            throw new Error(`destroy answered ${JSON.stringify(result)}`);
+          }
+          delete rec.pictureUrls[key];
+        } catch (error) {
+          left[key] = id;
+          this.logger.warn("Could not delete an undelivered match picture; will retry", {
+            courtId: rec.courtId,
+            publicId: id,
+            error: error instanceof Error ? error.message : JSON.stringify(error),
+          });
+        }
+      }
+    }
+    rec.pictureIds = left;
+    if (Object.keys(left).length > 0) rec.pictureDeleteAt = Date.now() + PICTURE_DELETE_RETRY_MS;
+  }
+
+  private logGaveUp(rec: PendingSend): void {
+    this.logger.error("Gave up deleting undelivered match pictures; remove them by hand", {
+      courtId: rec.courtId,
+      publicIds: Object.values(rec.pictureIds ?? {}),
+    });
   }
 }
 

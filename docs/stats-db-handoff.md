@@ -185,7 +185,8 @@ The streamer draws them, **uploads them to Cloudinary** (the account already use
 
 - **`heatmapUrl`** — one picture with all four court maps.
 - **`heatmapUrls`** — `{A, B, C, D}`, each player's map on its own (added 2026-10-20; your player cards read this field).
-- **`photoUrls`** — `{A, B, C, D}`, a photo sheet per player: up to 6 cut-outs of that player from the first 6 minutes of play. This is how a person tells which of A–D they are before claiming or assigning a slot (added 2026-10-20). The cut-outs come from the camera's low-res stream, so they show clothes and build more than faces.
+- **`photoUrls`** — `{A, B, C, D}`, a photo sheet per player: up to 6 cut-outs of that player from the first 6 minutes of play. This is how a person tells which of A–D they are before claiming or assigning a slot (added 2026-10-20). The cut-outs come from the camera's low-res stream, so they show clothes and build more than faces. **Only sent when the box has `STATS_SEND_PHOTOS=true`**, which stays off until you store the field.
+- If a record is rejected (400/413/422) or expires unsent, the streamer deletes its uploaded pictures from Cloudinary, so pictures aren't left on links nothing points to. A delete that fails is retried hourly for up to a week, then logged for removal by hand.
 - Pictures are optional: a failed upload or no keys leaves that link out, and the numbers still arrive.
 - The links are ordinary public Cloudinary links, like the heatmap and the logos.
 
@@ -234,5 +235,6 @@ How the streamer behaves, so your route can match it:
 - **400 / 413 / 422** = "this record is wrong, don't resend" — the streamer parks it and stops.
 - **Anything else** (401, 404, 429, 5xx, timeout) is retried: 1 min, doubling up to every hour, for up to 14 days. So a duplicate POST of the same match is possible (e.g. your reply got lost). A resend is the identical body with the same `streamId`, so treat a repeat of the same `(groundId, courtId, streamId)` as a replace.
 - A match whose camera never clearly saw the players sends **nothing** (no empty rows).
+- Pictures upload at most one match per minute, so a backlog doesn't flood the venue's upload line. A match's stats go out once its pictures are up; a match with nothing to upload isn't held back.
 
 The data contract in §2 matches what you built (field names, A–D slots, `far`/`near` teams).

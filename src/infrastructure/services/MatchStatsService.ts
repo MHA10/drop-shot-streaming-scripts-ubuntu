@@ -1,3 +1,4 @@
+import * as crypto from "crypto";
 import * as fs from "fs";
 import * as path from "path";
 import { Logger } from "../../application/interfaces/Logger";
@@ -11,6 +12,7 @@ import {
   killOrphanReader,
 } from "./LiveStatsRunner";
 import {
+  ENDED_FILE,
   MATCH_FILE,
   MatchRecord,
   MatchStatsOutbox,
@@ -35,8 +37,20 @@ import {
  * ── BUSINESS RULES ──
  * - One match = one stream start-to-stop on a court (docs/stats-db-handoff.md
  *   §0: final numbers, sent once, when the match's stream stops).
- * - At most STATS_MAX_READERS courts run a reader at once (default 1 — the
- *   only proven speed result is one reader on a 4-core box).
+ * - A start with a DIFFERENT YouTube stream key on a court that is already
+ *   live is a new booking: the start use-case stops the old stream and starts
+ *   the new one (StartStreamUseCase, INVALID_YOUTUBE_STREAM_KEY), so the old
+ *   match is closed and a new record begins. Same key = same match (retry,
+ *   duplicate, reconciliation). Only a hash of the key is kept on disk.
+ * - Events for a booking that has already ended are ignored: a late or
+ *   retried start with an ended booking's key (the start use-case answers it
+ *   as a duplicate and still returns that old stream), or a stop carrying an
+ *   earlier booking's key. Either would otherwise close the current booking's
+ *   stats part-way, and a late start would refile the fragment under the old
+ *   booking (the backend replaces by match/stream, overwriting real stats).
+ * - At most STATS_MAX_READERS readers at once (default 1 — the only proven
+ *   speed result is one reader on a 4-core box). A reader still wrapping up
+ *   its last clip counts too.
  * - The reader only ever reads the camera's low-res stream; if we can't work
  *   out its address, that court gets no stats (unless STATS_ALLOW_MAIN_STREAM).
  * - The record names its scored match (the backend's live_match id) so the
@@ -46,6 +60,16 @@ import {
  *   null, and the backend picks the match by time instead.
  * - If a second scored match starts during one stream, the record is filed
  *   under the newest match (same choice the backend makes when it guesses).
+ * - A match id already on this court's previous record is never put on the
+ *   next one: the backend REPLACES a record with the same match id, so reusing
+ *   it (a scorer who hasn't ended the match yet when the next booking starts)
+ *   would overwrite the previous booking's stats. "Previous record" = the last
+ *   folder closed for the court by ANY path (stop, new key, expired resume,
+ *   boot), and the new match id is chosen only after that folder is closed.
+ *   Trade-off: if the app is down for more than RESUME_DEADLINE_MS in the
+ *   middle of a booking, its first half is closed and the second half is NOT
+ *   linked to that match (matchId null; the backend then files it by time).
+ *   Losing the link beats overwriting the first half.
  * - Known v1 gap, out of scope here: the reader labels players by which END
  *   they are on, and pairs change ends every two games, so over a full match
  *   one label can hold different people (memory: stats-end-change-bug).
@@ -53,18 +77,39 @@ import {
  * ── WHY IT'S BUILT THIS WAY (change at your peril) ──
  * - The reader is keyed by COURT and survives stream retries. An ffmpeg retry
  *   re-runs the start use-case with a new stream id, but the match on court
- *   continues; restarting the reader there would split the match. Duplicate
- *   and reconciliation start events are no-ops for the same reason.
- * - Stop returns at once and finishes in the background. The reader can take
- *   up to a couple of minutes to wrap up its last clip; the stop handler must
- *   not wait on that (a new match on the same court may start right away).
+ *   continues; restarting the reader there would split the match.
+ * - Stop returns at once and finishes in the background (the reader can take
+ *   up to FINISH_GRACE_MS to wrap up its last clip). A start that arrives
+ *   meanwhile — the next booking on that court, or another court when the
+ *   reader limit is full — WAITS for that finish instead of being refused.
+ *   Back-to-back bookings are normal: refusing would lose the next match
+ *   entirely, and running both would put two player-finders and two camera
+ *   connections on a box tuned for one.
+ * - The stop writes ended.json BEFORE the background finish. Without it, an
+ *   app restart during that finish sees an unfinished recent folder, marks it
+ *   resumable, and the next booking continues the old match's file — two
+ *   matches in one record.
  * - App shutdown does NOT finish matches; it only asks readers to stop. The
  *   folders stay open so the post-restart start event resumes them. Folders
  *   nobody resumes within RESUME_DEADLINE_MS are closed and queued. That
  *   deadline is kept below the reader's own resume window, or the reader
  *   would treat its saved progress as a previous match and start from zero.
+ * - start() never throws and stays short: it runs during app boot, BEFORE the
+ *   stream manager exists. An error there exits the app (no court streams);
+ *   time spent there delays every court's stream restart. So leftover readers
+ *   are stopped in parallel with a short grace (killOrphanReader), and the
+ *   first send pass waits for the 60 s timer (the live streams are
+ *   reconnecting and the upload line is theirs).
+ * - Boot never deletes a folder it doesn't recognise (no match.json):
+ *   STATS_OUTPUT_DIR is a setting, and pointing it at the wrong folder must
+ *   not wipe that folder.
  * - A safety timer finishes a reader whose stop event never arrives
  *   (STATS_MAX_MATCH_MIN), so a lost event can't keep the CPU busy forever.
+ * - The court's last match id and its ended bookings are saved to
+ *   <court>/court-memory.json, not just kept in memory. A deploy between two
+ *   bookings is normal; forgetting them on restart would let the next booking
+ *   take the previous match's id (and overwrite its stats on the backend) or
+ *   let a late repeat of the old start close the new booking's stats.
  * - At stream start, a match id is only used if the backend confirmed it in
  *   the last MATCH_STATE_FRESH_MS. The backend repeats match_state every
  *   minute only while a match is active and sends "no match" just once; if
@@ -75,23 +120,33 @@ import {
  *   the scorer ends the match.
  *
  * ── DO NOT ──
- * - Do NOT throw from onStreamStarted/onStreamStopped/onMatchState — they sit
- *   in the live stream's event path. Stats must never break a stream.
+ * - Do NOT throw from start/onStreamStarted/onStreamStopped/onMatchState —
+ *   they sit in app boot and the live stream's event path.
  * - Do NOT finish a court's reader from the stream-retry path; only the
- *   backend's stop event (or the safety timer) ends a match.
+ *   backend's stop event, a new stream key, or the safety timer ends a match.
+ * - Do NOT start a reader for a court whose previous reader is still finishing.
  */
 
 export interface MatchStartInfo {
   courtId: string;
   cameraUrl: string;
   streamId: string;
+  // The booking's YouTube key; a different one on a live court = a new booking.
+  streamKey?: string;
   matchId?: string;
 }
 
 interface ActiveReader {
   runner: LiveStatsRunner;
   matchDir: string;
+  keyHash: string | null;
   guard: NodeJS.Timeout;
+}
+
+interface OpenFolder {
+  matchDir: string;
+  deadline: number;
+  keyHash: string | null;
 }
 
 const RESUME_DEADLINE_MS = 10 * 60_000;
@@ -100,11 +155,26 @@ const FINISH_GRACE_MS = 120_000;
 const FLUSH_EVERY_MS = 60_000;
 // Backend repeats match_state every minute; 3 min tolerates two lost repeats.
 const MATCH_STATE_FRESH_MS = 3 * 60_000;
+const COURT_MEMORY_FILE = "court-memory.json";
+
+interface CourtMemory {
+  courtId: string;
+  previousMatchId?: string;
+  endedKeys?: string[];
+}
 
 export class MatchStatsService {
   private readonly readers = new Map<string, ActiveReader>();
+  // Courts whose stopped reader is still writing its final numbers.
+  private readonly finishing = new Map<string, Promise<void>>();
+  // Starts held back until a finishing reader is done (see header).
+  private readonly waiting = new Map<string, MatchStartInfo>();
   private readonly activeMatch = new Map<string, { matchId: string | null; seenAt: number }>();
-  private readonly resumable = new Map<string, { matchDir: string; deadline: number }>();
+  // The match id on each court's last closed record; never reused (header).
+  private readonly previousMatchId = new Map<string, string>();
+  // Key hashes of bookings that have ended on each court (header: late events).
+  private readonly endedKeys = new Map<string, string[]>();
+  private readonly resumable = new Map<string, OpenFolder>();
   private readonly rootDir: string;
   private readonly readerSettings: LiveStatsReaderSettings;
   private readonly outbox: MatchStatsOutbox;
@@ -123,7 +193,11 @@ export class MatchStatsService {
     this.rootDir = path.resolve(this.settings.outputDir);
     this.outbox = new MatchStatsOutbox(
       this.rootDir,
-      { sendEnabled: this.settings.sendEnabled, keepDays: this.settings.keepDays },
+      {
+        sendEnabled: this.settings.sendEnabled,
+        sendPhotos: this.settings.sendPhotos,
+        keepDays: this.settings.keepDays,
+      },
       config.cloudinary,
       httpClient,
       logger
@@ -148,42 +222,30 @@ export class MatchStatsService {
     };
   }
 
-  /** Boot: clean up after the previous run, then start the send loop. */
+  /** Boot: clean up after the previous run, then start the send loop. Never throws. */
   public async start(): Promise<void> {
-    fs.mkdirSync(this.rootDir, { recursive: true });
-    for (const dir of this.outbox.listMatchDirs()) {
-      if (fs.existsSync(path.join(dir, PENDING_FILE))) continue;
-      if (fs.existsSync(path.join(dir, REJECTED_FILE))) continue;
-
-      // An unfinished match: the app stopped (or crashed) mid-match.
-      await killOrphanReader(dir);
-      const match = readJson<MatchRecord>(path.join(dir, MATCH_FILE));
-      if (!match) {
-        fs.rmSync(dir, { recursive: true, force: true });
-        continue;
-      }
-      const last = lastActivityMs(dir);
-      if (Date.now() - last < RESUME_DEADLINE_MS) {
-        // Folders are oldest-first, so a newer one for the court wins.
-        const older = this.resumable.get(match.courtId);
-        if (older) this.outbox.enqueue(older.matchDir, new Date(lastActivityMs(older.matchDir)));
-        this.resumable.set(match.courtId, { matchDir: dir, deadline: last + RESUME_DEADLINE_MS });
-        this.logger.info("Unfinished match stats can resume", { courtId: match.courtId, matchDir: dir });
-      } else {
-        this.outbox.enqueue(dir, new Date(last));
-      }
+    try {
+      fs.mkdirSync(this.rootDir, { recursive: true });
+      this.loadCourtMemory();
+      await this.sweepUnfinished();
+    } catch (error) {
+      this.logger.error("Match stats boot clean-up failed; continuing without it", {
+        rootDir: this.rootDir,
+        error: error instanceof Error ? error.message : String(error),
+      });
     }
 
     this.logger.info("Match stats enabled", {
       rootDir: this.rootDir,
       maxReaders: this.settings.maxReaders,
       sendEnabled: this.settings.sendEnabled,
+      sendPhotos: this.settings.sendPhotos,
       python: this.readerSettings.pythonPath,
       script: this.readerSettings.scriptPath,
       model: this.readerSettings.modelPath,
     });
 
-    void this.outbox.flush();
+    // First send pass on the timer, not now (header: start() stays short).
     this.timer = setInterval(() => {
       this.closeExpiredResumable();
       void this.outbox.flush();
@@ -195,9 +257,33 @@ export class MatchStatsService {
   public onStreamStarted(info: MatchStartInfo): void {
     try {
       const { courtId } = info;
-      if (this.readers.has(courtId)) return; // same match: retry / duplicate / reconciliation
+      const keyHash = hashKey(info.streamKey);
+      if (keyHash && this.endedKeys.get(courtId)?.includes(keyHash)) {
+        this.logger.info("Ignoring a start for a booking that already ended on this court", {
+          courtId,
+        });
+        return;
+      }
+      const active = this.readers.get(courtId);
+      if (active) {
+        if (!keyHash || !active.keyHash || keyHash === active.keyHash) return; // same booking
+        this.logger.info("New booking on a live court; closing the previous match's stats", {
+          courtId,
+        });
+        this.onStreamStopped(courtId);
+      }
 
-      if (this.readers.size >= this.settings.maxReaders) {
+      const busy = this.readers.size + this.finishing.size >= this.settings.maxReaders;
+      if (this.finishing.has(courtId) || busy) {
+        if (this.finishing.size > 0 && this.readers.size < this.settings.maxReaders) {
+          if (!this.waiting.has(courtId)) {
+            this.logger.info("Match stats will start once the previous match's stats are saved", {
+              courtId,
+            });
+          }
+          this.waiting.set(courtId, info);
+          return;
+        }
         this.logger.info("No stats for this court: reader limit reached", {
           courtId,
           maxReaders: this.settings.maxReaders,
@@ -205,59 +291,7 @@ export class MatchStatsService {
         });
         return;
       }
-
-      const substream = toSubstreamUrl(info.cameraUrl);
-      const cameraUrl = substream ?? (this.settings.allowMainStream ? info.cameraUrl : null);
-      if (!cameraUrl) {
-        this.logger.warn("No stats for this court: can't work out the camera's low-res stream", {
-          courtId,
-          cameraUrl: maskCameraUrl(info.cameraUrl),
-        });
-        return;
-      }
-      for (const [what, file] of [
-        ["reader script", this.readerSettings.scriptPath],
-        ["model weights (STATS_MODEL_PATH)", this.readerSettings.modelPath],
-      ]) {
-        if (!fs.existsSync(file)) {
-          this.logger.warn(`No stats for this court: ${what} not found`, { courtId, file });
-          return;
-        }
-      }
-
-      let matchDir: string;
-      let resumed = false;
-      const matchId = info.matchId ?? this.freshMatchId(courtId);
-      const open = this.resumable.get(courtId);
-      if (open) this.resumable.delete(courtId);
-      if (open && Date.now() < open.deadline) {
-        matchDir = open.matchDir;
-        resumed = true;
-        if (matchId) this.attachMatch(courtId, matchDir, matchId);
-      } else {
-        if (open) this.outbox.enqueue(open.matchDir, new Date(lastActivityMs(open.matchDir)));
-        matchDir = this.newMatchDir(info, matchId);
-      }
-
-      const runner = new LiveStatsRunner(courtId, matchDir, cameraUrl, this.readerSettings, this.logger);
-      runner.start();
-      const guard = setTimeout(() => {
-        this.logger.warn("No stop event before the match time limit; finishing stats", {
-          courtId,
-          maxMatchMin: this.settings.maxMatchMin,
-        });
-        this.onStreamStopped(courtId);
-      }, this.settings.maxMatchMin * 60_000);
-      guard.unref();
-      this.readers.set(courtId, { runner, matchDir, guard });
-
-      this.logger.info("Match stats started", {
-        courtId,
-        resumed,
-        matchDir,
-        matchId,
-        camera: maskCameraUrl(cameraUrl),
-      });
+      this.startReader(info, keyHash);
     } catch (error) {
       this.logger.warn("Could not start match stats", {
         courtId: info.courtId,
@@ -266,29 +300,70 @@ export class MatchStatsService {
     }
   }
 
-  /** The court's match ended. Returns at once; finishing runs in the background. */
-  public onStreamStopped(courtId: string): void {
-    const active = this.readers.get(courtId);
-    if (!active) {
-      // Stopped while its folder was waiting to resume after an app restart.
-      const open = this.resumable.get(courtId);
-      if (open) {
-        this.resumable.delete(courtId);
-        this.queue(open.matchDir, new Date(lastActivityMs(open.matchDir)));
+  /**
+   * The court's match ended. `streamKey` is the stop event's booking key; a
+   * stop for an earlier booking leaves the current one alone (header). No key
+   * (safety timer, new-key close) = stop whatever runs. Returns at once;
+   * finishing runs in the background. Never throws.
+   */
+  public onStreamStopped(courtId: string, streamKey?: string): void {
+    try {
+      const keyHash = hashKey(streamKey);
+      const otherBooking = (h: string | null | undefined) => !!keyHash && !!h && h !== keyHash;
+      if (keyHash) this.rememberEnded(courtId, keyHash);
+
+      const held = this.waiting.get(courtId);
+      if (held && !otherBooking(hashKey(held.streamKey))) {
+        this.waiting.delete(courtId);
+        this.logger.info("Court stopped before its match stats could start", { courtId });
       }
-      return;
-    }
-    this.readers.delete(courtId);
-    clearTimeout(active.guard);
-    void active.runner
-      .finish(FINISH_GRACE_MS)
-      .then(() => this.queue(active.matchDir, new Date()))
-      .catch((error) =>
-        this.logger.warn("Finishing match stats failed", {
+      const active = this.readers.get(courtId);
+      if (!active) {
+        // Stopped while its folder was waiting to resume after an app restart.
+        const open = this.resumable.get(courtId);
+        if (open && !otherBooking(open.keyHash)) {
+          this.resumable.delete(courtId);
+          this.close(courtId, open.matchDir, new Date(lastActivityMs(open.matchDir)));
+        }
+        return;
+      }
+      if (otherBooking(active.keyHash)) {
+        this.logger.info("Stop for an earlier booking; this court's current match stats carry on", {
           courtId,
-          error: error instanceof Error ? error.message : String(error),
-        })
-      );
+        });
+        return;
+      }
+      if (active.keyHash) this.rememberEnded(courtId, active.keyHash);
+      this.readers.delete(courtId);
+      clearTimeout(active.guard);
+      const endedAt = new Date();
+      try {
+        writeJsonAtomic(path.join(active.matchDir, ENDED_FILE), { endedAt: endedAt.toISOString() });
+      } catch {
+        // Only a restart during the finish relies on it; the finish goes on.
+      }
+      this.notePrevious(courtId, active.matchDir);
+
+      const done = active.runner
+        .finish(FINISH_GRACE_MS)
+        .then(() => this.queue(active.matchDir, endedAt))
+        .catch((error) =>
+          this.logger.warn("Finishing match stats failed", {
+            courtId,
+            error: error instanceof Error ? error.message : String(error),
+          })
+        )
+        .finally(() => {
+          this.finishing.delete(courtId);
+          this.startWaiting();
+        });
+      this.finishing.set(courtId, done);
+    } catch (error) {
+      this.logger.warn("Could not stop match stats", {
+        courtId,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
   }
 
   /** Backend match_state: the scored match now active on a court. Never throws. */
@@ -296,7 +371,9 @@ export class MatchStatsService {
     try {
       this.activeMatch.set(courtId, { matchId: activeMatchId, seenAt: Date.now() });
       const active = this.readers.get(courtId);
-      if (active && activeMatchId) this.attachMatch(courtId, active.matchDir, activeMatchId);
+      if (active && activeMatchId && activeMatchId !== this.previousMatchId.get(courtId)) {
+        this.attachMatch(courtId, active.matchDir, activeMatchId);
+      }
     } catch (error) {
       this.logger.warn("Could not record the court's match", {
         courtId,
@@ -313,6 +390,125 @@ export class MatchStatsService {
       runner.requestStop();
     }
     this.readers.clear();
+    this.waiting.clear();
+  }
+
+  private startReader(info: MatchStartInfo, keyHash: string | null): void {
+    const { courtId } = info;
+    const substream = toSubstreamUrl(info.cameraUrl);
+    const cameraUrl = substream ?? (this.settings.allowMainStream ? info.cameraUrl : null);
+    if (!cameraUrl) {
+      this.logger.warn("No stats for this court: can't work out the camera's low-res stream", {
+        courtId,
+        cameraUrl: maskCameraUrl(info.cameraUrl),
+      });
+      return;
+    }
+    for (const [what, file] of [
+      ["reader script", this.readerSettings.scriptPath],
+      ["model weights (STATS_MODEL_PATH)", this.readerSettings.modelPath],
+    ]) {
+      if (!fs.existsSync(file)) {
+        this.logger.warn(`No stats for this court: ${what} not found`, { courtId, file });
+        return;
+      }
+    }
+
+    const open = this.resumable.get(courtId);
+    if (open) this.resumable.delete(courtId);
+    const sameBooking = !!open && (!keyHash || !open.keyHash || keyHash === open.keyHash);
+    const resumed = !!open && sameBooking && Date.now() < open.deadline;
+    // Close the old folder BEFORE choosing the match id (header: previous record).
+    if (open && !resumed) this.close(courtId, open.matchDir, new Date(lastActivityMs(open.matchDir)));
+    const wanted = info.matchId ?? this.freshMatchId(courtId);
+    const matchId = wanted && wanted !== this.previousMatchId.get(courtId) ? wanted : null;
+    let matchDir: string;
+    if (open && resumed) {
+      matchDir = open.matchDir;
+      if (matchId) this.attachMatch(courtId, matchDir, matchId);
+    } else {
+      matchDir = this.newMatchDir(info, matchId, keyHash);
+    }
+
+    const runner = new LiveStatsRunner(courtId, matchDir, cameraUrl, this.readerSettings, this.logger);
+    runner.start();
+    const guard = setTimeout(() => {
+      this.logger.warn("No stop event before the match time limit; finishing stats", {
+        courtId,
+        maxMatchMin: this.settings.maxMatchMin,
+      });
+      this.onStreamStopped(courtId);
+    }, this.settings.maxMatchMin * 60_000);
+    guard.unref();
+    this.readers.set(courtId, { runner, matchDir, keyHash, guard });
+
+    this.logger.info("Match stats started", {
+      courtId,
+      resumed,
+      matchDir,
+      matchId,
+      camera: maskCameraUrl(cameraUrl),
+    });
+  }
+
+  // Retry the held-back starts; each re-checks the limits and may wait again.
+  private startWaiting(): void {
+    for (const [courtId, info] of [...this.waiting]) {
+      this.waiting.delete(courtId);
+      this.onStreamStarted(info);
+    }
+  }
+
+  // Unfinished folders from the previous run: resume the recent ones, queue the
+  // rest. Leftover readers are stopped first, all at once (header).
+  private async sweepUnfinished(): Promise<void> {
+    const unfinished: Array<{ dir: string; match: MatchRecord }> = [];
+    for (const dir of this.outbox.listMatchDirs()) {
+      if (fs.existsSync(path.join(dir, PENDING_FILE))) continue;
+      if (fs.existsSync(path.join(dir, REJECTED_FILE))) continue;
+      const match = readJson<MatchRecord>(path.join(dir, MATCH_FILE));
+      if (!match) {
+        this.logger.warn("Not a match stats folder; leaving it alone", { dir });
+        continue;
+      }
+      unfinished.push({ dir, match });
+    }
+    await Promise.all(unfinished.map(({ dir }) => killOrphanReader(dir)));
+
+    for (const { dir, match } of unfinished) {
+      try {
+        const ended = readJson<{ endedAt?: string }>(path.join(dir, ENDED_FILE));
+        const last = lastActivityMs(dir);
+        if (ended) {
+          // Stopped, but the app went down before the finish was queued.
+          const at = ended.endedAt ? new Date(ended.endedAt) : new Date(last);
+          this.notePrevious(match.courtId, dir);
+          if (match.streamKeyHash) this.rememberEnded(match.courtId, match.streamKeyHash);
+          this.outbox.enqueue(dir, Number.isNaN(at.getTime()) ? new Date(last) : at);
+        } else if (Date.now() - last < RESUME_DEADLINE_MS) {
+          // Folders are oldest-first, so a newer one for the court wins.
+          const older = this.resumable.get(match.courtId);
+          if (older) {
+            this.notePrevious(match.courtId, older.matchDir);
+            this.outbox.enqueue(older.matchDir, new Date(lastActivityMs(older.matchDir)));
+          }
+          this.resumable.set(match.courtId, {
+            matchDir: dir,
+            deadline: last + RESUME_DEADLINE_MS,
+            keyHash: match.streamKeyHash ?? null,
+          });
+          this.logger.info("Unfinished match stats can resume", { courtId: match.courtId, matchDir: dir });
+        } else {
+          this.notePrevious(match.courtId, dir);
+          this.outbox.enqueue(dir, new Date(last));
+        }
+      } catch (error) {
+        this.logger.warn("Could not tidy an unfinished match stats folder", {
+          dir,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+    }
   }
 
   private queue(matchDir: string, capturedAt: Date): void {
@@ -332,14 +528,61 @@ export class MatchStatsService {
     for (const [courtId, open] of this.resumable) {
       if (Date.now() >= open.deadline) {
         this.resumable.delete(courtId);
-        this.queue(open.matchDir, new Date(lastActivityMs(open.matchDir)));
+        this.close(courtId, open.matchDir, new Date(lastActivityMs(open.matchDir)));
       }
+    }
+  }
+
+  // A folder that won't run again: remember its match id, then queue it.
+  private close(courtId: string, matchDir: string, capturedAt: Date): void {
+    this.notePrevious(courtId, matchDir);
+    this.queue(matchDir, capturedAt);
+  }
+
+  private notePrevious(courtId: string, matchDir: string): void {
+    const record = readJson<MatchRecord>(path.join(matchDir, MATCH_FILE));
+    if (!record?.matchId || this.previousMatchId.get(courtId) === record.matchId) return;
+    this.previousMatchId.set(courtId, record.matchId);
+    this.saveCourtMemory(courtId);
+  }
+
+  private rememberEnded(courtId: string, keyHash: string): void {
+    const list = this.endedKeys.get(courtId) ?? [];
+    if (list.includes(keyHash)) return;
+    list.push(keyHash);
+    this.endedKeys.set(courtId, list.slice(-20)); // a day of bookings is plenty
+    this.saveCourtMemory(courtId);
+  }
+
+  // header: court-memory.json survives restarts
+  private loadCourtMemory(): void {
+    for (const name of safeReaddir(this.rootDir)) {
+      const memory = readJson<CourtMemory>(path.join(this.rootDir, name, COURT_MEMORY_FILE));
+      if (!memory?.courtId) continue;
+      if (memory.previousMatchId) this.previousMatchId.set(memory.courtId, memory.previousMatchId);
+      if (Array.isArray(memory.endedKeys)) this.endedKeys.set(memory.courtId, memory.endedKeys.slice(-20));
+    }
+  }
+
+  private saveCourtMemory(courtId: string): void {
+    try {
+      const dir = path.join(this.rootDir, safeSegment(courtId));
+      fs.mkdirSync(dir, { recursive: true });
+      const memory: CourtMemory = {
+        courtId,
+        previousMatchId: this.previousMatchId.get(courtId),
+        endedKeys: this.endedKeys.get(courtId),
+      };
+      writeJsonAtomic(path.join(dir, COURT_MEMORY_FILE), memory);
+    } catch {
+      // Best effort: the in-memory copy still guards this run.
     }
   }
 
   private freshMatchId(courtId: string): string | null {
     const seen = this.activeMatch.get(courtId);
     if (!seen?.matchId || Date.now() - seen.seenAt > MATCH_STATE_FRESH_MS) return null;
+    if (seen.matchId === this.previousMatchId.get(courtId)) return null;
     return seen.matchId;
   }
 
@@ -360,7 +603,7 @@ export class MatchStatsService {
     writeJsonAtomic(file, { ...record, matchId });
   }
 
-  private newMatchDir(info: MatchStartInfo, matchId: string | null): string {
+  private newMatchDir(info: MatchStartInfo, matchId: string | null, keyHash: string | null): string {
     // Timestamp first, so folder names sort oldest-first.
     const stamp = new Date().toISOString().replace(/[:.]/g, "-");
     const dir = path.join(
@@ -374,11 +617,26 @@ export class MatchStatsService {
       courtId: info.courtId,
       matchId,
       streamId: info.streamId,
+      streamKeyHash: keyHash,
       startedAt: new Date().toISOString(),
     };
     writeJsonAtomic(path.join(dir, MATCH_FILE), record);
     return dir;
   }
+}
+
+function safeReaddir(dir: string): string[] {
+  try {
+    return fs.readdirSync(dir);
+  } catch {
+    return [];
+  }
+}
+
+// Enough of a hash to tell two bookings apart without keeping the key itself.
+function hashKey(streamKey: string | undefined): string | null {
+  if (!streamKey) return null;
+  return crypto.createHash("sha256").update(streamKey).digest("hex").slice(0, 16);
 }
 
 // When the reader last wrote progress in this folder.

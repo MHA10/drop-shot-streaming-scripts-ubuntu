@@ -276,43 +276,47 @@ export class StreamManagerService {
         courtId: event.courtId,
         cameraUrl: event.cameraUrl,
         streamId: result.streamId,
+        streamKey: event.streamKey,
         matchId: event.matchId,
       });
     }
   }
 
   private async handleStopEvent(event: SSEStreamEvent) {
-    // Find stream by camera URL and stream key
-    const streams = await this.streamRepository.findAll();
-    const targetStream = streams.find(
-      (stream) =>
-        stream.cameraUrl.value === event.cameraUrl &&
-        stream.streamKey === event.streamKey &&
-        stream.state === StreamState.RUNNING
-    );
+    try {
+      // Find stream by camera URL and stream key
+      const streams = await this.streamRepository.findAll();
+      const targetStream = streams.find(
+        (stream) =>
+          stream.cameraUrl.value === event.cameraUrl &&
+          stream.streamKey === event.streamKey &&
+          stream.state === StreamState.RUNNING
+      );
 
-    if (targetStream) {
-      await this.stopStreamUseCase.execute({
-        streamId: targetStream.id.value,
-      });
-
-      // Unsubscribe from updates
-      if (this.supabaseListener) {
-        this.logger.info("Unsubscribing from realtime updates for court", {
-          courtId: event.courtId,
+      if (targetStream) {
+        await this.stopStreamUseCase.execute({
+          streamId: targetStream.id.value,
         });
-        await this.supabaseListener.unsubscribeFromCourt(event.courtId);
-      }
-    } else {
-      this.logger.warn("Stream not found for stop event", {
-        cameraUrl: event.cameraUrl,
-        streamKey: event.streamKey,
-      });
-    }
 
-    // The backend's stop is the end of the match, even if the stream had
-    // already died on its own — so finish the court's stats either way.
-    this.matchStats?.onStreamStopped(event.courtId);
+        // Unsubscribe from updates
+        if (this.supabaseListener) {
+          this.logger.info("Unsubscribing from realtime updates for court", {
+            courtId: event.courtId,
+          });
+          await this.supabaseListener.unsubscribeFromCourt(event.courtId);
+        }
+      } else {
+        this.logger.warn("Stream not found for stop event", {
+          cameraUrl: event.cameraUrl,
+          streamKey: event.streamKey,
+        });
+      }
+    } finally {
+      // The backend's stop is the end of the match — even if the stream had
+      // already died on its own, or stopping it just failed — so always
+      // finish the court's stats (else the next booking joins this record).
+      this.matchStats?.onStreamStopped(event.courtId, event.streamKey);
+    }
   }
 
   private startHealthCheck(): void {

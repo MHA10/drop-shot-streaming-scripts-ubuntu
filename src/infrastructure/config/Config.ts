@@ -154,8 +154,12 @@ export interface AppConfig {
     // is live where this box points (staging only, 2026-10-20) — finished
     // matches wait in the outbox and go out once it's on.
     sendEnabled: boolean;
+    // Upload the player photo sheets and send their links. Default OFF until
+    // the backend stores photoUrls (MatchStatsOutbox header).
+    sendPhotos: boolean;
     // Backend route, with {groundId}/{courtId} filled in per match. A setting
-    // so the final path can change without a release.
+    // so the final path can change without a release. Always starts with "/"
+    // (a hand-set path without it would change the host it is sent to).
     sendPath: string;
     // Outbox entries older than this are deleted unsent (bounds the disk).
     keepDays: number;
@@ -332,10 +336,11 @@ export class Config {
           this.getEnvVar("STATS_ALLOW_MAIN_STREAM", "false") === "true",
         maxMatchMin: this.parseIntEnv("STATS_MAX_MATCH_MIN", 240),
         sendEnabled: this.getEnvVar("STATS_SEND_ENABLED", "false") === "true",
-        sendPath: this.getEnvVar(
+        sendPhotos: this.getEnvVar("STATS_SEND_PHOTOS", "false") === "true",
+        sendPath: `/${this.getEnvVar(
           "STATS_SEND_PATH",
           "/api/v1/padel-grounds/{groundId}/courts/{courtId}/stats"
-        ),
+        ).replace(/^\/+/, "")}`,
         keepDays: this.parseIntEnv("STATS_KEEP_DAYS", 14),
       },
       environment: this.getEnvVar("NODE_ENV", "development"),

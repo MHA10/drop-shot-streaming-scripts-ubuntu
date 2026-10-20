@@ -59,6 +59,7 @@ they stand somewhere, the brighter that patch burns in.
 """
 
 import argparse
+import functools
 import json
 import sys
 
@@ -183,6 +184,25 @@ def draw_legend(canvas, x, y, w, h, lut, alpha):
     put_centered(canvas, "HIGH ACTIVITY", x + w * 0.84, y + bar_h + h * 0.42, 0.62, TEXT, 1)
 
 
+@functools.lru_cache(maxsize=8)
+def _logo_for(path, W, band_h):
+    """
+    The logo read and scaled for one header size, cached: the live reader draws
+    up to five pictures per chunk, and the source PNG is large (3504×790 with
+    alpha), so re-reading and shrinking it each time was most of the drawing cost.
+    Callers must not modify the returned array.
+    """
+    logo = cv2.imread(path, cv2.IMREAD_UNCHANGED)
+    if logo is None:
+        return None
+    h = int(band_h * 0.82)
+    w = max(1, int(logo.shape[1] * h / logo.shape[0]))
+    if w > W * 0.5:
+        w = int(W * 0.5)
+        h = max(1, int(logo.shape[0] * w / logo.shape[1]))
+    return cv2.resize(logo, (w, h), interpolation=cv2.INTER_AREA)
+
+
 def _blit_logo(canvas, path, W, top, band_h):
     """
     Centre the brand mark in the header band.
@@ -192,15 +212,10 @@ def _blit_logo(canvas, path, W, top, band_h):
     is a property of the asset, not of this code (see the reel README on
     keying a black background out of a JPEG logo).
     """
-    logo = cv2.imread(path, cv2.IMREAD_UNCHANGED)
+    logo = _logo_for(path, W, band_h)
     if logo is None:
         return
-    h = int(band_h * 0.82)
-    w = max(1, int(logo.shape[1] * h / logo.shape[0]))
-    if w > W * 0.5:
-        w = int(W * 0.5)
-        h = max(1, int(logo.shape[0] * w / logo.shape[1]))
-    logo = cv2.resize(logo, (w, h), interpolation=cv2.INTER_AREA)
+    h, w = logo.shape[:2]
     x = (W - w) // 2
     y = top + (band_h - h) // 2
     if y < 0 or y + h > canvas.shape[0]:
