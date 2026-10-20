@@ -4,9 +4,11 @@ live_stats.py — build the player heatmap + stats NEAR-LIVE, from the stream's 
 video chunks, while the match is being streamed, without touching the ffmpeg pipeline.
 
 ── IN SIMPLE WORDS ──
-While the match is streaming, this program keeps two files on disk up to date: a
-numbers file (how far each player ran, time at the net, the team's shape) and a
-picture file (the four "where did they stand" court maps). It builds them from
+While the match is streaming, this program keeps these files on disk up to date: a
+numbers file (how far each player ran, time at the net, the team's shape), a
+picture of the four "where did they stand" court maps, the same map for each player
+on its own, and a small photo sheet of each player (a few cut-outs of them from the
+first minutes of play) so a person can later say "player A is me". It builds them from
 short video chunks — ideally the SAME chunks the stream already writes for making
 highlight reels, so nothing is captured twice. If those chunks aren't being written
 (the highlight buffer is off), it can instead grab its own short slices straight
@@ -27,8 +29,16 @@ can see at a glance whether the box is keeping up.
                 A fallback for when the buffer is off; opens its own camera connection,
                 so point it at the low-res second stream (…/Channels/102).
 - The player-finder runs at a REDUCED rate (default ~3 looks/sec), never every frame.
-- Outputs are LOCAL FILES for v1 (stats.json + heatmap.png in --out-dir). Pushing to
-  Supabase/the product is a later step, out of scope here.
+- Outputs are LOCAL FILES in --out-dir: stats.json, heatmap.png (all four maps),
+  heatmap-A..D.png (one map per player) and photo-A..D.jpg (one photo sheet per player).
+  The streamer uploads the pictures and sends the links with the numbers
+  (MatchStatsOutbox.ts); the product shows each player's own map and photo sheet, and
+  the venue/players use the photos to put real names on A–D (2026-10-20).
+- Player photos come only from the FIRST PHOTO_WINDOW_SEC of tracked play. Labels A–D
+  follow the end of the court a player is on, and pairs change ends every two games, so
+  later in the match a label can hold a different person. Early crops keep each sheet to
+  one person in the usual case (a player not seen until after the first change of ends
+  can still end up on the wrong sheet — same root cause as memory 'stats-end-change-bug').
 - Court calibration is done ONCE and saved to court.json; reused on every later chunk.
 
 ── WHY IT'S BUILT THIS WAY (change at your peril) ──
@@ -75,6 +85,17 @@ can see at a glance whether the box is keeping up.
   --swap-margin), because partners often stand close and a coin-flip swap permanently
   crosses their heatmaps. When it's within noise we leave it. Teams never cross the net in
   padel, so only left/right within a half can flip — that is all we correct.
+- PHOTO CROPS ARE CUT WHILE THE CHUNK IS STILL ON DISK and saved as files under photos/.
+  Camera mode deletes each chunk right after processing, so a crop can't be taken later;
+  and keeping the crops on disk (not in memory) means a restart mid-match keeps them.
+  At most one crop per player per chunk, at least PHOTO_GAP_SEC apart, never a box that
+  overlaps another player — so each cut-out shows one person in different moments, not
+  six near-copies of the same frame.
+- A CROP MUST BE ON ITS LABEL'S SIDE OF THE NET (A/B far, C/D near; teams never cross the
+  net) AND OF TYPICAL SIZE for that player in the chunk, not the biggest. Tested 2026-10-20:
+  picking the biggest box put a near player on far player A's sheet — when the tracker
+  briefly jumps a label onto the wrong person, that box is unusually big (near players are
+  closer to the camera), so "biggest" selects exactly the glitches.
 - A RECENT MASTER IS RESUMED ON RESTART. pm2 restarts (crash, OOM) would otherwise drop the
   whole match. On startup, if master-tracks.json is newer than --resume-window seconds we
   continue from it; older than that it's a previous match and we start fresh.
@@ -86,6 +107,8 @@ can see at a glance whether the box is keeping up.
   it opens its OWN connection. Use the low-res second stream (…/Channels/102).
 - Do NOT raise --threads to "go faster" — every core you take is a core ffmpeg may need for
   the live broadcast. The stats are allowed to be slow; the stream is not.
+- Do NOT widen PHOTO_WINDOW_SEC to "get better photos" — after a change of ends the label
+  holds the other pair's player, and the photo sheet would show two different people.
 - Do NOT trust a player's stats when their detection_rate is low (camera kept losing them) —
   distance/times under-count. Gate in the product (~0.60, spec §5); the per-chunk log prints
   it so a low one is visible here too.
@@ -111,6 +134,7 @@ import glob
 import json
 import os
 import re
+import shutil
 import signal
 import subprocess
 import sys
@@ -309,6 +333,173 @@ class TrackEngine:
             return None
 
 
+# ── player photos: a few cut-outs of each player, so a person can say "A is me" ──
+PHOTO_MAX = 6              # cut-outs per player on the photo sheet
+PHOTO_GAP_SEC = 20.0       # min tracked-play seconds between two cut-outs of one player
+PHOTO_WINDOW_SEC = 360.0   # only from the first 6 min of tracked play (header: DO NOT)
+PHOTO_MIN_H = 40           # px; a smaller box is too blurry to recognise anyone
+PHOTO_PAD = 0.15           # margin around the box, as a share of its size
+PHOTO_MAX_OVERLAP = 0.10   # skip a box this much covered by another player's box
+PHOTO_CELL = (120, 220)    # (w, h) of one cut-out on the sheet
+FAR_LABELS = ("A", "B")    # same split as player_stats.TEAMS
+
+
+def _covered(a, b):
+    """Share of box a covered by box b."""
+    ix = max(0.0, min(a[2], b[2]) - max(a[0], b[0]))
+    iy = max(0.0, min(a[3], b[3]) - max(a[1], b[1]))
+    return ix * iy / max(1e-6, (a[2] - a[0]) * (a[3] - a[1]))
+
+
+def _crop(frame, box):
+    h, w = frame.shape[:2]
+    x1, y1, x2, y2 = box
+    px, py = (x2 - x1) * PHOTO_PAD, (y2 - y1) * PHOTO_PAD
+    x1, y1 = max(0, int(x1 - px)), max(0, int(y1 - py))
+    x2, y2 = min(w, int(x2 + px)), min(h, int(y2 + py))
+    if x2 - x1 < 4 or y2 - y1 < 4:
+        return None
+    return frame[y1:y2, x1:x2]
+
+
+def _fit(img, w, h):
+    """Scale img to fit inside w×h and centre it on a dark cell."""
+    import cv2
+    import numpy as np
+    cell = np.full((h, w, 3), 24, np.uint8)
+    ih, iw = img.shape[:2]
+    k = min(w / iw, h / ih)
+    nw, nh = max(1, int(iw * k)), max(1, int(ih * k))
+    small = cv2.resize(img, (nw, nh), interpolation=cv2.INTER_AREA if k < 1 else cv2.INTER_CUBIC)
+    x, y = (w - nw) // 2, (h - nh) // 2
+    cell[y:y + nh, x:x + nw] = small
+    return cell
+
+
+class PhotoState:
+    """Cut-outs of each player, saved under <out-dir>/photos/<label>/NN.jpg."""
+
+    def __init__(self, out_dir):
+        self.out_dir = out_dir
+        self.dir = os.path.join(out_dir, "photos")
+        self.count = {}
+        self.last_t = {}
+        self._scan()
+
+    def _scan(self):
+        for L in LABELS:
+            self.count[L] = len(glob.glob(os.path.join(self.dir, L, "*.jpg")))
+            self.last_t[L] = float("-inf")
+
+    def reset(self):
+        """New match: drop the previous match's cut-outs and photo sheets."""
+        shutil.rmtree(self.dir, ignore_errors=True)
+        for L in LABELS:
+            try:
+                os.remove(os.path.join(self.out_dir, f"photo-{L}.jpg"))
+            except OSError:
+                pass
+        self._scan()
+
+    def collect(self, clip_path, new_samples, every, start_sample, fps, court):
+        """Cut at most one new cut-out per player from this chunk. Never raises."""
+        try:
+            if not fps or not court or all(self.count[L] >= PHOTO_MAX for L in LABELS):
+                return            # no court yet = can't check the side of the net
+            y_net = court["y_net"]
+            picks = {}                 # frame index in the chunk -> [(label, box, t)]
+            for L in LABELS:
+                if self.count[L] >= PHOTO_MAX:
+                    continue
+                far = L in FAR_LABELS
+                ok = []
+                for k, s in enumerate(new_samples[L]):
+                    if not s or not s.get("solid") or not s.get("box"):
+                        continue
+                    t = (start_sample + k) / fps
+                    if t > PHOTO_WINDOW_SEC or t - self.last_t[L] < PHOTO_GAP_SEC:
+                        continue
+                    box = s["box"]
+                    tall = box[3] - box[1]
+                    if tall < PHOTO_MIN_H:
+                        continue
+                    if (s["foot"][1] < y_net) != far:     # wrong side of the net
+                        continue
+                    others = (new_samples[O][k] for O in LABELS
+                              if O != L and k < len(new_samples[O]))
+                    if any(o and o.get("box") and _covered(box, o["box"]) > PHOTO_MAX_OVERLAP
+                           for o in others):
+                        continue
+                    ok.append((tall, k, box, t))
+                if ok:
+                    mid = sorted(c[0] for c in ok)[len(ok) // 2]
+                    _, k, box, t = min(ok, key=lambda c: abs(c[0] - mid))
+                    picks.setdefault(k * every, []).append((L, box, t))
+            if not picks:
+                return
+            import cv2
+            cap = cv2.VideoCapture(clip_path)
+            try:
+                for idx in sorted(picks):
+                    cap.set(cv2.CAP_PROP_POS_FRAMES, idx)
+                    ok, frame = cap.read()
+                    if not ok:
+                        continue
+                    for L, box, t in picks[idx]:
+                        crop = _crop(frame, box)
+                        if crop is None:
+                            continue
+                        d = os.path.join(self.dir, L)
+                        os.makedirs(d, exist_ok=True)
+                        cv2.imwrite(os.path.join(d, f"{self.count[L]:02d}.jpg"), crop,
+                                    [cv2.IMWRITE_JPEG_QUALITY, 92])
+                        self.count[L] += 1
+                        self.last_t[L] = t
+            finally:
+                cap.release()
+        except Exception as exc:   # noqa: BLE001 — a photo error must not kill the loop
+            sys.stderr.write(f"[live_stats] player photo failed: {exc}\n")
+
+
+def render_photo_sheets(photos, out_dir, names_map):
+    """photo-<L>.jpg: that player's cut-outs side by side, labelled. Never raises."""
+    try:
+        import cv2
+        sys.path.insert(0, SCRIPTS_DIR)
+        from player_heatmap import background, put_centered
+        cw, ch = PHOTO_CELL
+        gap, head = 8, 44
+        for L in LABELS:
+            files = sorted(glob.glob(os.path.join(photos.dir, L, "*.jpg")))[:PHOTO_MAX]
+            imgs = [im for im in (cv2.imread(f) for f in files) if im is not None]
+            if not imgs:
+                continue
+            cols = min(3, len(imgs))
+            rows = (len(imgs) + cols - 1) // cols
+            W = cols * cw + (cols + 1) * gap
+            H = head + rows * ch + (rows + 1) * gap
+            base = background(W, H)
+            put_centered(base, _player_title(L, names_map), W / 2, head * 0.72, 0.8,
+                         (255, 255, 255), 2)
+            for i, img in enumerate(imgs):
+                r, c = divmod(i, cols)
+                x, y = gap + c * (cw + gap), head + gap + r * (ch + gap)
+                base[y:y + ch, x:x + cw] = _fit(img, cw, ch)
+            out = os.path.join(out_dir, f"photo-{L}.jpg")
+            tmp = out + ".tmp.jpg"
+            cv2.imwrite(tmp, base, [cv2.IMWRITE_JPEG_QUALITY, 90])
+            os.replace(tmp, out)
+        return True
+    except Exception as exc:   # noqa: BLE001
+        sys.stderr.write(f"[live_stats] photo sheet failed: {exc}\n")
+        return False
+
+
+def _player_title(label, names_map):
+    name = names_map.get(label, label)
+    return name if name != label else f"PLAYER {label}"
+
+
 # ── master accumulation + running heat ──
 def merge_into_master(master, clip_payload, swap_margin):
     """Append one chunk's downsampled tracks; return the new per-label samples added."""
@@ -496,18 +687,13 @@ def render_heat_card(master, heat, out_png, names_map, logo):
     """Draw the four court maps from the RUNNING grid (no re-accumulation). Never raises."""
     try:
         import cv2
-        import numpy as np
         sys.path.insert(0, SCRIPTS_DIR)
-        from player_heatmap import (blur_heat, heat_lut, draw_court_panel,
+        from player_heatmap import (heat_lut, draw_court_panel,
                                      background, draw_legend, put_centered, _blit_logo)
         if heat.grids is None or heat.court_model is None:
             return False
         court = heat.court_model
-        final = {}
-        for L in LABELS:
-            present = max(1, heat.solid[L])
-            final[L] = blur_heat(heat.grids[L] / present)
-        vmax = max(float(g.max()) for g in final.values()) or 1.0
+        final, vmax = _heat_layers(heat)
         lut, alpha = heat_lut()
 
         W, M, gap, label_h = 1080, 36, 24, 44
@@ -544,6 +730,59 @@ def render_heat_card(master, heat, out_png, names_map, logo):
         return True
     except Exception as exc:   # noqa: BLE001 — a draw error must not kill the loop
         sys.stderr.write(f"[live_stats] heat card failed: {exc}\n")
+        return False
+
+
+def _heat_layers(heat):
+    """Each player's blurred share-of-time grid, and one colour scale for all four."""
+    from player_heatmap import blur_heat
+    final = {L: blur_heat(heat.grids[L] / max(1, heat.solid[L])) for L in LABELS}
+    vmax = max(float(g.max()) for g in final.values()) or 1.0
+    return final, vmax
+
+
+def render_player_heatmaps(heat, out_dir, names_map, logo):
+    """
+    heatmap-<L>.png: one player's court map on its own, for that player's card in the
+    product. Same colour scale as the four-map picture, so colours compare across players.
+    A player never clearly seen gets no picture. Never raises.
+    """
+    try:
+        import cv2
+        sys.path.insert(0, SCRIPTS_DIR)
+        from player_heatmap import (heat_lut, draw_court_panel, background, draw_legend,
+                                     put_centered, _blit_logo)
+        if heat.grids is None or heat.court_model is None:
+            return False
+        final, vmax = _heat_layers(heat)
+        lut, alpha = heat_lut()
+        W, M, label_h, legend_h = 540, 28, 48, 70
+        header_h = 64 if logo else 0
+        court_w = W - 2 * M
+        court_h = int(court_w * 1.75)
+        H = M + header_h + label_h + court_h + 16 + legend_h + M
+        for L in LABELS:
+            if heat.solid[L] == 0:
+                continue
+            base = background(W, H)
+            if header_h:
+                _blit_logo(base, logo, W, M, header_h)
+            top = M + header_h
+            put_centered(base, _player_title(L, names_map), W / 2, top + label_h * 0.6, 0.9,
+                         (255, 255, 255), 2)
+            panel = draw_court_panel(court_w, court_h, heat.court_model, final[L], vmax, lut, alpha)
+            cy = top + label_h
+            base[cy:cy + court_h, M:M + court_w] = panel
+            cv2.rectangle(base, (M - 1, cy - 1), (M + court_w, cy + court_h), (220, 190, 150), 1)
+            draw_legend(base, M + int(court_w * 0.1), cy + court_h + 16, int(court_w * 0.8),
+                        legend_h, lut, alpha)
+            out = os.path.join(out_dir, f"heatmap-{L}.png")
+            tmp = out + ".tmp.png"
+            cv2.imwrite(tmp, base)
+            os.replace(tmp, out)
+        return True
+    except Exception as exc:   # noqa: BLE001 — a draw error must not kill the loop
+        sys.stderr.write(f"[live_stats] player heatmap failed: {exc}\n")
         return False
 
 
@@ -686,11 +925,15 @@ def main():
 
     master = {"tracks": None, "court": None, "fps": None, "frames": 0,
               "width": None, "height": None, "high_water": 0, "run_token": None}
+    resumed = False
     if not args.fresh:
-        load_master_if_recent(master, master_path, args.resume_window)
+        resumed = load_master_if_recent(master, master_path, args.resume_window)
 
     heat = HeatState()
     heat.rebuild(master)      # fold a resumed master into the running grid once
+    photos = PhotoState(out_dir)
+    if not resumed:
+        photos.reset()        # a fresh match must not inherit an older match's cut-outs
 
     engine = TrackEngine(args.model, args.conf, args.imgsz, args.device, args.court_hsv,
                          court_json, args.lock_sec, args.max_jump_frac, args.coast_frames,
@@ -732,6 +975,7 @@ def main():
                     master.update({"tracks": None, "court": None, "fps": None, "frames": 0,
                                    "width": None, "height": None, "high_water": 0, "run_token": None})
                     heat.rebuild(master)
+                    photos.reset()
                     done = 0
 
             if own_files:
@@ -784,6 +1028,10 @@ def main():
 
             new_samples = merge_into_master(master, payload, args.swap_margin)
             heat.absorb(master, new_samples)
+            # Before _advance: camera mode deletes the chunk there (header 'PHOTO CROPS').
+            photos.collect(clip, new_samples, payload["every"],
+                           master["frames"] - len(new_samples["A"]), master["fps"],
+                           master.get("court"))
             _advance(clip)
             done += 1
 
@@ -797,6 +1045,8 @@ def main():
                 ts0 = time.time()
                 write_stats(master, stats_path, args.names)
                 render_heat_card(master, heat, heat_path, names_map, args.logo)
+                render_player_heatmaps(heat, out_dir, names_map, args.logo)
+                render_photo_sheets(photos, out_dir, names_map)
                 t_stats = time.time() - ts0
 
             clip_dur = payload["frames"] / payload["fps"] if payload["fps"] else 0.0
@@ -820,6 +1070,8 @@ def main():
             write_master(master, master_path)
             write_stats(master, stats_path, args.names)
             render_heat_card(master, heat, heat_path, names_map, args.logo)
+            render_player_heatmaps(heat, out_dir, names_map, args.logo)
+            render_photo_sheets(photos, out_dir, names_map)
         sys.stderr.write(f"[live_stats] done. stats={stats_path} heatmap={heat_path}\n")
     return 0
 

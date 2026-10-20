@@ -11,8 +11,9 @@ import { safeSegment } from "../utils/paths";
  *
  * ── IN SIMPLE WORDS ──
  * When a match ends, its folder gets a "ready to send" note (pending.json).
- * This class walks those folders, uploads the heatmap picture to the image
- * host we already use for logos, then sends the numbers + picture link to the
+ * This class walks those folders, uploads the pictures (the four-map heatmap,
+ * each player's own map, and each player's photo sheet) to the image host we
+ * already use for logos, then sends the numbers + picture links to the
  * backend. Like a post-office outbox: a letter stays in the tray until the
  * other side signs for it. Once it has, the folder is deleted.
  *
@@ -24,8 +25,15 @@ import { safeSegment } from "../utils/paths";
  * - matchId is the backend's scored-match id, learned from its match_state
  *   events (MatchStatsService). Null when no scored match was seen; the
  *   backend then picks the match by capturedAt.
- * - The picture is optional: no Cloudinary keys, or repeated upload failures,
- *   send heatmapUrl null and the numbers still go (§4).
+ * - Pictures (§4): heatmap.png → heatmapUrl (four maps in one picture);
+ *   heatmap-A..D.png → heatmapUrls (the backend shows these on each player's
+ *   card); photo-A..D.jpg → photoUrls (cut-outs of each player, so the venue
+ *   or the player can match A–D to real people — 2026-10-20). The backend
+ *   doesn't store photoUrls yet (asked 2026-10-20); it ignores fields it
+ *   doesn't know (no whitelist on its ValidationPipe), so sending it early
+ *   is harmless.
+ * - Pictures are optional: no Cloudinary keys, or repeated upload failures,
+ *   send without the missing links and the numbers still go.
  * - Nothing is sent while STATS_SEND_ENABLED is off — the backend route is
  *   only on staging so far (2026-10-20). Finished matches wait here and go
  *   out once it's on.
@@ -34,9 +42,9 @@ import { safeSegment } from "../utils/paths";
  * - The queue lives on disk, not in memory. The app is restarted by deploys
  *   and crashes; an in-memory queue would silently lose every match that
  *   ended while the backend was briefly unreachable.
- * - The heatmap upload uses a fixed name per match with overwrite on, so a
- *   retry replaces the same image instead of piling up copies, and the URL is
- *   saved after the first success so we don't upload it again.
+ * - Each picture uploads under a fixed name per match with overwrite on, so a
+ *   retry replaces the same image instead of piling up copies, and each link
+ *   is saved after its first success so a retry only uploads what's missing.
  * - 400/413/422 mean "this record itself is wrong" — resending can't fix it,
  *   so it is parked as rejected.json (kept for a look, then expired). Every
  *   other failure, including 404 (route not deployed yet) and 401 (key not
@@ -69,8 +77,8 @@ export interface MatchRecord {
 /** Written when the match ends; the send's progress. */
 interface PendingSend extends MatchRecord {
   capturedAt: string;
-  heatmapUrl: string | null;
-  heatmapDone: boolean;
+  pictureUrls: Record<string, string>; // picture key -> uploaded link
+  picturesDone: boolean;
   attempts: number;
   nextAttemptAt: number;
   queuedAt: number;
@@ -82,11 +90,20 @@ const WORKING_FILES = [
   "master-tracks.json",
   "master-tracks.json.tmp",
   "segments",
+  "photos", // raw cut-outs; the photo sheets built from them stay
   "reader.pid",
   "court.json",
 ];
+const SLOTS = ["A", "B", "C", "D"] as const;
+type Slot = (typeof SLOTS)[number];
+// Every picture the reader may leave, keyed by its name in the send.
+const PICTURES: Array<{ key: string; file: string }> = [
+  { key: "heatmap", file: HEATMAP_FILE },
+  ...SLOTS.map((s) => ({ key: `heatmap-${s}`, file: `heatmap-${s}.png` })),
+  ...SLOTS.map((s) => ({ key: `photo-${s}`, file: `photo-${s}.jpg` })),
+];
 const PERMANENT_REJECT = new Set([400, 413, 422]);
-const HEATMAP_UPLOAD_TRIES = 3;
+const PICTURE_UPLOAD_TRIES = 3;
 
 export interface OutboxSettings {
   sendEnabled: boolean;
@@ -140,8 +157,8 @@ export class MatchStatsOutbox {
     const pending: PendingSend = {
       ...match,
       capturedAt: capturedAt.toISOString(),
-      heatmapUrl: null,
-      heatmapDone: false,
+      pictureUrls: {},
+      picturesDone: false,
       attempts: 0,
       nextAttemptAt: 0,
       queuedAt: Date.now(),
@@ -239,17 +256,18 @@ export class MatchStatsOutbox {
     }
     if (Date.now() < pending.nextAttemptAt) return;
 
-    if (!pending.heatmapDone) {
-      const upload = await this.uploadHeatmap(dir, pending);
+    if (!pending.picturesDone) {
+      const upload = await this.uploadPictures(dir, pending);
+      writeJsonAtomic(pendingPath, pending); // keep the links that did upload
       if (!upload.done) {
-        this.recordFailure(pendingPath, pending, `heatmap upload failed: ${upload.error}`);
+        this.recordFailure(pendingPath, pending, `picture upload failed: ${upload.error}`);
         return;
       }
-      pending.heatmapUrl = upload.url;
-      pending.heatmapDone = true;
+      pending.picturesDone = true;
       writeJsonAtomic(pendingPath, pending);
     }
 
+    const urls = pending.pictureUrls;
     const body = {
       schemaVersion: 1,
       groundId: pending.groundId,
@@ -257,7 +275,9 @@ export class MatchStatsOutbox {
       matchId: pending.matchId,
       streamId: pending.streamId,
       capturedAt: pending.capturedAt,
-      heatmapUrl: pending.heatmapUrl,
+      heatmapUrl: urls.heatmap ?? null,
+      heatmapUrls: perSlot(urls, "heatmap"),
+      photoUrls: perSlot(urls, "photo"),
       stats,
     };
 
@@ -277,7 +297,7 @@ export class MatchStatsOutbox {
       this.logger.info("Match stats sent", {
         courtId: pending.courtId,
         status: res.status,
-        heatmapUrl: pending.heatmapUrl,
+        pictures: Object.keys(urls).length,
         attempts: pending.attempts + 1,
       });
       fs.rmSync(dir, { recursive: true, force: true });
@@ -313,47 +333,64 @@ export class MatchStatsOutbox {
     });
   }
 
-  // done=false means "try again later"; done=true with url=null means "send
-  // without a picture" (none drawn, no keys, or it kept failing).
-  private async uploadHeatmap(
+  // Upload every picture not uploaded yet, saving each link in pending. done=false
+  // means "try again later"; done=true means "send now with whatever links we have"
+  // (no keys, nothing to upload, or failures that kept repeating).
+  private async uploadPictures(
     dir: string,
     pending: PendingSend
-  ): Promise<{ done: boolean; url: string | null; error?: string }> {
-    const file = path.join(dir, HEATMAP_FILE);
-    if (!fs.existsSync(file)) return { done: true, url: null };
+  ): Promise<{ done: boolean; error?: string }> {
+    const todo = PICTURES.filter(
+      (p) => !pending.pictureUrls[p.key] && fs.existsSync(path.join(dir, p.file))
+    );
+    if (todo.length === 0) return { done: true };
     const c = this.cloudinary;
     if (!c.cloudName || !c.apiKey || !c.apiSecret) {
-      this.logger.warn("Cloudinary keys not set; sending match stats without the heatmap", {
+      this.logger.warn("Cloudinary keys not set; sending match stats without pictures", {
         courtId: pending.courtId,
       });
-      return { done: true, url: null };
+      return { done: true };
     }
-    try {
-      cloudinaryClient.config({
-        cloud_name: c.cloudName,
-        api_key: c.apiKey,
-        api_secret: c.apiSecret,
-      });
-      const result = await cloudinaryClient.uploader.upload(file, {
-        folder: `dropshot/match-stats/${safeSegment(pending.groundId)}/${safeSegment(pending.courtId)}`,
-        public_id: safeSegment(path.basename(dir)),
-        overwrite: true,
-        resource_type: "image",
-        timeout: 60_000,
-      });
-      return { done: true, url: result.secure_url };
-    } catch (error) {
-      const message = error instanceof Error ? error.message : JSON.stringify(error);
-      if (pending.attempts + 1 >= HEATMAP_UPLOAD_TRIES) {
-        this.logger.warn("Heatmap upload keeps failing; sending match stats without it", {
-          courtId: pending.courtId,
-          error: message,
+    cloudinaryClient.config({
+      cloud_name: c.cloudName,
+      api_key: c.apiKey,
+      api_secret: c.apiSecret,
+    });
+    let firstError: string | undefined;
+    for (const picture of todo) {
+      try {
+        const result = await cloudinaryClient.uploader.upload(path.join(dir, picture.file), {
+          folder: `dropshot/match-stats/${safeSegment(pending.groundId)}/${safeSegment(pending.courtId)}`,
+          public_id: `${safeSegment(path.basename(dir))}-${picture.key}`,
+          overwrite: true,
+          resource_type: "image",
+          timeout: 60_000,
         });
-        return { done: true, url: null };
+        pending.pictureUrls[picture.key] = result.secure_url;
+      } catch (error) {
+        firstError ??= `${picture.key}: ${error instanceof Error ? error.message : JSON.stringify(error)}`;
       }
-      return { done: false, url: null, error: message };
     }
+    if (!firstError) return { done: true };
+    if (pending.attempts + 1 >= PICTURE_UPLOAD_TRIES) {
+      this.logger.warn("Picture upload keeps failing; sending match stats without the missing ones", {
+        courtId: pending.courtId,
+        error: firstError,
+      });
+      return { done: true };
+    }
+    return { done: false, error: firstError };
   }
+}
+
+// {A: link, ...} for one kind of picture, or null when none uploaded.
+function perSlot(urls: Record<string, string>, kind: string): Partial<Record<Slot, string>> | null {
+  const out: Partial<Record<Slot, string>> = {};
+  for (const s of SLOTS) {
+    const url = urls[`${kind}-${s}`];
+    if (url) out[s] = url;
+  }
+  return Object.keys(out).length ? out : null;
 }
 
 export function readJson<T>(file: string): T | null {

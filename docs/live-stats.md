@@ -4,10 +4,15 @@
 
 ## What this is, in one breath
 
-A second program that, **while the match is streaming**, keeps two files on disk up to date:
+A second program that, **while the match is streaming**, keeps these files on disk up to date:
 
 - `stats.json` — the numbers (how far each player ran, time at the net, the team's shape…)
 - `heatmap.png` — the four "where did they stand" court maps
+- `heatmap-A.png` … `heatmap-D.png` — the same map for each player on their own
+- `photo-A.jpg` … `photo-D.jpg` — a photo sheet per player: a few cut-outs of that player from
+  the first 6 minutes of play, so the venue or the player can say "A is Ali" in the portal.
+  Only early cut-outs, because players change ends every two games and a label then holds a
+  different person; a cut-out must also be on its label's side of the net (A/B far, C/D near).
 
 It never touches the live broadcast. ffmpeg keeps pushing the video to YouTube exactly as
 before; this just does the counting on the side.
@@ -104,10 +109,10 @@ Since 2026-10-18 the streamer app runs the reader itself, so nobody starts it by
    stream**, worked out from the stream's camera address (Hikvision `…/Channels/101` → `…/102`,
    Dahua `subtype=0` → `subtype=1`). Unknown camera brand → no stats for that court, logged.
 2. **Court stops** (backend's stop event) → the reader is asked to finish, writes its final
-   `stats.json` + `heatmap.png`, and the folder joins the **outbox**. While it runs, the
+   `stats.json` and pictures, and the folder joins the **outbox**. While it runs, the
    backend's `match_state` events tell it which scored match is on the court; that id goes
    in the record so the stats land on the right game.
-3. **Outbox** → uploads the heatmap to Cloudinary, sends the numbers + picture link to the
+3. **Outbox** → uploads the pictures to Cloudinary, sends the numbers + picture links to the
    backend (`docs/stats-db-handoff.md`), and deletes the folder once the backend says "got it".
    No answer, or an error → it keeps the folder and tries again (1 min, doubling up to 1 h).
 
@@ -131,8 +136,8 @@ crashing gives up for that match without touching the stream.
 | `STATS_SEND_PATH` | `/api/v1/padel-grounds/{groundId}/courts/{courtId}/stats` | backend route; change it here if the backend names it differently |
 | `STATS_KEEP_DAYS` | `14` | outbox entries older than this are deleted unsent (protects the disk) |
 
-Heatmap upload uses the existing `CLOUDINARY_API_KEY` / `CLOUDINARY_API_SECRET`; without them the
-numbers still go, with `heatmapUrl: null`.
+Picture upload uses the existing `CLOUDINARY_API_KEY` / `CLOUDINARY_API_SECRET`; without them the
+numbers still go, with no picture links.
 
 **Don't also run the pm2 reader below on a box with `STATS_ENABLED=true`** — that's two readers
 on one court, double the CPU.
@@ -171,6 +176,7 @@ pm2 logs dropshot-live-stats
 ```
 
 Outputs land in `--out-dir` (default `./live-stats-out/`): `stats.json`, `heatmap.png`,
+`heatmap-A..D.png`, `photo-A..D.jpg` (built from the cut-outs in `photos/`),
 `court.json` (the one-time court calibration — reused on every later run), and
 `master-tracks.json` (the running record). A pm2 restart mid-match **resumes** from
 `master-tracks.json` if it's newer than `--resume-window` (default 15 min); older than that it's

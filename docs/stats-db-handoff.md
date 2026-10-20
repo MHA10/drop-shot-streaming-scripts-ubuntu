@@ -52,7 +52,9 @@ The streamer wraps the computed stats in a small **envelope** that identifies th
   "matchId":  null,                                      // OPEN — see §3
   "streamId": "stream_mv9n6pe8_45bd11a6579831ac",        // per-stream tag (optional, not stable)
   "capturedAt": "2026-10-16T18:20:00Z",                  // when the final numbers were written (UTC)
-  "heatmapUrl": "https://res.cloudinary.com/<acct>/image/upload/v169.../court-heatmap.png",
+  "heatmapUrl": "https://res.cloudinary.com/<acct>/image/upload/v169.../<match>-heatmap.png",
+  "heatmapUrls": { "A": "https://…/<match>-heatmap-A.png", "B": "…", "C": "…", "D": "…" },
+  "photoUrls":   { "A": "https://…/<match>-photo-A.jpg",   "B": "…", "C": "…", "D": "…" },
 
   // ── stats: the computed content (produced by scripts/player_stats.py) ──
   "stats": {
@@ -117,7 +119,9 @@ The streamer wraps the computed stats in a small **envelope** that identifies th
 | `matchId` | string \| null | **open decision — §3**; `null` until we settle it |
 | `streamId` | string \| null | per-stream session tag; **not** a stable match id — don't key on it |
 | `capturedAt` | string (ISO-8601 UTC) | when the final numbers were produced |
-| `heatmapUrl` | string (url) \| null | Cloudinary link to the heatmap picture; `null` if the upload failed |
+| `heatmapUrl` | string (url) \| null | Cloudinary link to the four-map picture; `null` if the upload failed |
+| `heatmapUrls` | object \| null | `{A..D: url}` — each player's own map; a missing player/upload is left out |
+| `photoUrls` | object \| null | `{A..D: url}` — each player's photo sheet (§4); **not stored by the backend yet** |
 
 **Per player** (`stats.players.{A,B,C,D}`) — all numbers are plain JSON numbers:
 | field | type | unit | meaning |
@@ -175,12 +179,15 @@ Until this is settled, the streamer sends `matchId: null`. Tell me which way you
 
 ---
 
-## 4. The heatmap picture
+## 4. The pictures
 
-- The streamer renders a single image: four top-down court maps (one per player) showing where each stood.
-- The streamer **uploads it to Cloudinary** (the account already used for client logos) and puts the resulting URL in `heatmapUrl`.
-- You just **store the URL** and let the product show the image. Nothing to render on your side.
-- If the upload ever fails, `heatmapUrl` is `null` and the numeric stats still arrive — treat the image as optional.
+The streamer draws them, **uploads them to Cloudinary** (the account already used for client logos) and sends the links. Nothing to render on your side.
+
+- **`heatmapUrl`** — one picture with all four court maps.
+- **`heatmapUrls`** — `{A, B, C, D}`, each player's map on its own (added 2026-10-20; your player cards read this field).
+- **`photoUrls`** — `{A, B, C, D}`, a photo sheet per player: up to 6 cut-outs of that player from the first 6 minutes of play. This is how a person tells which of A–D they are before claiming or assigning a slot (added 2026-10-20). The cut-outs come from the camera's low-res stream, so they show clothes and build more than faces.
+- Pictures are optional: a failed upload or no keys leaves that link out, and the numbers still arrive.
+- The links are ordinary public Cloudinary links, like the heatmap and the logos.
 
 ---
 
@@ -212,6 +219,7 @@ These don't change storage, but they matter for how the product uses the numbers
 - [x] Match identity (§3): `match_state` event.
 - [x] Stats tables (`match_stats` + one row per player) and the receiving route (§1).
 - [x] Validate `x-streaming-api-key` + court-belongs-to-ground.
+- [ ] Open: store `photoUrls` like `heatmapUrls` (a `photo_urls` column, the same https-only clean-up) and show each slot's photo sheet where people claim or assign A–D (`to-annotate`, the venue's match page, the slot preview).
 - [ ] Open: with no `matchId` and no scored match in the time window, every send creates a new row (repeats are only merged by match id, and `streamId` isn't stored). Please treat the same court + `streamId` as a replace in that case.
 
 **Streamer (me) — built 2026-10-18, switched off until your route is live:**
