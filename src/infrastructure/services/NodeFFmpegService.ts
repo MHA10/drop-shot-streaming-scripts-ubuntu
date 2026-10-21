@@ -14,6 +14,7 @@ import { Logger } from "../../application/interfaces/Logger";
 import { StartStreamRequest } from "../../application/interfaces/StartStreamUseCase.types";
 import { Config } from "../config/Config";
 import { ensureDirSync } from "../utils/paths";
+import { YoutubeOutputWatch } from "../utils/youtubeOutputWatch";
 
 export class NodeFFmpegService implements FFmpegService {
   private static readonly VIDEO_EXTS = new Set(["mp4", "gif", "webm", "mov", "avi", "mkv"]);
@@ -32,10 +33,14 @@ export class NodeFFmpegService implements FFmpegService {
 
   /**
    * Starts an FFmpeg stream with automatic recovery mechanisms:
-   * 1. Monitors FFmpeg stderr output for "time=00:00:00.00" timestamps
-   * 2. Detects stalled streams when the same timestamp repeats 10 consecutive times
-   * 3. Automatically kills and restarts stalled processes using SIGKILL
-   * 4. Uses a 10-second timeout to detect completely frozen processes
+   * 1. Watches FFmpeg stderr for the YouTube output dying (YoutubeOutputWatch):
+   *    a muxing/trailer error on the flv output, or `frame=` (which follows the
+   *    YouTube output) repeating 10 consecutive times
+   * 2. Kills the process with SIGKILL on either, so the exit handler restarts it
+   * 3. Uses a 10-second timeout to detect completely frozen processes
+   *
+   * `time=` is NOT used: with the highlight buffer as a second output, ffmpeg
+   * 6.1 keeps running and `time=` keeps moving after YouTube drops.
    *
    * The restart mechanism relies on process exit events and the retry parameter
    * to handle stream recovery after failures.
@@ -93,41 +98,33 @@ export class NodeFFmpegService implements FFmpegService {
         }
       }, 10000); // 10 second timeout
 
-      // Variables to track time value and detect stalled streams
-      let lastTimeValue: string | null = null;
-      let sameTimeCounter = 0;
-      const MAX_SAME_TIME_COUNT = 10; // Restart after 10 consecutive identical time values
+      // Restart when the YouTube output dies or stalls (see YoutubeOutputWatch).
+      const MAX_SAME_FRAME_COUNT = 10;
+      const youtubeWatch = new YoutubeOutputWatch(MAX_SAME_FRAME_COUNT);
+      let killedForRestart = false;
 
       // Monitor stderr for startup confirmation
       process.stderr?.on("data", (data) => {
         const output = data.toString();
 
-        // Extract time value from FFmpeg output
-        const timeMatch = output.match(/time=(\d+:\d+:\d+\.\d+)/);
-        if (timeMatch && timeMatch[1]) {
-          const currentTimeValue = timeMatch[1];
-
-          // Check if time value is the same as the last one
-          if (currentTimeValue === lastTimeValue) {
-            sameTimeCounter++;
-            console.log(
-              `Stream time stalled: ${sameTimeCounter}/${MAX_SAME_TIME_COUNT} (${currentTimeValue})`
-            );
-
-            // If time value has been the same for MAX_SAME_TIME_COUNT times, restart the stream
-            if (sameTimeCounter >= MAX_SAME_TIME_COUNT) {
-              console.log(
-                `Stream stalled for ${MAX_SAME_TIME_COUNT} consecutive frames. Restarting...`
-              );
-              process.kill("SIGKILL");
-              sameTimeCounter = 0; // Reset counter
-              return;
-            }
-          } else {
-            // Reset counter if time value changed
-            sameTimeCounter = 0;
-            lastTimeValue = currentTimeValue;
-          }
+        const verdict = youtubeWatch.feed(output);
+        if (verdict.kind === "ok" && youtubeWatch.stalledReports > 0) {
+          console.log(
+            `Stream output stalled: ${youtubeWatch.stalledReports}/${MAX_SAME_FRAME_COUNT}`
+          );
+        }
+        if (verdict.kind !== "ok" && !killedForRestart) {
+          killedForRestart = true;
+          this.logger.warn("YouTube output lost; restarting FFmpeg", {
+            pid: process.pid,
+            courtId,
+            reason:
+              verdict.kind === "output-failed"
+                ? verdict.detail
+                : `frame count stuck at ${verdict.frame} for ${verdict.repeats} reports`,
+          });
+          process.kill("SIGKILL");
+          return;
         }
 
         // Look for successful stream start indicators
