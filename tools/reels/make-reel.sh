@@ -33,6 +33,9 @@
 #   --no-track        skip tracking; full-frame reel (no crop)
 #   --no-audio        don't mux audio
 #   --keep-bars       don't auto-strip letterbox bars
+#   --roi "x,y;..."   court boundary (normalized points); ignore anyone
+#                     outside it. Measured on the FULL frame — combine with
+#                     --keep-bars if the source has letterbox bars.
 #   --keep-temp       leave intermediates in the work dir
 set -euo pipefail
 
@@ -44,7 +47,7 @@ PY="$VENV/bin/python"
 INPUT=""; MOMENT=""; OUT=""
 ASPECT="4:5"; PRE=25; POST=5; WIDTH=1080
 LOGO="$REPO/public/client.png"; DSLOGO="$REPO/public/ds.png"
-TRACK=1; AUDIO=1; STRIP=1; KEEPTMP=0
+TRACK=1; AUDIO=1; STRIP=1; KEEPTMP=0; ROI=""
 
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -60,6 +63,7 @@ while [ $# -gt 0 ]; do
     --no-track) TRACK=0; shift ;;
     --no-audio) AUDIO=0; shift ;;
     --keep-bars) STRIP=0; shift ;;
+    --roi) ROI="$2"; shift 2 ;;
     --keep-temp) KEEPTMP=1; shift ;;
     -h|--help) sed -n '2,40p' "$0"; exit 0 ;;
     *) echo "unknown option: $1" >&2; exit 2 ;;
@@ -106,7 +110,7 @@ if [ "$TRACK" -eq 1 ]; then
   echo "── 3/5 reframe to $ASPECT (player tracking) ──"
   "$PY" "$REPO/scripts/reframe_ball.py" \
     --input "$SRCV" --output "$WORK/reframed.mp4" \
-    --aspect "$ASPECT" --mode action --debug
+    --aspect "$ASPECT" --mode action --debug ${ROI:+--roi "$ROI"}
   VID="$WORK/reframed.mp4"
 else
   echo "── 3/5 tracking disabled (--no-track) — full frame ──"

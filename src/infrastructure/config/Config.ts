@@ -1,4 +1,5 @@
 import * as dotenv from "dotenv";
+import { parseCourtRoiMap } from "../utils/courtRoi";
 
 // Load environment variables
 dotenv.config();
@@ -97,6 +98,12 @@ export interface AppConfig {
     // (default — required for YouTube Shorts) / "4:5" / "16:9" (full frame).
     ballTracking: {
       enabled: boolean;
+      // Court boundary: the tracker ignores anyone whose feet are outside this
+      // polygon (passers-by, neighbouring courts). Normalized "x,y;x,y;...".
+      // "" = no boundary. See src/infrastructure/utils/courtRoi.ts.
+      courtRoi: string;
+      // Per-court overrides, keyed by courtId (a box with several cameras).
+      courtRoiByCourt: Record<string, string>;
     };
     reelAspect: string;
     // When true (and STREAMING_API_KEY is set), a finished reel is uploaded to
@@ -262,6 +269,10 @@ export class Config {
         ballTracking: {
           enabled:
             this.getEnvVar("HIGHLIGHT_BALL_TRACKING_ENABLED", "false") === "true",
+          courtRoi: this.getEnvVar("HIGHLIGHT_COURT_ROI", "").trim(),
+          courtRoiByCourt: parseCourtRoiMap(
+            this.getEnvVar("HIGHLIGHT_COURT_ROI_BY_COURT", "")
+          ),
         },
         // 9:16 — full-screen vertical. This is the ratio YouTube requires to
         // classify an upload as a SHORT (the backend accepts 9:16 or 1:1), and

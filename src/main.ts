@@ -191,7 +191,13 @@ class Application {
         // Ball-tracking reframer: real Python/OpenCV impl only when enabled,
         // else a no-op (full-frame). Off by default until tuned on real footage.
         const ballReframer = highlightConfig.ballTracking.enabled
-          ? new PythonBallReframer(highlightConfig.reelAspect, this.logger)
+          ? new PythonBallReframer(
+              highlightConfig.reelAspect,
+              this.logger,
+              undefined,
+              highlightConfig.ballTracking.courtRoi,
+              highlightConfig.ballTracking.courtRoiByCourt
+            )
           : new NullBallReframer();
         const highlightRenderer = new HighlightRendererService(
           path.resolve("./public/ds.png"),
