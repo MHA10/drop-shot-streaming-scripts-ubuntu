@@ -62,6 +62,17 @@ import { Logger } from "../../application/interfaces/Logger";
  * - Do NOT treat port-open as *durable* presence (only the bounded grace).
  * - Do NOT let a serial error/disconnect crash the process — port AND parser
  *   errors are handled and route to a backoff reconnect (mirrors NodeSSEService).
+ *
+ * ── SILENT PORT WATCHDOG ──
+ * An open port can stay silent forever: after a venue power cut (Padel
+ * Central, 21 Oct 2026, twice) the box rebooted, opened /dev/ttyUSB0, and the
+ * ESP32 sent nothing — no heartbeat, no scores — until someone restarted the
+ * streamer. A restart closes and reopens the port (which also resets the
+ * ESP32 through the USB adapter); that is what brought it back every time.
+ * So: if the port is open but no valid line has arrived for SILENCE_REOPEN_MS
+ * (4 missed heartbeats), close it and reopen it via the normal reconnect path.
+ * Repeated silent reopens back off (doubling, capped) so a non-ESP32 serial
+ * device on the box doesn't churn forever; any valid line resets it.
  */
 
 // The ESP32 heartbeats every 5s (esp32-leader.ino). Allow ~3 missed beats
@@ -72,6 +83,12 @@ const PRESENCE_FRESHNESS_MS = 15_000;
 // just over one heartbeat interval, to bridge the window before the first
 // heartbeat on a cold boot. After this, only real traffic keeps it present.
 const OPEN_GRACE_MS = 7_000;
+
+// Silent-port watchdog: reopen after this long with the port open and no valid
+// line (4 missed 5s heartbeats). Doubles per consecutive silent reopen, capped.
+const SILENCE_REOPEN_MS = 20_000;
+const SILENCE_REOPEN_MAX_MS = 5 * 60_000;
+const SILENCE_CHECK_MS = 5_000;
 
 // Reconnect backoff bounds (mirror NodeSSEService.scheduleRetry).
 const RECONNECT_BASE_MS = 1_000;
@@ -91,6 +108,10 @@ export class SerialHighlightListener
   private triggerTimer: NodeJS.Timeout | null = null;
   // Last `seq` seen on a button packet, to spot presses lost in mesh transit.
   private lastButtonSeq: number | undefined;
+  // Silent-port watchdog state.
+  private watchdogTimer: NodeJS.Timeout | null = null;
+  private silentReopens = 0;
+  private openPath = "";
 
   // Native serial libs, lazily required in start(). Null when unavailable, in
   // which case the listener is inert and isDevicePresent() stays false.
@@ -105,7 +126,13 @@ export class SerialHighlightListener
     // highlight whenever `triggerFile` appears on disk — so the pipeline can be
     // exercised on a box without the ESP32 button hardware.
     private readonly forcePresent: boolean = false,
-    private readonly triggerFile: string = ""
+    private readonly triggerFile: string = "",
+    // Watchdog timings; overridable for tests only.
+    private readonly watchdog: { silenceMs: number; maxSilenceMs: number; checkMs: number } = {
+      silenceMs: SILENCE_REOPEN_MS,
+      maxSilenceMs: SILENCE_REOPEN_MAX_MS,
+      checkMs: SILENCE_CHECK_MS,
+    }
   ) {
     super();
   }
@@ -135,11 +162,16 @@ export class SerialHighlightListener
       return;
     }
 
+    this.watchdogTimer = setInterval(() => this.checkSilence(), this.watchdog.checkMs);
     void this.openPort();
   }
 
   public stop(): void {
     this.started = false;
+    if (this.watchdogTimer) {
+      clearInterval(this.watchdogTimer);
+      this.watchdogTimer = null;
+    }
     if (this.reconnectTimer) {
       clearTimeout(this.reconnectTimer);
       this.reconnectTimer = null;
@@ -226,6 +258,7 @@ export class SerialHighlightListener
         }
         this.reconnectAttempts = 0;
         this.portOpenedAtMs = Date.now(); // start the bounded presence grace
+        this.openPath = path;
         this.logger.info("Highlight serial port opened", { path });
       });
 
@@ -287,6 +320,12 @@ export class SerialHighlightListener
     const wasFresh = now - this.lastTrafficAtMs <= PRESENCE_FRESHNESS_MS;
     this.lastTrafficAtMs = now;
     this.reconnectAttempts = 0;
+    if (this.silentReopens > 0) {
+      this.logger.info("ESP32 serial traffic resumed after reopening the port", {
+        silentReopens: this.silentReopens,
+      });
+      this.silentReopens = 0;
+    }
     if (!wasFresh) {
       this.logger.info("Highlight hardware detected (ESP32 serial traffic)", {
         type,
@@ -406,9 +445,29 @@ export class SerialHighlightListener
     return (byIdentity ?? ports.find(isEsp32))?.path ?? "";
   }
 
-  private handlePortDown(): void {
+  private handlePortDown(reason = "serial port closed/errored"): void {
     this.teardownPort();
-    this.scheduleReconnect("serial port closed/errored");
+    this.scheduleReconnect(reason);
+  }
+
+  // Silent-port watchdog tick (see class doc). Never throws.
+  private checkSilence(): void {
+    if (!this.started || !this.port || !this.portOpenedAtMs) return;
+    const now = Date.now();
+    const quietSince = Math.max(this.lastTrafficAtMs, this.portOpenedAtMs);
+    const limit = Math.min(
+      this.watchdog.silenceMs * Math.pow(2, this.silentReopens),
+      this.watchdog.maxSilenceMs
+    );
+    if (now - quietSince < limit) return;
+
+    this.silentReopens++;
+    this.logger.warn("ESP32 silent on open serial port; reopening it", {
+      path: this.openPath,
+      silentForMs: now - quietSince,
+      silentReopens: this.silentReopens,
+    });
+    this.handlePortDown("ESP32 silent on open port");
   }
 
   // Remove listeners and close the current port/parser, resetting the grace.
