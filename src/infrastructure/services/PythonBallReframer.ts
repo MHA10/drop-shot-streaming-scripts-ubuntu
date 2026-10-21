@@ -4,6 +4,7 @@ import { spawn } from "child_process";
 import { BallReframer } from "../../domain/services/BallReframer";
 import { Logger } from "../../application/interfaces/Logger";
 import { withLowPriority } from "../utils/lowPriority";
+import { pickCourtRoi } from "../utils/courtRoi";
 
 /**
  * BallReframer backed by a one-shot Python/OpenCV script (scripts/reframe_ball.py).
@@ -36,7 +37,10 @@ export class PythonBallReframer implements BallReframer {
   constructor(
     private readonly reelAspect: string,
     private readonly logger: Logger,
-    scriptPath?: string
+    scriptPath?: string,
+    // Court boundary (see utils/courtRoi.ts). "" / {} = no boundary.
+    private readonly courtRoi: string = "",
+    private readonly courtRoiByCourt: Record<string, string> = {}
   ) {
     // The app ships as an npm package run via `npx` — so the script must be
     // found INSIDE the package (the build copies scripts/ into dist/), not from
@@ -91,13 +95,19 @@ export class PythonBallReframer implements BallReframer {
       // --debug makes the script print a one-line detector summary to stderr
       // (frames / hit_rate / motion); we log it so staging can SEE whether
       // tracking actually locked onto players, not just that the script ran.
-      const stderr = await this.runPython([
-        this.scriptPath,
-        "--input", clipPath,
-        "--output", out,
-        "--aspect", this.reelAspect,
-        "--debug",
-      ]);
+      const roi = pickCourtRoi(this.courtRoi, this.courtRoiByCourt, courtId);
+      const stderr = await this.runPython(this.buildArgs(clipPath, out, roi));
+      // The script ignores an invalid boundary rather than failing — surface
+      // that, or a typo in .env would silently switch the boundary off.
+      const roiWarning = stderr
+        .split("\n")
+        .find((l) => l.includes("ignoring invalid --roi"));
+      if (roiWarning) {
+        this.logger.warn("Court boundary invalid; tracked without it", {
+          courtId,
+          detail: roiWarning.trim(),
+        });
+      }
       const summary = stderr
         .split("\n")
         .map((l) => l.trim())
@@ -131,6 +141,19 @@ export class PythonBallReframer implements BallReframer {
       });
       return null;
     }
+  }
+
+  /** Script arguments; --roi only when this court has a boundary configured. */
+  public buildArgs(clipPath: string, out: string, roi: string): string[] {
+    const args = [
+      this.scriptPath,
+      "--input", clipPath,
+      "--output", out,
+      "--aspect", this.reelAspect,
+      "--debug",
+    ];
+    if (roi) args.push("--roi", roi);
+    return args;
   }
 
   /** "16:9" -> 1.777…; null when unparseable (caller then just runs the pass). */

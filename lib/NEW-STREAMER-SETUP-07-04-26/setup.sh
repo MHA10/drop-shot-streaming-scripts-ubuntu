@@ -278,6 +278,13 @@ CLOUDINARY_API_SECRET=IrdU2pOiXW9GwDeP7h5JV3MRdwM
 # HIGHLIGHT_FORCE_PRESENT=true            # pretend the ESP32 is present
 # HIGHLIGHT_TRIGGER_FILE=/tmp/hl-trigger  # `touch` this file to fire a highlight
 # HIGHLIGHT_BALL_TRACKING_ENABLED=true    # player-follow reel (needs python3+opencv, installed above)
+# HIGHLIGHT_COURT_ROI="0.427,0.100;0.593,0.124;0.824,0.921;0.782,0.998;0.257,0.998;0.165,0.837"
+#                                         # court boundary: the tracker ignores people outside
+#                                         # it (passers-by, other courts). Points are fractions
+#                                         # of frame width,height. Measure per camera (see
+#                                         # tools/reels/README.md). Example = Padel Central Court 1.
+# HIGHLIGHT_COURT_ROI_BY_COURT='{"<courtId>":"x,y;x,y;..."}'
+#                                         # per-court override when one box runs several cameras
 # HIGHLIGHT_UPLOAD_ENABLED=true           # upload finished reels to YouTube via the
 #                                         # backend (requires STREAMING_API_KEY above)
 # HIGHLIGHT_DELETE_AFTER_UPLOAD=false     # keep local reels after upload (default: delete)

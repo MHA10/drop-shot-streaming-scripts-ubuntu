@@ -224,6 +224,34 @@ Consequences:
 - The smooth result comes from the smoothing chain (median filter → moving
   average → velocity clamp), not from dense detection.
 
+### Court boundary (`--roi`)
+
+A camera usually also sees paths, terraces and the next court. Anyone walking
+there moves, so MOG2 picks them up — and with few players on court, a passer-by
+can drag the whole crop off the court. A **court boundary** fixes that: blobs
+whose **feet** (bottom-centre of the box) fall outside the polygon are ignored,
+and the pan is limited to the court's left/right edges.
+
+```bash
+bash tools/reels/debug-overlay.sh --input match.mp4 --moment 3509 --out guides.mp4 \
+  --roi "0.427,0.100;0.593,0.124;0.824,0.921;0.782,0.998;0.257,0.998;0.165,0.837"
+```
+
+The boundary shows as a **cyan outline**; the `reframe_ball:` line gains
+`roi=on rejected_outside=<n>` (blobs dropped for being off court).
+
+**Measuring one for a new camera:** grab a frame
+(`ffmpeg -ss 10 -i match.mp4 -frames:v 1 frame.png`), note the pixel corners of
+the court's playing area (follow the glass/fence line, not the outer wall), and
+divide each x by the frame width and each y by the height. Points go
+clockwise or anticlockwise, `x,y` pairs separated by `;`. Normalized values
+work at any resolution — but they are measured on the **full** frame, so if
+the source has letterbox bars use `--keep-bars` too.
+
+On a streamer box the same boundary is set with `HIGHLIGHT_COURT_ROI` (all
+courts) or `HIGHLIGHT_COURT_ROI_BY_COURT` (JSON, per court) in `.env`. Unset =
+no boundary.
+
 ---
 
 ## 7. Troubleshooting

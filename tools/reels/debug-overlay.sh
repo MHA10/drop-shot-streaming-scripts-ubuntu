@@ -6,6 +6,7 @@
 #   green boxes  — each blob the detector accepted as a player
 #   red dot      — the area-weighted crop centre it chose
 #   yellow box   — the crop window that would become the reel
+#   cyan outline — the court boundary, when --roi is given
 #   text         — "action center x=<px>" per frame
 #
 # Use it when a reel pans oddly, or to sanity-check a new camera angle before
@@ -15,13 +16,14 @@
 #   bash tools/reels/debug-overlay.sh --input match.mp4 --moment 3509 --out guides.mp4
 #   (same --pre/--post/--aspect defaults as make-reel.sh, so the crop window
 #    drawn here is exactly the one that reel would use)
+#   --roi "x,y;..."  court boundary (normalized), same as make-reel.sh
 set -euo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO="$(cd "$HERE/../.." && pwd)"
 PY="$HERE/.venv/bin/python"
 
-INPUT=""; MOMENT=""; OUT=""; ASPECT="4:5"; PRE=25; POST=5; STRIP=1
+INPUT=""; MOMENT=""; OUT=""; ASPECT="4:5"; PRE=25; POST=5; STRIP=1; ROI=""
 while [ $# -gt 0 ]; do
   case "$1" in
     --input) INPUT="$2"; shift 2 ;;
@@ -31,7 +33,8 @@ while [ $# -gt 0 ]; do
     --pre) PRE="$2"; shift 2 ;;
     --post) POST="$2"; shift 2 ;;
     --keep-bars) STRIP=0; shift ;;
-    -h|--help) sed -n '2,20p' "$0"; exit 0 ;;
+    --roi) ROI="$2"; shift 2 ;;
+    -h|--help) sed -n '2,22p' "$0"; exit 0 ;;
     *) echo "unknown option: $1" >&2; exit 2 ;;
   esac
 done
@@ -67,7 +70,7 @@ fi
 echo "── 3/4 reframe with tracking overlay ──"
 "$PY" "$REPO/scripts/reframe_ball.py" \
   --input "$SRCV" --output "$WORK/reframed.mp4" \
-  --aspect "$ASPECT" --mode action --debug \
+  --aspect "$ASPECT" --mode action --debug ${ROI:+--roi "$ROI"} \
   --debug-overlay "$WORK/overlay_raw.mp4"
 
 # cv2 writes mpeg4; transcode to h264 so it plays in browsers/QuickTime.

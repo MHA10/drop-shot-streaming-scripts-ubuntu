@@ -18,9 +18,18 @@ SMOOTH PANNING (two passes)
   (interpolate gaps → median filter → wide moving average → hard max-velocity
   clamp) and render the crop along it. Smoothness is prioritized.
 
+COURT BOUNDARY (--roi, optional)
+  An invisible polygon around the court in front of the camera, as normalized
+  "x,y;x,y;..." points (fractions of frame width/height, so it survives any
+  resolution). When set, action mode keeps a blob only if its FEET (bottom-
+  centre of its box) are inside the polygon — people walking past outside the
+  court, or playing on a neighbouring court, are ignored. The pan is also
+  clamped to the court's horizontal extent. Unset = no boundary (old behaviour).
+
 DEBUG / DEMO
   --debug-overlay <path> writes a full-frame annotated video: detected boxes
-  (green), the chosen crop-centre (red dot), and the crop window (yellow).
+  (green), the chosen crop-centre (red dot), the crop window (yellow) and the
+  court boundary (cyan).
 
 Off by default in the streamer; falls back to full frame on any failure.
 """
@@ -53,6 +62,29 @@ def parse_hsv(s, default):
         return np.array(default, np.uint8)
 
 
+def parse_roi(s):
+    """Normalized "x,y;x,y;..." → Nx2 float array, or None if unset/invalid.
+
+    Invalid input never aborts the reframe: it warns and runs without a
+    boundary, because a reel without the boundary still beats no reel.
+    """
+    if not s or not s.strip():
+        return None
+    try:
+        pts = []
+        for pair in s.strip().strip(";").split(";"):
+            x, y = (float(v) for v in pair.split(","))
+            if not (-0.5 <= x <= 1.5 and -0.5 <= y <= 1.5):
+                raise ValueError(f"point {pair!r} is not normalized (0..1)")
+            pts.append((x, y))
+        if len(pts) < 3:
+            raise ValueError("need at least 3 points")
+        return np.array(pts, dtype=float)
+    except Exception as exc:  # noqa: BLE001
+        sys.stderr.write(f"reframe_ball: ignoring invalid --roi ({exc})\n")
+        return None
+
+
 def moving_average(xs, win):
     if win < 2:
         return xs
@@ -82,6 +114,12 @@ def main():
     # action-mode (players)
     ap.add_argument("--min-player-frac", type=float, default=0.0015)
     ap.add_argument("--max-player-frac", type=float, default=0.20)
+    # court boundary (normalized polygon); empty = no boundary
+    ap.add_argument("--roi", default="")
+    # how far (fraction of frame width) a player's feet may sit OUTSIDE the
+    # polygon and still count — covers a player pressed against the glass and
+    # small errors in the drawn line
+    ap.add_argument("--roi-margin-frac", type=float, default=0.02)
     # ball-mode
     ap.add_argument("--hsv-lower", default="20,70,120")
     ap.add_argument("--hsv-upper", default="45,255,255")
@@ -144,6 +182,17 @@ def main():
     max_jump = det_w * args.max_jump_frac
     min_player = det_area * args.min_player_frac
     max_player = det_area * args.max_player_frac
+    # Court boundary: one copy in detection pixels (for the feet test) and one
+    # in source pixels (for the pan clamp + overlay).
+    roi_norm = parse_roi(args.roi)
+    roi_det = roi_src = None
+    roi_margin = 0.0
+    if roi_norm is not None:
+        roi_det = (roi_norm * [det_w, det_h]).astype(np.float32).reshape(-1, 1, 2)
+        roi_src = np.round(roi_norm * [src_w, src_h]).astype(np.int32).reshape(-1, 1, 2)
+        roi_margin = det_w * max(0.0, args.roi_margin_frac)
+    rejected_outside = 0
+
     bg = cv2.createBackgroundSubtractorMOG2(history=300, varThreshold=40, detectShadows=False) \
         if args.mode == "action" else None
 
@@ -198,6 +247,16 @@ def main():
                     if w > h * 3:
                         continue
                     cx = x + w / 2.0
+                    # Court boundary: judge a blob by where it STANDS (bottom-
+                    # centre), not its whole box — a far-baseline player's
+                    # head can poke above the line, a near player can lean on
+                    # the side glass, but their feet are on the court. Someone
+                    # walking past outside the glass has feet off the court.
+                    if roi_det is not None:
+                        feet = (float(cx), float(y + h))
+                        if cv2.pointPolygonTest(roi_det, feet, True) < -roi_margin:
+                            rejected_outside += 1
+                            continue
                     wsum += area
                     xsum += area * cx
                     frame_boxes.append((x, y, w, h))
@@ -276,8 +335,22 @@ def main():
     processed = max(1, (n + step - 1) // step)
     hit_rate = valid.sum() / processed
 
+    # Pan limits: the whole frame, or — with a court boundary — the court's
+    # horizontal extent, so the crop never drifts onto the area beside the
+    # court. If the court is narrower than the crop, just hold on its centre.
+    pan_lo, pan_hi = half, src_w - half
+    rest_x = src_w / 2.0
+    if roi_src is not None:
+        court_lo = max(0, int(roi_src[:, 0, 0].min()))
+        court_hi = min(src_w, int(roi_src[:, 0, 0].max()))
+        rest_x = (court_lo + court_hi) / 2.0
+        if court_hi - court_lo > crop_w:
+            pan_lo, pan_hi = max(pan_lo, court_lo + half), min(pan_hi, court_hi - half)
+        else:
+            pan_lo = pan_hi = int(np.clip(round(rest_x), half, src_w - half))
+
     if valid.sum() < max(5, n * 0.03):
-        path = np.full(n, src_w / 2.0)
+        path = np.full(n, rest_x)
     else:
         idx = np.arange(n)
         xs[~valid] = np.interp(idx[~valid], idx[valid], xs[valid])
@@ -289,14 +362,16 @@ def main():
         for i in range(1, n):
             dx = np.clip(xs[i] - path[i - 1], -max_vel, max_vel)
             path[i] = path[i - 1] + dx
-    path = np.clip(np.round(path), half, src_w - half).astype(int)
+    path = np.clip(np.round(path), pan_lo, pan_hi).astype(int)
 
     if args.debug:
         vel = np.abs(np.diff(path)) if n > 1 else np.array([0])
         sys.stderr.write(
             f"reframe_ball: mode={args.mode} frames={n} hit_rate={hit_rate:.2f} "
             f"fps_declared={fps:.2f} fps_out={out_fps:.2f} dur={n/out_fps:.1f}s "
-            f"max_step_px={vel.max():.0f} mean_step_px={vel.mean():.2f}\n"
+            f"max_step_px={vel.max():.0f} mean_step_px={vel.mean():.2f} "
+            f"roi={'on' if roi_src is not None else 'off'} "
+            f"rejected_outside={rejected_outside}\n"
         )
 
     cap = cv2.VideoCapture(args.input)
@@ -324,6 +399,8 @@ def main():
             written += 1
             if ov_writer is not None:
                 ov = frame.copy()
+                if roi_src is not None:
+                    cv2.polylines(ov, [roi_src], True, (255, 255, 0), 3)
                 cv2.rectangle(ov, (x0, 0), (x0 + crop_w, crop_h), (0, 255, 255), 3)
                 for (bx, by, bw, bh) in boxes_per_frame[min(i, n - 1)]:
                     cv2.rectangle(ov, (bx, by), (bx + bw, by + bh), (0, 255, 0), 2)
