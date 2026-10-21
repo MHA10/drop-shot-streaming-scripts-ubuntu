@@ -288,8 +288,9 @@ CLOUDINARY_API_SECRET=IrdU2pOiXW9GwDeP7h5JV3MRdwM
 # HIGHLIGHT_UPLOAD_ENABLED=true           # upload finished reels to YouTube via the
 #                                         # backend (requires STREAMING_API_KEY above)
 # HIGHLIGHT_DELETE_AFTER_UPLOAD=false     # keep local reels after upload (default: delete)
-# HIGHLIGHT_REEL_ASPECT=4:5               # default 16:9 (full frame). 4:5 or 9:16 crop
-#                                         # to vertical; 9:16 is required for YouTube Shorts
+# HIGHLIGHT_REEL_ASPECT=9:16              # default 4:5 (vertical, sharper). 9:16 is needed for
+#                                         # the backend to mark the upload as a YouTube Short;
+#                                         # 16:9 keeps the full landscape frame
 #   Once the two knobs above are set and the streamer restarted, fire a test
 #   reel with:  bash lib/highlight-trigger.sh
 ENVEOF

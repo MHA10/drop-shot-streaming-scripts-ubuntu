@@ -94,8 +94,8 @@ export interface AppConfig {
     // is unvalidated without real padel footage, so by default the reel is the
     // full-frame clip with logos. When enabled it runs a Python/OpenCV pass
     // (requires python3 + opencv-python on the box) and falls back to full
-    // frame on any failure. reelAspect is the target crop aspect: "9:16"
-    // (default — required for YouTube Shorts) / "4:5" / "16:9" (full frame).
+    // frame on any failure. reelAspect is the target crop aspect: "4:5"
+    // (default) / "9:16" (marked as a YouTube Short) / "16:9" (full frame).
     ballTracking: {
       enabled: boolean;
       // Court boundary: the tracker ignores anyone whose feet are outside this
@@ -274,12 +274,14 @@ export class Config {
             this.getEnvVar("HIGHLIGHT_COURT_ROI_BY_COURT", "")
           ),
         },
-        // 9:16 — full-screen vertical. This is the ratio YouTube requires to
-        // classify an upload as a SHORT (the backend accepts 9:16 or 1:1), and
-        // it is what Reels/TikTok expect too. Overridable per box: "4:5" crops
-        // less aggressively for feed posts, "16:9" keeps the full landscape
-        // frame (and then skips the reframe entirely — nothing to crop).
-        reelAspect: this.getEnvVar("HIGHLIGHT_REEL_ASPECT", "9:16"),
+        // 4:5 — vertical, but a wider crop than 9:16: 864x1080 instead of
+        // 608x1080 from the same 1080p buffer, so more of the court and more
+        // pixels per reel (9:16 looked pixelated when played full-screen).
+        // Trade-off: the backend only flags 9:16 or 1:1 uploads as a SHORT
+        // (YouTubeUploadService), so a 4:5 reel uploads as a regular video.
+        // Overridable per box: "9:16" for Shorts, "16:9" keeps the full
+        // landscape frame (and then skips the reframe — nothing to crop).
+        reelAspect: this.getEnvVar("HIGHLIGHT_REEL_ASPECT", "4:5"),
         uploadEnabled:
           this.getEnvVar("HIGHLIGHT_UPLOAD_ENABLED", "false") === "true",
         // Opt OUT (set "false") to keep local copies after upload.
