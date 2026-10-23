@@ -3,6 +3,7 @@ import { ConsoleLogger } from "./ConsoleLogger";
 import { LogBuffer } from "./LogBuffer";
 import { LogShippingService } from "./LogShippingService";
 import { LogEntry, LogLevel } from "./types/LogTypes";
+import { redactLog } from "../utils/redact";
 
 export class RemoteLogger implements Logger {
   private readonly consoleLogger: ConsoleLogger;
@@ -48,7 +49,9 @@ export class RemoteLogger implements Logger {
     }
   }
 
-  public info(message: string, meta?: any): void {
+  public info(rawMessage: string, rawMeta?: any): void {
+    // Camera passwords and stream keys never reach the console or the log server.
+    const { message, meta } = redactLog(rawMessage, rawMeta);
     // Always log to console
     this.consoleLogger.info(message, meta);
 
@@ -59,7 +62,8 @@ export class RemoteLogger implements Logger {
     }
   }
 
-  public warn(message: string, meta?: any): void {
+  public warn(rawMessage: string, rawMeta?: any): void {
+    const { message, meta } = redactLog(rawMessage, rawMeta);
     // Always log to console
     this.consoleLogger.warn(message, meta);
 
@@ -70,7 +74,8 @@ export class RemoteLogger implements Logger {
     }
   }
 
-  public error(message: string, meta?: any): void {
+  public error(rawMessage: string, rawMeta?: any): void {
+    const { message, meta } = redactLog(rawMessage, rawMeta);
     // Always log to console
     this.consoleLogger.error(message, meta);
 
@@ -84,7 +89,10 @@ export class RemoteLogger implements Logger {
     }
   }
 
-  public debug(message: string, meta?: any): void {
+  public debug(rawMessage: string, rawMeta?: any): void {
+    // Debug isn't shipped; skip the cleaning work when it won't be printed either.
+    if (!this.consoleLogger.shouldLog("debug")) return;
+    const { message, meta } = redactLog(rawMessage, rawMeta);
     // Always log to console
     this.consoleLogger.debug(message, meta);
 

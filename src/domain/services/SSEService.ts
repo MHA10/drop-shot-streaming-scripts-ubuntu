@@ -1,4 +1,4 @@
-import { SSEStreamEvent } from "../events/StreamEvent";
+import { SSEMatchStateEvent, SSEStreamEvent } from "../events/StreamEvent";
 
 export interface SSEConnectionConfig {
   readonly groundId: string;
@@ -30,6 +30,11 @@ export interface SSEService {
    * Subscribe to SSE stream events
    */
   onStreamEvent(callback: (event: SSEStreamEvent) => void): void;
+
+  /**
+   * Subscribe to the backend's match_state events (active match per court)
+   */
+  onMatchState(callback: (event: SSEMatchStateEvent) => void): void;
 
   /**
    * Subscribe to connection status changes

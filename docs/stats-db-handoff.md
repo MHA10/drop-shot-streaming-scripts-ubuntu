@@ -1,0 +1,240 @@
+# Player Stats → DB / Server Handoff
+
+**Status:** backend built (ds-backend `staging`, checked 2026-10-20) · **For:** Farooq (backend/DB) · **From:** streaming · **Last updated:** 2026-10-20
+**Pairs with:** [`docs/v1-stats-spec.md`](./v1-stats-spec.md) (plain-English meaning + accuracy of every field).
+
+---
+
+## 0. TL;DR — what you're building
+
+The streamer computes per-player and per-team stats for a padel match (plus a heatmap picture). Today those land in **local files on the box only** — nothing is stored or sent. This is greenfield on your side.
+
+You need two things:
+
+1. **A table** to hold one stats record per match.
+2. **A backend route** the streamer can POST the final stats to — mirroring exactly how the live **score** already reaches the backend (`POST /api/v1/padel-grounds/{groundId}/courts/{courtId}/scoreboard`, authed with the per-box `x-streaming-api-key`). We send; the backend writes the DB. Court boxes never get database credentials — same security model as the score path.
+
+**Cadence (decided):** the streamer sends the stats **once, when the match's stream stops** — the final numbers, not live updates. One POST, one row.
+
+**Heatmap (decided):** the picture is uploaded to **Cloudinary** (same account used for logos) by the streamer; the POST carries the resulting **image URL**. You store the URL, not the image.
+
+---
+
+## 1. How it arrives (transport)
+
+- **Method/route:** `POST /api/v1/padel-grounds/{groundId}/courts/{courtId}/stats` (final path name is yours to choose — this mirrors the existing `…/scoreboard` route).
+- **Auth header:** `x-streaming-api-key: <per-box key>` — the same key the score POST uses (`STREAMING_API_KEY`). Validate the court belongs to the ground, exactly as the scoreboard route does.
+- **When:** once, at match end (when the stream for that court stops).
+- **State is absolute:** the body is the complete, final stats object — never a partial/delta. If the same match is sent twice (e.g. a retry), treat it as a replace, not an append.
+- **Body:** the JSON in §2.
+
+### Example request
+```
+POST /api/v1/padel-grounds/75097349-fbfd-467b-ab0d-81ebc7e9d376/courts/fea8178e-81b9-475e-8dd0-038a2c06f7fe/stats
+x-streaming-api-key: <per-box key>
+Content-Type: application/json
+
+{ …the payload in §2… }
+```
+
+---
+
+## 2. The payload (data contract)
+
+The streamer wraps the computed stats in a small **envelope** that identifies the match, then the stats themselves sit under `stats`. The envelope fields are what you key/store the row by; `stats` is the content.
+
+```jsonc
+{
+  // ── envelope: identity + metadata (added by the streamer) ──
+  "schemaVersion": 1,
+  "groundId": "75097349-fbfd-467b-ab0d-81ebc7e9d376",   // which venue (stable, per box)
+  "courtId":  "fea8178e-81b9-475e-8dd0-038a2c06f7fe",   // which court (from the stream event)
+  "matchId":  null,                                      // OPEN — see §3
+  "streamId": "stream_mv9n6pe8_45bd11a6579831ac",        // per-stream tag (optional, not stable)
+  "capturedAt": "2026-10-16T18:20:00Z",                  // when the final numbers were written (UTC)
+  "heatmapUrl": "https://res.cloudinary.com/<acct>/image/upload/v169.../<match>-heatmap.png",
+  "heatmapUrls": { "A": "https://…/<match>-heatmap-A.png", "B": "…", "C": "…", "D": "…" },
+  "photoUrls":   { "A": "https://…/<match>-photo-A.jpg",   "B": "…", "C": "…", "D": "…" },
+
+  // ── stats: the computed content (produced by scripts/player_stats.py) ──
+  "stats": {
+    "source": "",                 // internal; empty in the live/near-live mode
+    "duration_s": 742.0,          // match length in seconds
+
+    "calibration": {
+      "court_m": [10, 20],        // court size used (10 m wide × 20 m long)
+      "width": "exact (X = 10 * u)",
+      "depth": "net-anchored estimate (Y = 10 * v / v_net); metric values are ~±10-15%"
+    },
+
+    "players": {                  // keys are fixed slots A, B, C, D (see note on missing players)
+      "A": {
+        "name": "A",              // label or real name if provided
+        "team": "far",            // "far" = {A,B}, "near" = {C,D}
+        "distance_m": 612.4,
+        "lateral_distance_m": 240.1,
+        "court_coverage_pct": 63.0,
+        "mean_speed_ms": 1.34,
+        "top_speed_ms": 4.80,
+        "sprints": 11,            // integer count
+        "time_at_net_s": 180.4,
+        "time_at_net_pct": 24,    // whole %
+        "time_at_back_s": 300.9,
+        "time_at_back_pct": 41,   // whole %
+        "avg_position_xy_m": [4.8, 6.2],   // [x, y] metres on HIS OWN side (see field table)
+        "avg_side": "right",      // "left" | "right" — the player's own left/right
+        "left_side_pct": 38,      // % of time on his own left half (whole %)
+        "detection_rate": 0.91    // 0–1, how often the camera actually saw this player (trust score)
+      },
+      "B": { … }, "C": { … }, "D": { … }
+    },
+
+    "teams": {                    // keys are fixed: "far" and "near"
+      "far": {
+        "players": ["A", "B"],    // the two names on this team
+        "mean_separation_m": 3.10,
+        "max_separation_m": 7.42,
+        "pct_time_gap_over_2m": 58,            // whole %
+        "formation": {
+          "both_at_net_pct": 22,
+          "both_at_back_pct": 35,
+          "one_up_one_back_pct": 43
+        },
+        "dominant_formation": "one up, one back"   // text
+      },
+      "near": { … }
+    }
+  }
+}
+```
+
+### Field reference
+
+**Envelope**
+| field | type | notes |
+|---|---|---|
+| `schemaVersion` | int | bump if the shape changes; start at `1` |
+| `groundId` | string (uuid) | the venue; stable per box |
+| `courtId` | string (uuid) | the court this match was on |
+| `matchId` | string \| null | **open decision — §3**; `null` until we settle it |
+| `streamId` | string \| null | per-stream session tag; **not** a stable match id — don't key on it |
+| `capturedAt` | string (ISO-8601 UTC) | when the final numbers were produced |
+| `heatmapUrl` | string (url) \| null | Cloudinary link to the four-map picture; `null` if the upload failed |
+| `heatmapUrls` | object \| null | `{A..D: url}` — each player's own map; a missing player/upload is left out |
+| `photoUrls` | object \| null | `{A..D: url}` — each player's photo sheet (§4); **not stored by the backend yet** |
+
+**Per player** (`stats.players.{A,B,C,D}`) — all numbers are plain JSON numbers:
+| field | type | unit | meaning |
+|---|---|---|---|
+| `name` | string | — | label (A/B/C/D) or real name |
+| `team` | string | — | `far` ({A,B}) or `near` ({C,D}) |
+| `distance_m` | number | metres | total ground covered |
+| `lateral_distance_m` | number | metres | left-right running only |
+| `court_coverage_pct` | number | % | how much of their own half they roamed |
+| `mean_speed_ms` | number | m/s | typical moving speed |
+| `top_speed_ms` | number | m/s | fastest sustained speed (capped at 8) |
+| `sprints` | int | count | bursts of >4 m within any 1-second window |
+| `time_at_net_s` / `time_at_net_pct` | number | sec / % | time in the front 3 m of their half |
+| `time_at_back_s` / `time_at_back_pct` | number | sec / % | time in the back 3 m of their half |
+| `avg_position_xy_m` | [number, number] | metres | average spot **on his own side, seen from behind him**: `x` = metres from his left sideline (0–10), `y` = metres back from the net (0–10) |
+| `avg_side` | string | — | `left` or `right` — **the player's own** left/right (how padel players name their side), not the camera's |
+| `left_side_pct` | number | % | share of time he spent on his own left half |
+
+> **Updated 2026-10-17:** pairs change ends every two games, so position stats (net/back time, coverage, side, average position, formation) are now measured on each player's own side. Before this fix, a player's net time was badly over-counted after a changeover (one test player read 73% at the net; the real figure was 13%). If you stored any earlier test payloads, re-run them.
+| `detection_rate` | number | 0–1 | camera-coverage / trust score — **see §6** |
+
+**Per team** (`stats.teams.{far,near}`):
+| field | type | unit | meaning |
+|---|---|---|---|
+| `players` | [string, string] | — | the two names |
+| `mean_separation_m` | number | metres | typical distance between partners |
+| `max_separation_m` | number | metres | biggest gap they reached |
+| `pct_time_gap_over_2m` | number | % | share of time more than 2 m apart |
+| `formation.both_at_net_pct` | number | % | both up at the net |
+| `formation.both_at_back_pct` | number | % | both back |
+| `formation.one_up_one_back_pct` | number | % | staggered |
+| `dominant_formation` | string | — | their most common shape |
+
+**Match-level** (`stats.*`): `source` (string, internal), `duration_s` (number, seconds), `calibration` (object, fixed descriptive strings + `court_m` `[10, 20]`).
+
+> **Important — players/teams can be missing.** If the camera never got a clean fix on a player for the whole match, that player's key is **absent** from `players` (not zeroed). If either partner is missing, that team is absent from `teams`. Store what's present; don't assume all four players / both teams always exist.
+
+---
+
+## 3. Match identity — decided 2026-10-20: the backend's `match_state` event
+
+**What was built (ds-backend `staging`, `MatchSignalService`):** the backend does not put the match id in the start event. It sends a separate `match_state` event on the ground's event channel — `{ eventType: "match_state", courtId, activeMatchId, at }` — whenever a scored match starts or ends on a court, and repeats it every minute while one is active. It only does this when the backend setting `MATCH_STATE_EVENTS=true`. The streamer listens for it and sends that id as `matchId`. With no id, the backend picks the scored match that was on the court at `capturedAt` (started before it, ended no more than 5 minutes before it).
+
+The original question, kept for the record:
+
+
+The streamer can reliably tag a record with **`groundId`** (its env var) and **`courtId`** (from the stream event). It does **not** have a stable **match id** — there is no `matchId`/`match_id` anywhere in the streamer today, and `streamId` is a throwaway value generated locally per stream session (not shared with the backend, not stable).
+
+The problem this creates: a single court hosts many matches over time. Keying stats only by `(groundId, courtId)` would make every new match overwrite the last. So we need a way to tell matches apart. Options, your call:
+
+- **(Recommended) Backend owns match identity.** The backend already starts/stops streams for a court (it sends the start/stop events). If it mints a `matchId` when a stream starts and passes it to the streamer in that start event, we echo it straight back in this payload. Cleanest, and it lets stats join to whatever the backend already knows about the match.
+- **Key by `(groundId, courtId, capturedAt)`** as a stand-in match id. Works with zero streamer changes, but it's a weaker key (no clean join to a "match" entity, and relies on the end-timestamp being unique).
+
+Until this is settled, the streamer sends `matchId: null`. Tell me which way you want to go and, if it's option 1, where in the start event the id should live — I'll wire the streamer to echo it.
+
+---
+
+## 4. The pictures
+
+The streamer draws them, **uploads them to Cloudinary** (the account already used for client logos) and sends the links. Nothing to render on your side.
+
+- **`heatmapUrl`** — one picture with all four court maps.
+- **`heatmapUrls`** — `{A, B, C, D}`, each player's map on its own (added 2026-10-20; your player cards read this field).
+- **`photoUrls`** — `{A, B, C, D}`, a photo sheet per player: up to 6 cut-outs of that player from the first 6 minutes of play. This is how a person tells which of A–D they are before claiming or assigning a slot (added 2026-10-20). The cut-outs come from the camera's low-res stream, so they show clothes and build more than faces. **Only sent when the box has `STATS_SEND_PHOTOS=true`**, which stays off until you store the field.
+- If a record is rejected (400/413/422) or expires unsent, the streamer deletes its uploaded pictures from Cloudinary, so pictures aren't left on links nothing points to. A delete that fails is retried hourly for up to a week, then logged for removal by hand.
+- Pictures are optional: a failed upload or no keys leaves that link out, and the numbers still arrive.
+- The links are ordinary public Cloudinary links, like the heatmap and the logos.
+
+---
+
+## 5. Suggested storage shape (your call)
+
+A simple, future-proof shape:
+
+- One row per match: identity columns (`ground_id`, `court_id`, `match_id`, `stream_id`, `captured_at`, `heatmap_url`, `schema_version`) **+ the whole `stats` object in a single JSON column.** That stores everything with zero field-by-field mapping and survives us adding fields later.
+- If you need to query/sort by individual stats (e.g. "top distance this week"), add a child `player_match_stats` table with one row per player (`match_id`, `slot` A/B/C/D, `name`, `team`, and the per-player columns) and keep the team block either as JSON on the match row or a small `team_match_stats` child. Up to you — the JSON column alone is enough to ship v1.
+- Make every per-player/per-team column **nullable** (players/teams can be absent — §2).
+
+**We're sending all fields.** Even if the product only shows a few for v1 (the obvious viewer-facing ones are the heatmap, `distance_m`, time-at-net, and team formation), store the lot — it's cheap and avoids a re-plumb when more get surfaced.
+
+---
+
+## 6. Display / accuracy rules to respect (from the spec)
+
+These don't change storage, but they matter for how the product uses the numbers (full detail in `v1-stats-spec.md §5`):
+
+- **`detection_rate` is a trust gate.** Below ~**0.60**, that player's numbers under-count (the camera kept losing them) — the product should hide or caveat them, not show them as fact. Store the value regardless.
+- **Depth is an estimate (±10–15%); width is exact.** Present metres/speeds as comparisons between players and rallies, not as precise measurements.
+- These are per the spec's proposed v1 guardrails — worth a shared read of `v1-stats-spec.md §5` so the product side treats the numbers correctly.
+
+---
+
+## 7. Who does what
+
+**Backend (you) — built, on staging (checked 2026-10-20):**
+- [x] Match identity (§3): `match_state` event.
+- [x] Stats tables (`match_stats` + one row per player) and the receiving route (§1).
+- [x] Validate `x-streaming-api-key` + court-belongs-to-ground.
+- [ ] Open: store `photoUrls` like `heatmapUrls` (a `photo_urls` column, the same https-only clean-up) and show each slot's photo sheet where people claim or assign A–D (`to-annotate`, the venue's match page, the slot preview).
+- [ ] Open: with no `matchId` and no scored match in the time window, every send creates a new row (repeats are only merged by match id, and `streamId` isn't stored). Please treat the same court + `streamId` as a replace in that case.
+
+**Streamer (me) — built 2026-10-18, switched off until your route is live:**
+- [x] On match end, assemble the envelope (§2): tag with `groundId` + `courtId` + `matchId` (from `match_state`) + `capturedAt`.
+- [x] Upload the heatmap to Cloudinary, set `heatmapUrl`.
+- [x] POST the payload to the route with the per-box API key.
+
+How the streamer behaves, so your route can match it:
+- **Match id:** the latest `activeMatchId` the backend sent in `match_state` while the court was streaming. If a second scored match starts during one stream, the newest id wins. At stream start it only uses an id the backend confirmed in the last 3 minutes, so a missed "match ended" message can't attach stats to an old match. Only a UUID is passed on. None seen → `null`.
+- **Route path** is a per-box setting (`STATS_SEND_PATH`); its default is the route you built.
+- **Success** = any 2xx. The streamer then deletes its copy, so only answer 2xx once the row is saved.
+- **400 / 413 / 422** = "this record is wrong, don't resend" — the streamer parks it and stops.
+- **Anything else** (401, 404, 429, 5xx, timeout) is retried: 1 min, doubling up to every hour, for up to 14 days. So a duplicate POST of the same match is possible (e.g. your reply got lost). A resend is the identical body with the same `streamId`, so treat a repeat of the same `(groundId, courtId, streamId)` as a replace.
+- A match whose camera never clearly saw the players sends **nothing** (no empty rows).
+- Pictures upload at most one match per minute, so a backlog doesn't flood the venue's upload line. A match's stats go out once its pictures are up; a match with nothing to upload isn't held back.
+
+The data contract in §2 matches what you built (field names, A–D slots, `far`/`near` teams).

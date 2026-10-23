@@ -24,9 +24,11 @@ import { NullBallReframer } from "./infrastructure/services/NullBallReframer";
 import { PythonBallReframer } from "./infrastructure/services/PythonBallReframer";
 import { YouTubeUploadService } from "./infrastructure/services/YouTubeUploadService";
 import { CaptureHighlightUseCase } from "./application/use-cases/CaptureHighlightUseCase";
+import { MatchStatsService } from "./infrastructure/services/MatchStatsService";
 
 class Application {
   private streamManager?: StreamManagerService;
+  private matchStats?: MatchStatsService;
   private supabaseListener?: SupabaseListener;
   private highlightSignalSource?: SerialHighlightListener;
   private readonly adRotationRegistry = new AdRotationRegistry();
@@ -343,6 +345,27 @@ class Application {
         this.logger.info("Supabase is disabled via configuration");
       }
 
+      // Near-live match stats — built ONLY when enabled, so a box with stats
+      // off has zero new runtime behaviour. Started before the stream manager
+      // so it has tidied up after the last run before any start event lands.
+      // A stats failure here must not reach the catch below: it exits the app
+      // and no court would stream. Without stats, streaming carries on.
+      if (config.get().stats.enabled) {
+        try {
+          this.matchStats = new MatchStatsService(
+            config.get(),
+            this.httpClient,
+            this.logger
+          );
+          await this.matchStats.start();
+        } catch (error) {
+          this.logger.error("Match stats failed to start; streaming without them", {
+            error: error instanceof Error ? error.message : String(error),
+          });
+          this.matchStats = undefined;
+        }
+      }
+
       // Initialize stream manager
       this.streamManager = new StreamManagerService(
         streamRepository,
@@ -353,7 +376,8 @@ class Application {
         this.logger,
         config,
         this.httpClient,
-        supabaseListener
+        supabaseListener,
+        this.matchStats
       );
 
       // Start the stream manager
@@ -380,6 +404,8 @@ class Application {
         this.adRotationRegistry.stopAll();
         // Stop all highlight buffer retention sweeps.
         this.highlightBufferRegistry.stopAll();
+        // Ask stats readers to save and stop; their matches resume after restart.
+        this.matchStats?.shutdown();
         if (this.streamManager) {
           await this.streamManager.stop();
         }

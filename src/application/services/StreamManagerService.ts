@@ -12,6 +12,7 @@ import * as fs from "fs/promises";
 import * as path from "path";
 import * as https from "https";
 import { SupabaseListener } from "../../infrastructure/listeners/SupabaseListener";
+import { MatchStatsService } from "../../infrastructure/services/MatchStatsService";
 import { v2 as cloudinaryClient } from "cloudinary";
 
 export class StreamManagerService {
@@ -27,7 +28,8 @@ export class StreamManagerService {
     private readonly logger: Logger,
     private readonly config: Config,
     private readonly httpClient: HttpClient,
-    private readonly supabaseListener?: SupabaseListener
+    private readonly supabaseListener?: SupabaseListener,
+    private readonly matchStats?: MatchStatsService
   ) {}
 
   public async start(): Promise<void> {
@@ -216,6 +218,11 @@ export class StreamManagerService {
     this.sseService.onStreamEvent(async (event: SSEStreamEvent) => {
       await this.handleStreamEvent(event);
     });
+
+    // Which scored match is on each court, so the stats can name their match.
+    this.sseService.onMatchState((event) => {
+      this.matchStats?.onMatchState(event.courtId, event.activeMatchId);
+    });
   }
 
   private async handleStreamEvent(event: SSEStreamEvent): Promise<void> {
@@ -261,35 +268,54 @@ export class StreamManagerService {
       });
       this.supabaseListener.subscribeToCourt(event.courtId);
     }
+
+    // Near-live stats for this court's match. A repeat start for a court that
+    // already has a reader is a no-op inside, so duplicates are safe here.
+    if (result && result.streamId && this.matchStats) {
+      this.matchStats.onStreamStarted({
+        courtId: event.courtId,
+        cameraUrl: event.cameraUrl,
+        streamId: result.streamId,
+        streamKey: event.streamKey,
+        matchId: event.matchId,
+      });
+    }
   }
 
   private async handleStopEvent(event: SSEStreamEvent) {
-    // Find stream by camera URL and stream key
-    const streams = await this.streamRepository.findAll();
-    const targetStream = streams.find(
-      (stream) =>
-        stream.cameraUrl.value === event.cameraUrl &&
-        stream.streamKey === event.streamKey &&
-        stream.state === StreamState.RUNNING
-    );
+    try {
+      // Find stream by camera URL and stream key
+      const streams = await this.streamRepository.findAll();
+      const targetStream = streams.find(
+        (stream) =>
+          stream.cameraUrl.value === event.cameraUrl &&
+          stream.streamKey === event.streamKey &&
+          stream.state === StreamState.RUNNING
+      );
 
-    if (targetStream) {
-      await this.stopStreamUseCase.execute({
-        streamId: targetStream.id.value,
-      });
-
-      // Unsubscribe from updates
-      if (this.supabaseListener) {
-        this.logger.info("Unsubscribing from realtime updates for court", {
-          courtId: event.courtId,
+      if (targetStream) {
+        await this.stopStreamUseCase.execute({
+          streamId: targetStream.id.value,
         });
-        await this.supabaseListener.unsubscribeFromCourt(event.courtId);
+
+        // Unsubscribe from updates
+        if (this.supabaseListener) {
+          this.logger.info("Unsubscribing from realtime updates for court", {
+            courtId: event.courtId,
+          });
+          await this.supabaseListener.unsubscribeFromCourt(event.courtId);
+        }
+      } else {
+        this.logger.warn("Stream not found for stop event", {
+          cameraUrl: event.cameraUrl,
+          streamKey: event.streamKey,
+        });
       }
-    } else {
-      this.logger.warn("Stream not found for stop event", {
-        cameraUrl: event.cameraUrl,
-        streamKey: event.streamKey,
-      });
+    } finally {
+      // The backend's stop is the end of the match — even if the stream had
+      // already died on its own, or stopping it just failed — so always
+      // finish the court's stats (else the next booking joins this record).
+      this.matchStats?.onStreamStopped(event.courtId, event.streamKey);
     }
   }
 

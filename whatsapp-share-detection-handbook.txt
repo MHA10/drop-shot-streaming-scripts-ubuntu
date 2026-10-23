@@ -1,0 +1,16 @@
+Bhai, before I head off for a couple of weeks — I've put together a handbook of the whole padel detection work so you both can pick things up while I'm away.
+
+It's the HTML file I'm attaching. Just open it in any browser (Chrome/Safari), no install, works offline. It's interactive — you can filter by what's Working vs Pending, and by whether something comes from audio or video, plus there's a light/dark toggle.
+
+What's inside:
+- How the whole thing works end to end — audio tells us WHEN a shot happened, video tells us WHERE everyone was.
+- Every single thing we detect and exactly HOW it's identified — shots, which team, which player, serves, attack vs defence, heatmaps, stats — the method and the actual cue behind each one.
+- Which models/techniques we're using, and which ones we tried and dropped (so nobody re-walks a dead end).
+- The ball fine-tune story — it trained well but doesn't transfer to our camera yet, and why.
+- What's still pending and what to do next.
+
+One-line status: the sound-based detection (shots, teams, players, stats, heatmaps) is solid. Everything still open comes down to one thing — training the ball-finder on our OWN camera footage. Hassan, this ties straight into your question about how training works: the handbook + that earlier note explain exactly how, and the bottleneck is marking frames, not videos or compute.
+
+If you want to dig into the actual code: it's all in the repo — github.com/MHA10/drop-shot-streaming-scripts-ubuntu, branch feat/player-abcd-tracking, in the scripts/ folder. Every file has a plain-English header that reads like the handbook. It's private, so ping me and I'll add you as a collaborator. The handbook's "Where the code lives" section lists the key files.
+
+Have a look and message me if anything's unclear. Baaki I'll be reachable if something's really stuck.

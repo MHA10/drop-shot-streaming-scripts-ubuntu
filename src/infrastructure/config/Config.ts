@@ -121,6 +121,57 @@ export interface AppConfig {
     // opened if EITHER is on — one device, one reader.
     scoreForwardingEnabled: boolean;
   };
+  stats: {
+    // Near-live player stats (heatmap + per-player/team numbers), one Python
+    // reader (scripts/live_stats.py) per live stats court, up to maxReaders. Default OFF: the reader
+    // needs a Python env with the vision libraries + model weights installed on
+    // the box, and it shares the CPU with the live encode. Off = zero new
+    // runtime behaviour.
+    enabled: boolean;
+    // Interpreter with ultralytics/opencv/numpy installed (usually a venv).
+    pythonPath: string;
+    // yolo11s weights — not shipped in the npm package, so point at them.
+    modelPath: string;
+    // Per-match working folders + the send outbox live here.
+    outputDir: string;
+    // Reader dials, proven on the ds box (docs/live-stats-staging.md §6).
+    targetFps: number;
+    imgsz: number;
+    threads: number;
+    clipSec: number;
+    // Only these courts get stats: court IDS (UUIDs such as fea8178e-…, the
+    // courtId in the stats log lines), not names. Empty = every court. A box
+    // that can't keep up with two live courts can pin its one reader to one.
+    courts: string[];
+    // How many courts may run a reader at once. Default 1: the x2.18 speed
+    // result is for ONE reader next to the encode on a 4-core box; two readers
+    // would double the CPU taken from the live stream. Raise only after a
+    // per-box speed check.
+    maxReaders: number;
+    // The reader must use the camera's low-res second stream. If we can't work
+    // that URL out from the stream's camera URL, stats are skipped for that
+    // court unless this is true (then it reads the HD stream — heavier).
+    allowMainStream: boolean;
+    // Safety stop: a reader whose stop event never came is finished after this.
+    maxMatchMin: number;
+    // Send finished stats to the backend. Default OFF until the backend route
+    // is live where this box points (staging only, 2026-10-20) — finished
+    // matches wait in the outbox and go out once it's on.
+    sendEnabled: boolean;
+    // Upload the player photo sheets and send their links. Default OFF until
+    // the backend stores photoUrls (MatchStatsOutbox header).
+    sendPhotos: boolean;
+    // Backend route, with {groundId}/{courtId} filled in per match. A setting
+    // so the final path can change without a release. Always starts with "/"
+    // (a hand-set path without it would change the host it is sent to).
+    sendPath: string;
+    // Match folders are kept this long, sent or not (bounds the disk).
+    keepDays: number;
+    // Every this many minutes of a match, file a copy of the stats + heatmap
+    // as they stand (snapshots/015min, …). The match's local record
+    // (MatchRecorder) is written whether or not sending is on.
+    snapshotMin: number;
+  };
   environment: string;
 }
 
@@ -278,6 +329,43 @@ export class Config {
       esp32: {
         scoreForwardingEnabled:
           this.getEnvVar("ESP32_SCORE_FORWARDING_ENABLED", "false") === "true",
+      },
+      stats: {
+        enabled: this.getEnvVar("STATS_ENABLED", "false") === "true",
+        pythonPath: this.getEnvVar("STATS_PYTHON", "python3"),
+        modelPath: this.getEnvVar("STATS_MODEL_PATH", "./yolo11s.pt"),
+        outputDir: this.getEnvVar("STATS_OUTPUT_DIR", "./match-stats"),
+        targetFps: this.parseIntEnv("STATS_TARGET_FPS", 3),
+        imgsz: this.parseIntEnv("STATS_IMGSZ", 960),
+        threads: this.parseIntEnv("STATS_THREADS", 2),
+        clipSec: this.parseIntEnv("STATS_CLIP_SEC", 30),
+        // Forgiving on purpose: a typo here silently costs every court its
+        // stats. Invisible characters (copied from chat apps) and quotes are
+        // dropped, and ids are compared lower-case (UUIDs ignore case).
+        courts: this.getEnvVar("STATS_COURTS", "")
+          .split(",")
+          .map((c) =>
+            c
+              .replace(/[\u200B-\u200D\u2060\uFEFF]/g, "")
+              .trim()
+              .replace(/^["']+|["']+$/g, "")
+              .trim()
+              .toLowerCase()
+          )
+          .filter(Boolean),
+        maxReaders: this.parseIntEnv("STATS_MAX_READERS", 1),
+        allowMainStream:
+          this.getEnvVar("STATS_ALLOW_MAIN_STREAM", "false") === "true",
+        // Capped at a day: Node timers overflow past ~24.8 days and would fire at once.
+        maxMatchMin: Math.min(this.parseIntEnv("STATS_MAX_MATCH_MIN", 240), 1440),
+        sendEnabled: this.getEnvVar("STATS_SEND_ENABLED", "false") === "true",
+        sendPhotos: this.getEnvVar("STATS_SEND_PHOTOS", "false") === "true",
+        sendPath: `/${this.getEnvVar(
+          "STATS_SEND_PATH",
+          "/api/v1/padel-grounds/{groundId}/courts/{courtId}/stats"
+        ).replace(/^\/+/, "")}`,
+        keepDays: this.parseIntEnv("STATS_KEEP_DAYS", 14),
+        snapshotMin: this.parseIntEnv("STATS_SNAPSHOT_MIN", 15),
       },
       environment: this.getEnvVar("NODE_ENV", "development"),
     };

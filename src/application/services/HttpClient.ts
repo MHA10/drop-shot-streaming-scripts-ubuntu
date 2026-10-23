@@ -108,6 +108,34 @@ export class HttpClient {
     });
   }
 
+  /**
+   * Send one finished match's stats to the backend, which stores them
+   * (contract: docs/stats-db-handoff.md). Same auth as the scoreboard route.
+   * The body is the COMPLETE final record. The backend replaces a resend only
+   * when it can tie the record to a scored match; with no match a resend is
+   * a second row (raised with the backend 2026-10-20). The route path is a
+   * setting (STATS_SEND_PATH) so it can change without a release.
+   */
+  async postMatchStats(
+    groundId: string,
+    courtId: string,
+    body: unknown
+  ): Promise<Response> {
+    const route = this.config.stats.sendPath
+      .replace("{groundId}", encodeURIComponent(groundId))
+      .replace("{courtId}", encodeURIComponent(courtId));
+    return fetch(`${this.config.server.baseUrl}${route}`, {
+      method: "POST",
+      headers: this.backendHeaders({
+        accept: "application/json",
+        "Content-Type": "application/json",
+      }),
+      body: JSON.stringify(body),
+      // A hung request would otherwise stall the whole outbox forever.
+      signal: AbortSignal.timeout(30_000),
+    });
+  }
+
   async sendHeartbeat(groundId: string): Promise<Response> {
     // POST request to send heartbeat
     const url = `${this.config.server.baseUrl}/api/v1/padel-grounds/heartbeat`;

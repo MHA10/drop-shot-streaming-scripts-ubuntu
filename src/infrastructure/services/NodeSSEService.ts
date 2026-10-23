@@ -3,8 +3,17 @@ import {
   SSEService,
   SSEConnectionConfig,
 } from "../../domain/services/SSEService";
-import { SSEStreamEvent } from "../../domain/events/StreamEvent";
+import {
+  SSEMatchStateEvent,
+  SSEStreamEvent,
+} from "../../domain/events/StreamEvent";
 import { AdSpec } from "../../domain/events/StreamEvent";
+
+const MATCH_STATE_EVENT_TYPE = "match_state";
+// The backend's stats route only accepts a UUID matchId; anything else would
+// get the whole stats record rejected, so it is never passed on.
+const UUID_RE =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 import { Logger } from "../../application/interfaces/Logger";
 
 export class NodeSSEService extends EventEmitter implements SSEService {
@@ -55,6 +64,10 @@ export class NodeSSEService extends EventEmitter implements SSEService {
 
   public onStreamEvent(callback: (event: SSEStreamEvent) => void): void {
     this.on("streamEvent", callback);
+  }
+
+  public onMatchState(callback: (event: SSEMatchStateEvent) => void): void {
+    this.on("matchState", callback);
   }
 
   public onConnectionChange(
@@ -262,6 +275,13 @@ export class NodeSSEService extends EventEmitter implements SSEService {
       // Parse the JSON data
       const parsedData = JSON.parse(data);
 
+      // Not a stream start/stop: which match is active on a court. Handled
+      // before the start/stop checks, which would drop it as invalid.
+      if (parsedData?.eventType === MATCH_STATE_EVENT_TYPE) {
+        this.handleMatchState(parsedData);
+        return;
+      }
+
       // Validate required fields
       if (
         !parsedData.cameraUrl ||
@@ -285,6 +305,10 @@ export class NodeSSEService extends EventEmitter implements SSEService {
         reconciliationMode: parsedData.reconciliation_mode || false,
         isScorecardActivated: parsedData.isScorecardActivated,
         ads: this.parseAds(parsedData.ads),
+        matchId:
+          typeof parsedData.matchId === "string" && UUID_RE.test(parsedData.matchId)
+            ? parsedData.matchId
+            : undefined,
       };
 
       this.logger.info("Processing SSE stream event", {
@@ -303,6 +327,28 @@ export class NodeSSEService extends EventEmitter implements SSEService {
         eventData,
       });
     }
+  }
+
+  private handleMatchState(parsedData: {
+    courtId?: unknown;
+    activeMatchId?: unknown;
+  }): void {
+    const { courtId, activeMatchId } = parsedData;
+    const matchOk =
+      activeMatchId === null ||
+      (typeof activeMatchId === "string" && UUID_RE.test(activeMatchId));
+    if (typeof courtId !== "string" || !courtId || !matchOk) {
+      this.logger.warn("Invalid match_state event", { data: parsedData });
+      return;
+    }
+    const event: SSEMatchStateEvent = {
+      eventId: `sse_${Date.now()}_${Math.random().toString(36).slice(2, 11)}`,
+      occurredOn: new Date(),
+      eventType: "SSEMatchStateEvent",
+      courtId,
+      activeMatchId: activeMatchId as string | null,
+    };
+    this.emit("matchState", event);
   }
 
   /**
