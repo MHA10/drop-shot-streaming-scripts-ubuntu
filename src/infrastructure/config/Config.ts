@@ -161,8 +161,12 @@ export interface AppConfig {
     // so the final path can change without a release. Always starts with "/"
     // (a hand-set path without it would change the host it is sent to).
     sendPath: string;
-    // Outbox entries older than this are deleted unsent (bounds the disk).
+    // Match folders are kept this long, sent or not (bounds the disk).
     keepDays: number;
+    // Every this many minutes of a match, file a copy of the stats + heatmap
+    // as they stand (snapshots/015min, …). The match's local record
+    // (MatchRecorder) is written whether or not sending is on.
+    snapshotMin: number;
   };
   environment: string;
 }
@@ -334,7 +338,8 @@ export class Config {
         maxReaders: this.parseIntEnv("STATS_MAX_READERS", 1),
         allowMainStream:
           this.getEnvVar("STATS_ALLOW_MAIN_STREAM", "false") === "true",
-        maxMatchMin: this.parseIntEnv("STATS_MAX_MATCH_MIN", 240),
+        // Capped at a day: Node timers overflow past ~24.8 days and would fire at once.
+        maxMatchMin: Math.min(this.parseIntEnv("STATS_MAX_MATCH_MIN", 240), 1440),
         sendEnabled: this.getEnvVar("STATS_SEND_ENABLED", "false") === "true",
         sendPhotos: this.getEnvVar("STATS_SEND_PHOTOS", "false") === "true",
         sendPath: `/${this.getEnvVar(
@@ -342,6 +347,7 @@ export class Config {
           "/api/v1/padel-grounds/{groundId}/courts/{courtId}/stats"
         ).replace(/^\/+/, "")}`,
         keepDays: this.parseIntEnv("STATS_KEEP_DAYS", 14),
+        snapshotMin: this.parseIntEnv("STATS_SNAPSHOT_MIN", 15),
       },
       environment: this.getEnvVar("NODE_ENV", "development"),
     };

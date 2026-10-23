@@ -4,6 +4,7 @@ import { v2 as cloudinaryClient } from "cloudinary";
 import { Logger } from "../../application/interfaces/Logger";
 import { HttpClient } from "../../application/services/HttpClient";
 import { safeSegment } from "../utils/paths";
+import { MIN_FREE_BYTES, freeDiskBytes } from "../utils/disk";
 
 /**
  * The send queue for finished match stats: heatmap to Cloudinary, numbers to
@@ -15,7 +16,8 @@ import { safeSegment } from "../utils/paths";
  * each player's own map, and each player's photo sheet) to the image host we
  * already use for logos, then sends the numbers + picture links to the
  * backend. Like a post-office outbox: a letter stays in the tray until the
- * other side signs for it. Once it has, the folder is deleted.
+ * other side signs for it. Once it has, the folder is marked done (done.json)
+ * and kept on the box as the match's local record until STATS_KEEP_DAYS.
  *
  * ── BUSINESS RULES ──
  * - Stats are sent ONCE per match, at the end, as the complete final record
@@ -38,6 +40,12 @@ import { safeSegment } from "../utils/paths";
  * - Nothing is sent while STATS_SEND_ENABLED is off — the backend route is
  *   only on staging so far (2026-10-20). Finished matches wait here and go
  *   out once it's on.
+ * - Every match is kept on the box, sent or not, with its pictures, snapshots
+ *   and summary (MatchRecorder) — the local record comes first (Hamza,
+ *   2026-10-23). A sent or empty match gets done.json and stays until
+ *   STATS_KEEP_DAYS after that; it is never sent again. That includes the
+ *   player photo sheets, kept on purpose so they can be checked later (Hamza,
+ *   2026-10-23) — only uploading them is gated (STATS_SEND_PHOTOS).
  * - A record that is never delivered (rejected, or expired unsent) has its
  *   uploaded pictures deleted from Cloudinary, for the same reason. A delete
  *   that fails is kept and retried hourly (for up to PICTURE_DELETE_GIVE_UP_MS
@@ -61,13 +69,24 @@ import { safeSegment } from "../utils/paths";
  *   other failure, including 404 (route not deployed yet) and 401 (key not
  *   set yet), is retried with growing gaps (1 min doubling to 1 h).
  * - Everything expires after STATS_KEEP_DAYS, sent or not, so a box whose
- *   sending stays off can't fill its disk.
+ *   sending stays off can't fill its disk. A sent or empty match counts from
+ *   the match's end (capturedAt), so its player photos never stay longer
+ *   than that on the box, however late it was sent.
+ * - When the disk has under MIN_FREE_BYTES free, the oldest sent/empty
+ *   matches are deleted early: they're already on the backend (or had
+ *   nothing), and a full disk can stop the live ffmpeg, which writes the
+ *   highlight buffer to the same disk. Unsent matches are never deleted early.
+ * - At most MAX_DELETES_PER_PASS folders are deleted per pass: each delete is
+ *   synchronous, and a big backlog (keep period shortened, box off for weeks)
+ *   deleted in one go would hold up the app — and the live streams' control
+ *   path — for seconds. The rest go on the next passes.
  *
  * ── DO NOT ──
  * - Do NOT throw out of flush(): it runs from a timer next to the live
  *   stream. Every failure is logged and retried.
  * - Do NOT delete a folder before a 2xx — that is the only proof the backend
- *   has the record.
+ *   has the record. After one, write done.json; don't delete either (the
+ *   local record is kept until STATS_KEEP_DAYS).
  * - Do NOT touch a folder without match.json: STATS_OUTPUT_DIR is a setting,
  *   and a wrong one must not get some other folder deleted.
  */
@@ -79,6 +98,8 @@ export const STATS_FILE = "stats.json";
 export const HEATMAP_FILE = "heatmap.png";
 // Written at stop, before the background finish (MatchStatsService header).
 export const ENDED_FILE = "ended.json";
+// Delivered (or nothing to deliver): the folder is now only the local record.
+export const DONE_FILE = "done.json";
 
 /** Written when the reader starts; who/where this match is. */
 export interface MatchRecord {
@@ -112,13 +133,13 @@ interface PendingSend extends MatchRecord {
 }
 
 // Files only the live reader needs; dropped once the match is finished.
+// court.json stays: it's small and shows where the reader found the court.
 const WORKING_FILES = [
   "master-tracks.json",
   "master-tracks.json.tmp",
   "segments",
   "photos", // raw cut-outs; the photo sheets built from them stay
   "reader.pid",
-  "court.json",
   ENDED_FILE,
 ];
 const SLOTS = ["A", "B", "C", "D"] as const;
@@ -135,6 +156,7 @@ const PICTURE_PACE_MS = 55_000; // from the last upload's START; just under the 
 const PICTURE_GAP_MS = 20_000; // and from its END, so a slow upload still leaves a pause
 const PICTURE_DELETE_RETRY_MS = 3600_000;
 const PICTURE_DELETE_GIVE_UP_MS = 7 * 24 * 3600_000;
+const MAX_DELETES_PER_PASS = 10;
 
 export interface OutboxSettings {
   sendEnabled: boolean;
@@ -154,13 +176,17 @@ export class MatchStatsOutbox {
   private loggedSendOff = false;
   private lastPictureUploadAt = 0; // when the last upload started
   private lastPictureUploadEndAt = 0;
+  private deletesLeft = MAX_DELETES_PER_PASS;
 
   constructor(
     private readonly rootDir: string,
     private readonly settings: OutboxSettings,
     private readonly cloudinary: CloudinarySettings,
     private readonly httpClient: HttpClient,
-    private readonly logger: Logger
+    private readonly logger: Logger,
+    // Called after a folder's delivery state changes (sent, empty, rejected),
+    // so its summary can show it. Must not throw.
+    private readonly onSettled: (matchDir: string) => void = () => {}
   ) {}
 
   /** Every match folder (<root>/<court>/<match>), oldest first. */
@@ -222,6 +248,8 @@ export class MatchStatsOutbox {
     try {
       do {
         this.flushAgain = false;
+        this.deletesLeft = MAX_DELETES_PER_PASS;
+        this.freeDiskIfLow();
         for (const dir of this.listMatchDirs()) {
           try {
             await this.processDir(dir);
@@ -241,6 +269,12 @@ export class MatchStatsOutbox {
   private async processDir(dir: string): Promise<void> {
     if (!fs.existsSync(path.join(dir, MATCH_FILE))) return; // not ours (DO NOT)
     const keepMs = this.settings.keepDays * 24 * 3600_000;
+    const donePath = path.join(dir, DONE_FILE);
+    if (fs.existsSync(donePath)) {
+      // Delivered or empty: only the local record is left; expire it.
+      if (Date.now() > doneSince(donePath) + keepMs) this.removeDir(dir);
+      return;
+    }
     const rejectedPath = path.join(dir, REJECTED_FILE);
     if (fs.existsSync(rejectedPath)) {
       const rejected = readJson<RejectedSend>(rejectedPath);
@@ -251,8 +285,8 @@ export class MatchStatsOutbox {
       }
       const picturesLeft = !!rejected && this.picturesLeft(rejected);
       if (Date.now() > since + keepMs + (picturesLeft ? PICTURE_DELETE_GIVE_UP_MS : 0)) {
-        if (picturesLeft) this.logGaveUp(rejected!);
-        fs.rmSync(dir, { recursive: true, force: true });
+        // Log only once it's really gone (the per-pass cap may hold it back).
+        if (this.removeDir(dir) && picturesLeft) this.logGaveUp(rejected!);
       }
       return;
     }
@@ -267,6 +301,7 @@ export class MatchStatsOutbox {
     }
 
     if (Date.now() - pending.queuedAt > keepMs) {
+      if (this.deletesLeft <= 0) return; // header: per-pass cap; next pass
       if (this.picturesLeft(pending)) {
         if (Date.now() < (pending.pictureDeleteAt ?? 0)) return;
         await this.discardPictures(pending);
@@ -282,7 +317,7 @@ export class MatchStatsOutbox {
         attempts: pending.attempts,
         lastError: pending.lastError,
       });
-      fs.rmSync(dir, { recursive: true, force: true });
+      this.removeDir(dir);
       return;
     }
 
@@ -305,7 +340,11 @@ export class MatchStatsOutbox {
         courtId: pending.courtId,
         matchDir: dir,
       });
-      fs.rmSync(dir, { recursive: true, force: true });
+      this.markDone(dir, pendingPath, {
+        outcome: "no-stats",
+        at: new Date().toISOString(),
+        capturedAt: pending.capturedAt,
+      });
       return;
     }
 
@@ -363,7 +402,15 @@ export class MatchStatsOutbox {
         pictures: Object.keys(urls).length,
         attempts: pending.attempts + 1,
       });
-      fs.rmSync(dir, { recursive: true, force: true });
+      this.markDone(dir, pendingPath, {
+        outcome: "sent",
+        at: new Date().toISOString(),
+        status: res.status,
+        attempts: pending.attempts + 1,
+        matchId: pending.matchId,
+        capturedAt: pending.capturedAt,
+        pictureUrls: urls,
+      });
       return;
     }
 
@@ -384,9 +431,78 @@ export class MatchStatsOutbox {
       await this.discardPictures(rejected);
       writeJsonAtomic(rejectedPath, rejected);
       fs.rmSync(pendingPath, { force: true });
+      this.onSettled(dir);
       return;
     }
     this.recordFailure(pendingPath, pending, `HTTP ${res.status} ${responseText}`.trim());
+  }
+
+  // done.json first, then drop pending.json: a crash in between leaves both,
+  // and done.json wins on the next pass (checked first) — never a resend. If
+  // done.json can't be written (full disk), pending.json is RENAMED to
+  // done.json instead: a rename needs no free space, and without it the
+  // match would be sent again every minute until space came back.
+  private markDone(dir: string, pendingPath: string, done: Record<string, unknown>): void {
+    const donePath = path.join(dir, DONE_FILE);
+    let wrote = false;
+    try {
+      writeJsonAtomic(donePath, done);
+      wrote = true;
+    } catch (error) {
+      try {
+        fs.rmSync(`${donePath}.tmp`, { force: true });
+      } catch {
+        // leftover temp file; harmless
+      }
+      fs.renameSync(pendingPath, donePath);
+      this.logger.warn("Could not write the match's sent record; kept the queue file as it", {
+        matchDir: dir,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+    if (wrote) {
+      try {
+        fs.rmSync(pendingPath, { force: true });
+      } catch {
+        // both left: done.json is checked first, so it's never sent again
+      }
+    }
+    this.onSettled(dir);
+  }
+
+  // header: per-pass delete cap
+  private removeDir(dir: string): boolean {
+    if (this.deletesLeft <= 0) return false;
+    this.deletesLeft--;
+    fs.rmSync(dir, { recursive: true, force: true });
+    return true;
+  }
+
+  // header: low disk → oldest sent/empty matches go first. Never throws.
+  private freeDiskIfLow(): void {
+    try {
+      const free = freeDiskBytes(this.rootDir);
+      if (free == null || free >= MIN_FREE_BYTES) return;
+      let removed = 0;
+      for (const dir of this.listMatchDirs()) {
+        if (this.deletesLeft <= 0) break;
+        if (!fs.existsSync(path.join(dir, MATCH_FILE))) continue; // not ours (DO NOT)
+        if (!fs.existsSync(path.join(dir, DONE_FILE))) continue;
+        if (this.removeDir(dir)) removed++;
+        const now = freeDiskBytes(this.rootDir);
+        if (now == null || now >= MIN_FREE_BYTES) break;
+      }
+      if (removed === 0) return; // nothing sent to remove; resources.csv shows the disk
+      this.logger.warn("Disk nearly full; deleted the oldest already-sent match stats folders", {
+        rootDir: this.rootDir,
+        freeGb: Math.round((free / 1024 ** 3) * 10) / 10,
+        removed,
+      });
+    } catch (error) {
+      this.logger.warn("Low-disk clean-up of match stats failed", {
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
   }
 
   private recordFailure(pendingPath: string, pending: PendingSend, reason: string): void {
@@ -522,6 +638,17 @@ function perSlot(urls: Record<string, string>, kind: string): Partial<Record<Slo
     if (url) out[s] = url;
   }
   return Object.keys(out).length ? out : null;
+}
+
+// When a sent/empty match's keep period starts: the match's end (capturedAt),
+// else when it was marked done, else the file's time (header: photos).
+function doneSince(donePath: string): number {
+  const done = readJson<{ at?: string; capturedAt?: string }>(donePath);
+  for (const v of [done?.capturedAt, done?.at]) {
+    const t = v ? Date.parse(v) : NaN;
+    if (Number.isFinite(t)) return t;
+  }
+  return fs.statSync(donePath).mtimeMs;
 }
 
 export function readJson<T>(file: string): T | null {

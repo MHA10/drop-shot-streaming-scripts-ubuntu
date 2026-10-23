@@ -92,6 +92,11 @@ export class LiveStatsRunner {
     return this.proc !== null;
   }
 
+  /** The reader's pid while it runs (for the resource log), else null. */
+  public pid(): number | null {
+    return this.proc?.pid ?? null;
+  }
+
   /**
    * App shutdown: ask the reader to stop without waiting or escalating. It
    * saves its progress on the way out, which the next boot resumes from.
@@ -130,7 +135,9 @@ export class LiveStatsRunner {
         graceMs,
       });
       this.proc.kill("SIGKILL");
-      await exited;
+      // A process stuck in the kernel (e.g. a hung disk) can outlive SIGKILL;
+      // don't let that hold the court's "finishing" slot forever.
+      await Promise.race([exited, new Promise<void>((resolve) => setTimeout(resolve, 10_000))]);
     }
     // Also after a clean exit: if the reader died hard mid-finish, its slicer lives on.
     await killStraySegmenter(this.matchDir);
@@ -157,7 +164,9 @@ export class LiveStatsRunner {
       CAMERA_URL: this.cameraUrl,
       PYTHONUNBUFFERED: "1",
     };
-    for (const key of ["PATH", "HOME", "USER", "LANG", "LC_ALL", "TMPDIR"]) {
+    // TZ: the reader names its clips by local time and the logbook reads those
+    // names back (MatchRecorder) — both must use the same zone.
+    for (const key of ["PATH", "HOME", "USER", "LANG", "LC_ALL", "TMPDIR", "TZ"]) {
       if (process.env[key] !== undefined) env[key] = process.env[key];
     }
 

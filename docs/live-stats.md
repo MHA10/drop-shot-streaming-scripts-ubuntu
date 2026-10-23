@@ -113,8 +113,9 @@ Since 2026-10-18 the streamer app runs the reader itself, so nobody starts it by
    backend's `match_state` events tell it which scored match is on the court; that id goes
    in the record so the stats land on the right game.
 3. **Outbox** → uploads the pictures to Cloudinary, sends the numbers + picture links to the
-   backend (`docs/stats-db-handoff.md`), and deletes the folder once the backend says "got it".
-   No answer, or an error → it keeps the folder and tries again (1 min, doubling up to 1 h).
+   backend (`docs/stats-db-handoff.md`), and marks the folder `done.json` once the backend says
+   "got it" — the folder stays on the box as the match's record (see below). No answer, or an
+   error → it keeps trying (1 min, doubling up to 1 h).
 
 Safe by design: stream retries and repeated start events don't restart the reader (that would
 split the match); an app restart mid-match picks the same folder back up; a reader that keeps
@@ -131,11 +132,12 @@ crashing gives up for that match without touching the stream.
 | `STATS_TARGET_FPS` / `STATS_IMGSZ` / `STATS_THREADS` / `STATS_CLIP_SEC` | `3` / `960` / `2` / `30` | reader dials (ds-box result) |
 | `STATS_MAX_READERS` | `1` | courts that may run a reader at once — **raise only after a speed check on that box** |
 | `STATS_ALLOW_MAIN_STREAM` | `false` | if the low-res address can't be worked out, read the HD stream instead (heavier) |
-| `STATS_MAX_MATCH_MIN` | `240` | finish a reader whose stop event never came |
+| `STATS_MAX_MATCH_MIN` | `240` | finish a reader whose stop event never came (counted from the match's start, also after an app restart; capped at 1440) |
 | `STATS_SEND_ENABLED` | `false` | send to the backend. **Leave off until the backend route exists** — matches wait in the outbox meanwhile |
 | `STATS_SEND_PHOTOS` | `false` | upload the player photo sheets and send their links. **Leave off until the backend stores `photoUrls`** — otherwise photos of real people sit on public links nothing records |
 | `STATS_SEND_PATH` | `/api/v1/padel-grounds/{groundId}/courts/{courtId}/stats` | backend route; change it here if the backend names it differently |
-| `STATS_KEEP_DAYS` | `14` | outbox entries older than this are deleted unsent (protects the disk) |
+| `STATS_KEEP_DAYS` | `14` | match folders are deleted this long after the match ended (sent or empty), or after they were queued (never sent) — protects the disk and bounds how long player photos stay on the box |
+| `STATS_SNAPSHOT_MIN` | `15` | every this many minutes of a match, file a copy of the stats + heatmap as they stand (`snapshots/015min`, …) |
 
 Picture upload uses the existing `CLOUDINARY_API_KEY` / `CLOUDINARY_API_SECRET`; without them the
 numbers still go, with no picture links.
@@ -143,8 +145,47 @@ numbers still go, with no picture links.
 **Don't also run the pm2 reader below on a box with `STATS_ENABLED=true`** — that's two readers
 on one court, double the CPU.
 
-Each match folder holds `reader.log` (the reader's own log, including the "are we keeping up?"
-lines) while the match runs — the first place to look if a court's stats look wrong.
+### The match folder — the local record (since 2026-10-23)
+
+Every match is saved on the box first, whether or not sending is on, so the stats can be
+checked before anything relies on the backend. One folder per stream start:
+`STATS_OUTPUT_DIR/<courtId>/<start time, UTC>-<streamId>/`.
+
+| file | what it is |
+|---|---|
+| `summary.md` | **open this first** — one readable page: when, how much of the match was actually analysed (and why clips were dropped or skipped), each snapshot's distances, final numbers per player and team, box resources (average / lowest / highest), pictures, problems from the log, and whether it was sent. Rebuilt at every snapshot, at the end and after sending. |
+| `resources.csv` | one row a minute: whole-box CPU, load, memory, CPU temperature, disk free, the stats reader's CPU (in cores) and memory, the live-stream ffmpegs' CPU and count, the streamer app's CPU and memory, the worst pause of the streamer app in that minute (`event_loop_max_ms`), and how long ago the newest clip the reader finished started (`reader_lag_s`: 50–90 s is normal with 30 s clips; a number that keeps climbing = falling behind). Opens in any spreadsheet. |
+| `snapshots/015min/`, `030min/`, … | `stats.json` + `heatmap.png` as they stood at that minute, plus `snapshot.json` (what the stats covered, reader speed, resources since the previous snapshot). A minute that fell while the app was down is listed as missed in `summary.md`, never back-filled. |
+| `snapshots/final/` | the complete final set: stats, the four-player map, each player's map, photo sheets, `court.json` |
+| `stats.json`, `heatmap*.png`, `photo-*.jpg` | the latest numbers and pictures (final once the match ended) — what gets sent |
+| `reader.log` | the reader's own log, one line per analysed clip ("are we keeping up?") |
+| `court.json` | where the reader found the court in the camera picture |
+| `match.json` | ground, court, stream, scored match, start time |
+| `pending.json` / `done.json` / `rejected.json` | waiting to send / sent (or nothing to send) / refused by the backend |
+
+Per-process CPU and memory come from `/proc`, so they are filled on the Ubuntu boxes only.
+Folders are created readable by the box's own user only (they hold photos of players).
+
+**Pull a box's records to a laptop:** `scp -r <user>@<box>:<STATS_OUTPUT_DIR> ./match-stats-<box>`
+(on the ds box test build: `~/stats-box-test/match-stats`). The copy holds photos of real players
+and nothing deletes it for you — delete it when you're done.
+
+**Turning stats off** (`STATS_ENABLED=false`) stops the clean-up too: delete `STATS_OUTPUT_DIR` by hand
+if the box should no longer keep the records.
+
+**Going back to a build from before 2026-10-23:** first delete every match folder that has
+`done.json` — older builds don't know that file and would send those matches again:
+
+```bash
+find <STATS_OUTPUT_DIR> -mindepth 3 -maxdepth 3 -name done.json -printf '%h\0' | xargs -0 -r rm -rf
+```
+
+**Disk** (measured 2026-10-23 on maps rendered from 90 min of synthetic tracks: four-player map
+0.38 MB, each player's map 0.10–0.14 MB, stats.json 3 KB): about 0.4 MB per 15-minute snapshot; the
+final set is hard links to the folder's own files (no second copy). So roughly 3.5–4 MB for a
+90-minute match; with one reader and ~20 matches a day, ~1 GB over the 14-day keep. When the disk has
+under 2 GB free, snapshot pictures are skipped (numbers still saved) and the oldest already-sent
+match folders are deleted early, up to 10 a minute — unsent matches are never deleted early.
 
 ## Run it by hand (testing)
 

@@ -12,6 +12,7 @@ import {
   killOrphanReader,
 } from "./LiveStatsRunner";
 import {
+  DONE_FILE,
   ENDED_FILE,
   MATCH_FILE,
   MatchRecord,
@@ -21,6 +22,12 @@ import {
   readJson,
   writeJsonAtomic,
 } from "./MatchStatsOutbox";
+import {
+  MatchRecorder,
+  RecorderTiming,
+  finalizeMatchFolder,
+  writeMatchSummary,
+} from "./MatchRecorder";
 
 /**
  * Near-live match stats for every live court: start a reader when a court
@@ -73,6 +80,10 @@ import {
  * - Known v1 gap, out of scope here: the reader labels players by which END
  *   they are on, and pairs change ends every two games, so over a full match
  *   one label can hold different people (memory: stats-end-change-bug).
+ * - Every match folder is also the match's local record, sent or not
+ *   (2026-10-23): resources every minute, a snapshot every STATS_SNAPSHOT_MIN,
+ *   a final snapshot and summary.md (MatchRecorder). Closing a folder by ANY
+ *   path files the final snapshot, right after it is queued.
  *
  * ── WHY IT'S BUILT THIS WAY (change at your peril) ──
  * - The reader is keyed by COURT and survives stream retries. An ffmpeg retry
@@ -138,6 +149,7 @@ export interface MatchStartInfo {
 
 interface ActiveReader {
   runner: LiveStatsRunner;
+  recorder: MatchRecorder;
   matchDir: string;
   keyHash: string | null;
   guard: NodeJS.Timeout;
@@ -180,17 +192,23 @@ export class MatchStatsService {
   private readonly outbox: MatchStatsOutbox;
   private readonly settings: AppConfig["stats"];
   private readonly groundId: string;
+  private readonly timing: RecorderTiming;
   private timer?: NodeJS.Timeout;
 
   constructor(
     config: AppConfig,
     httpClient: HttpClient,
     private readonly logger: Logger,
-    scriptPath?: string
+    scriptPath?: string,
+    timing?: RecorderTiming // tests only: shorter than a minute
   ) {
     this.settings = config.stats;
     this.groundId = config.groundInfo.groundId;
     this.rootDir = path.resolve(this.settings.outputDir);
+    this.timing = timing ?? {
+      sampleEveryMs: 60_000,
+      snapshotEveryMs: this.settings.snapshotMin * 60_000,
+    };
     this.outbox = new MatchStatsOutbox(
       this.rootDir,
       {
@@ -200,7 +218,8 @@ export class MatchStatsService {
       },
       config.cloudinary,
       httpClient,
-      logger
+      logger,
+      (dir) => writeMatchSummary(dir, { sendEnabled: this.settings.sendEnabled })
     );
     // Same lookup as PythonBallReframer: inside the npm package first (the
     // build copies scripts/ into dist/), then a repo checkout.
@@ -225,7 +244,8 @@ export class MatchStatsService {
   /** Boot: clean up after the previous run, then start the send loop. Never throws. */
   public async start(): Promise<void> {
     try {
-      fs.mkdirSync(this.rootDir, { recursive: true });
+      // Owner-only: match folders hold photos of players (header).
+      fs.mkdirSync(this.rootDir, { recursive: true, mode: 0o700 });
       this.loadCourtMemory();
       await this.sweepUnfinished();
     } catch (error) {
@@ -240,6 +260,8 @@ export class MatchStatsService {
       maxReaders: this.settings.maxReaders,
       sendEnabled: this.settings.sendEnabled,
       sendPhotos: this.settings.sendPhotos,
+      snapshotMin: this.timing.snapshotEveryMs / 60_000,
+      keepDays: this.settings.keepDays,
       python: this.readerSettings.pythonPath,
       script: this.readerSettings.scriptPath,
       model: this.readerSettings.modelPath,
@@ -247,8 +269,14 @@ export class MatchStatsService {
 
     // First send pass on the timer, not now (header: start() stays short).
     this.timer = setInterval(() => {
-      this.closeExpiredResumable();
-      void this.outbox.flush();
+      try {
+        this.closeExpiredResumable();
+        void this.outbox.flush().catch(() => {}); // flush never rejects; belt and braces
+      } catch (error) {
+        this.logger.warn("Match stats housekeeping failed", {
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
     }, FLUSH_EVERY_MS);
     this.timer.unref();
   }
@@ -344,9 +372,14 @@ export class MatchStatsService {
       }
       this.notePrevious(courtId, active.matchDir);
 
+      // The recorder keeps sampling while the reader wraps up, and stops
+      // before the final snapshot so no milestone lands after it.
       const done = active.runner
         .finish(FINISH_GRACE_MS)
-        .then(() => this.queue(active.matchDir, endedAt))
+        .then(() => {
+          active.recorder.stop();
+          this.queue(active.matchDir, endedAt);
+        })
         .catch((error) =>
           this.logger.warn("Finishing match stats failed", {
             courtId,
@@ -354,9 +387,11 @@ export class MatchStatsService {
           })
         )
         .finally(() => {
+          active.recorder.stop();
           this.finishing.delete(courtId);
           this.startWaiting();
-        });
+        })
+        .catch(() => {}); // nothing above throws; a future change must not crash the app
       this.finishing.set(courtId, done);
     } catch (error) {
       this.logger.warn("Could not stop match stats", {
@@ -385,8 +420,9 @@ export class MatchStatsService {
   /** App shutdown: ask every reader to stop, leave folders open to resume. */
   public shutdown(): void {
     if (this.timer) clearInterval(this.timer);
-    for (const { runner, guard } of this.readers.values()) {
+    for (const { runner, recorder, guard } of this.readers.values()) {
       clearTimeout(guard);
+      recorder.stop();
       runner.requestStop();
     }
     this.readers.clear();
@@ -432,15 +468,17 @@ export class MatchStatsService {
 
     const runner = new LiveStatsRunner(courtId, matchDir, cameraUrl, this.readerSettings, this.logger);
     runner.start();
+    const recorder = new MatchRecorder(courtId, matchDir, () => runner.pid(), this.timing, this.logger);
+    recorder.start();
     const guard = setTimeout(() => {
       this.logger.warn("No stop event before the match time limit; finishing stats", {
         courtId,
         maxMatchMin: this.settings.maxMatchMin,
       });
       this.onStreamStopped(courtId);
-    }, this.settings.maxMatchMin * 60_000);
+    }, safetyDelayMs(matchDir, this.settings.maxMatchMin));
     guard.unref();
-    this.readers.set(courtId, { runner, matchDir, keyHash, guard });
+    this.readers.set(courtId, { runner, recorder, matchDir, keyHash, guard });
 
     this.logger.info("Match stats started", {
       courtId,
@@ -464,6 +502,8 @@ export class MatchStatsService {
   private async sweepUnfinished(): Promise<void> {
     const unfinished: Array<{ dir: string; match: MatchRecord }> = [];
     for (const dir of this.outbox.listMatchDirs()) {
+      // Done first: most folders are, now that they're kept after sending.
+      if (fs.existsSync(path.join(dir, DONE_FILE))) continue;
       if (fs.existsSync(path.join(dir, PENDING_FILE))) continue;
       if (fs.existsSync(path.join(dir, REJECTED_FILE))) continue;
       const match = readJson<MatchRecord>(path.join(dir, MATCH_FILE));
@@ -484,13 +524,13 @@ export class MatchStatsService {
           const at = ended.endedAt ? new Date(ended.endedAt) : new Date(last);
           this.notePrevious(match.courtId, dir);
           if (match.streamKeyHash) this.rememberEnded(match.courtId, match.streamKeyHash);
-          this.outbox.enqueue(dir, Number.isNaN(at.getTime()) ? new Date(last) : at);
+          this.closeFolder(dir, Number.isNaN(at.getTime()) ? new Date(last) : at);
         } else if (Date.now() - last < RESUME_DEADLINE_MS) {
           // Folders are oldest-first, so a newer one for the court wins.
           const older = this.resumable.get(match.courtId);
           if (older) {
             this.notePrevious(match.courtId, older.matchDir);
-            this.outbox.enqueue(older.matchDir, new Date(lastActivityMs(older.matchDir)));
+            this.closeFolder(older.matchDir, new Date(lastActivityMs(older.matchDir)));
           }
           this.resumable.set(match.courtId, {
             matchDir: dir,
@@ -500,7 +540,7 @@ export class MatchStatsService {
           this.logger.info("Unfinished match stats can resume", { courtId: match.courtId, matchDir: dir });
         } else {
           this.notePrevious(match.courtId, dir);
-          this.outbox.enqueue(dir, new Date(last));
+          this.closeFolder(dir, new Date(last));
         }
       } catch (error) {
         this.logger.warn("Could not tidy an unfinished match stats folder", {
@@ -513,7 +553,7 @@ export class MatchStatsService {
 
   private queue(matchDir: string, capturedAt: Date): void {
     try {
-      this.outbox.enqueue(matchDir, capturedAt);
+      this.closeFolder(matchDir, capturedAt);
     } catch (error) {
       this.logger.warn("Could not queue match stats", {
         matchDir,
@@ -521,7 +561,17 @@ export class MatchStatsService {
       });
       return;
     }
-    void this.outbox.flush();
+    void this.outbox.flush().catch(() => {}); // flush never rejects; belt and braces
+  }
+
+  // Queue the folder, then file its final snapshot + summary (after, so the
+  // summary shows it queued). No send pass here: boot calls this too
+  // (header: the first send pass waits for the timer).
+  private closeFolder(matchDir: string, capturedAt: Date): void {
+    this.outbox.enqueue(matchDir, capturedAt);
+    finalizeMatchFolder(matchDir, capturedAt, this.logger, {
+      sendEnabled: this.settings.sendEnabled,
+    });
   }
 
   private closeExpiredResumable(): void {
@@ -567,7 +617,7 @@ export class MatchStatsService {
   private saveCourtMemory(courtId: string): void {
     try {
       const dir = path.join(this.rootDir, safeSegment(courtId));
-      fs.mkdirSync(dir, { recursive: true });
+      fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
       const memory: CourtMemory = {
         courtId,
         previousMatchId: this.previousMatchId.get(courtId),
@@ -611,7 +661,7 @@ export class MatchStatsService {
       safeSegment(info.courtId),
       `${stamp}-${safeSegment(info.streamId)}`
     );
-    fs.mkdirSync(dir, { recursive: true });
+    fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
     const record: MatchRecord = {
       groundId: this.groundId,
       courtId: info.courtId,
@@ -637,6 +687,14 @@ function safeReaddir(dir: string): string[] {
 function hashKey(streamKey: string | undefined): string | null {
   if (!streamKey) return null;
   return crypto.createHash("sha256").update(streamKey).digest("hex").slice(0, 16);
+}
+
+// Time left before the safety stop, counted from the match's own start: a
+// match resumed after an app restart must not get a fresh STATS_MAX_MATCH_MIN.
+function safetyDelayMs(matchDir: string, maxMatchMin: number): number {
+  const started = Date.parse(readJson<MatchRecord>(path.join(matchDir, MATCH_FILE))?.startedAt ?? "");
+  const elapsed = Number.isFinite(started) ? Math.max(0, Date.now() - started) : 0;
+  return Math.max(60_000, maxMatchMin * 60_000 - elapsed);
 }
 
 // When the reader last wrote progress in this folder.
