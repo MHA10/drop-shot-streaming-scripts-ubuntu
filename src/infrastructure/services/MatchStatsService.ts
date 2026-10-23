@@ -30,7 +30,8 @@ import {
 } from "./MatchRecorder";
 
 /**
- * Near-live match stats for every live court: start a reader when a court
+ * Near-live match stats for each live court in STATS_COURTS (all by default),
+ * up to STATS_MAX_READERS at once: start a reader when a court
  * goes live, finish it and queue the result when the court stops.
  *
  * ── IN SIMPLE WORDS ──
@@ -58,6 +59,14 @@ import {
  * - At most STATS_MAX_READERS readers at once (default 1 — the only proven
  *   speed result is one reader on a 4-core box). A reader still wrapping up
  *   its last clip counts too.
+ * - STATS_COURTS, when set, limits stats to those courts; others never take
+ *   the reader (Padel Central 2026-10-23: Court 1 only). Without it the first
+ *   court to go live gets the reader, so which court has stats changes from
+ *   booking to booking, and after an app restart the reader can move to the
+ *   other court mid-booking. Listing more courts than STATS_MAX_READERS brings
+ *   that first-come behaviour back among the listed ones. Entries that don't
+ *   look like a court id are warned about at boot: a typo would otherwise cost
+ *   every court its stats with only one quiet line per court to show for it.
  * - The reader only ever reads the camera's low-res stream; if we can't work
  *   out its address, that court gets no stats (unless STATS_ALLOW_MAIN_STREAM).
  * - The record names its scored match (the backend's live_match id) so the
@@ -136,6 +145,8 @@ import {
  * - Do NOT finish a court's reader from the stream-retry path; only the
  *   backend's stop event, a new stream key, or the safety timer ends a match.
  * - Do NOT start a reader for a court whose previous reader is still finishing.
+ * - Do NOT skip isStatsCourt() on a new path to startReader (it also guards
+ *   startReader itself, so a court outside STATS_COURTS never gets a reader).
  */
 
 export interface MatchStartInfo {
@@ -168,6 +179,8 @@ const FLUSH_EVERY_MS = 60_000;
 // Backend repeats match_state every minute; 3 min tolerates two lost repeats.
 const MATCH_STATE_FRESH_MS = 3 * 60_000;
 const COURT_MEMORY_FILE = "court-memory.json";
+// Court ids are UUIDs (docs/stats-db-handoff.md).
+const COURT_ID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 
 interface CourtMemory {
   courtId: string;
@@ -187,6 +200,8 @@ export class MatchStatsService {
   // Key hashes of bookings that have ended on each court (header: late events).
   private readonly endedKeys = new Map<string, string[]>();
   private readonly resumable = new Map<string, OpenFolder>();
+  // Courts already logged as "not a stats court" (start events repeat).
+  private readonly notStatsCourt = new Set<string>();
   private readonly rootDir: string;
   private readonly readerSettings: LiveStatsReaderSettings;
   private readonly outbox: MatchStatsOutbox;
@@ -255,9 +270,17 @@ export class MatchStatsService {
       });
     }
 
+    for (const court of this.settings.courts) {
+      if (!COURT_ID_RE.test(court)) {
+        this.logger.warn("STATS_COURTS entry is not a court id; no court will match it", {
+          entry: court,
+        });
+      }
+    }
     this.logger.info("Match stats enabled", {
       rootDir: this.rootDir,
       maxReaders: this.settings.maxReaders,
+      courts: this.settings.courts.length ? this.settings.courts : "all",
       sendEnabled: this.settings.sendEnabled,
       sendPhotos: this.settings.sendPhotos,
       snapshotMin: this.timing.snapshotEveryMs / 60_000,
@@ -285,6 +308,16 @@ export class MatchStatsService {
   public onStreamStarted(info: MatchStartInfo): void {
     try {
       const { courtId } = info;
+      if (!this.isStatsCourt(courtId)) {
+        if (!this.notStatsCourt.has(courtId)) {
+          this.notStatsCourt.add(courtId);
+          this.logger.info("No stats for this court: not in STATS_COURTS", {
+            courtId,
+            statsCourts: this.settings.courts,
+          });
+        }
+        return;
+      }
       const keyHash = hashKey(info.streamKey);
       if (keyHash && this.endedKeys.get(courtId)?.includes(keyHash)) {
         this.logger.info("Ignoring a start for a booking that already ended on this court", {
@@ -429,8 +462,14 @@ export class MatchStatsService {
     this.waiting.clear();
   }
 
+  private isStatsCourt(courtId: string): boolean {
+    const courts = this.settings.courts;
+    return courts.length === 0 || courts.includes(String(courtId).toLowerCase());
+  }
+
   private startReader(info: MatchStartInfo, keyHash: string | null): void {
     const { courtId } = info;
+    if (!this.isStatsCourt(courtId)) return; // header: DO NOT
     const substream = toSubstreamUrl(info.cameraUrl);
     const cameraUrl = substream ?? (this.settings.allowMainStream ? info.cameraUrl : null);
     if (!cameraUrl) {

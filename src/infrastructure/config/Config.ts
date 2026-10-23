@@ -123,7 +123,7 @@ export interface AppConfig {
   };
   stats: {
     // Near-live player stats (heatmap + per-player/team numbers), one Python
-    // reader (scripts/live_stats.py) per live court. Default OFF: the reader
+    // reader (scripts/live_stats.py) per live stats court, up to maxReaders. Default OFF: the reader
     // needs a Python env with the vision libraries + model weights installed on
     // the box, and it shares the CPU with the live encode. Off = zero new
     // runtime behaviour.
@@ -139,6 +139,10 @@ export interface AppConfig {
     imgsz: number;
     threads: number;
     clipSec: number;
+    // Only these courts get stats: court IDS (UUIDs such as fea8178e-…, the
+    // courtId in the stats log lines), not names. Empty = every court. A box
+    // that can't keep up with two live courts can pin its one reader to one.
+    courts: string[];
     // How many courts may run a reader at once. Default 1: the x2.18 speed
     // result is for ONE reader next to the encode on a 4-core box; two readers
     // would double the CPU taken from the live stream. Raise only after a
@@ -335,6 +339,20 @@ export class Config {
         imgsz: this.parseIntEnv("STATS_IMGSZ", 960),
         threads: this.parseIntEnv("STATS_THREADS", 2),
         clipSec: this.parseIntEnv("STATS_CLIP_SEC", 30),
+        // Forgiving on purpose: a typo here silently costs every court its
+        // stats. Invisible characters (copied from chat apps) and quotes are
+        // dropped, and ids are compared lower-case (UUIDs ignore case).
+        courts: this.getEnvVar("STATS_COURTS", "")
+          .split(",")
+          .map((c) =>
+            c
+              .replace(/[\u200B-\u200D\u2060\uFEFF]/g, "")
+              .trim()
+              .replace(/^["']+|["']+$/g, "")
+              .trim()
+              .toLowerCase()
+          )
+          .filter(Boolean),
         maxReaders: this.parseIntEnv("STATS_MAX_READERS", 1),
         allowMainStream:
           this.getEnvVar("STATS_ALLOW_MAIN_STREAM", "false") === "true",

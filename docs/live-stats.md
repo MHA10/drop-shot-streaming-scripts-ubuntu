@@ -130,6 +130,7 @@ crashing gives up for that match without touching the stream.
 | `STATS_MODEL_PATH` | `./yolo11s.pt` | the player-finder weights (not shipped in the npm package) |
 | `STATS_OUTPUT_DIR` | `./match-stats` | match folders + outbox |
 | `STATS_TARGET_FPS` / `STATS_IMGSZ` / `STATS_THREADS` / `STATS_CLIP_SEC` | `3` / `960` / `2` / `30` | reader dials (ds-box result) |
+| `STATS_COURTS` | (empty = all) | comma-separated court **ids** that get stats (the UUID shown as `courtId` in the stats log lines, not the court's name); others never take the reader. Pins a box's one reader to one court — Padel Central Court 1: `STATS_COURTS=fea8178e-81b9-475e-8dd0-038a2c06f7fe`. An entry that isn't a court id is warned about at startup |
 | `STATS_MAX_READERS` | `1` | courts that may run a reader at once — **raise only after a speed check on that box** |
 | `STATS_ALLOW_MAIN_STREAM` | `false` | if the low-res address can't be worked out, read the HD stream instead (heavier) |
 | `STATS_MAX_MATCH_MIN` | `240` | finish a reader whose stop event never came (counted from the match's start, also after an app restart; capped at 1440) |
