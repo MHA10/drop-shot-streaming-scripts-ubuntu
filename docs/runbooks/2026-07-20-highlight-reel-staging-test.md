@@ -209,7 +209,7 @@ ffmpeg -i "$REEL" -af volumedetect -f null /dev/null 2>&1 | grep volume
 Expected:
 - ✅ Two streams, one `video,h264` and one `audio,aac`. Only one line means the reel is silent — work backwards: does the buffer segment have audio (`ffprobe` a `.ts` in `HIGHLIGHT_BUFFER_DIR`)? Audio is only recorded when the camera actually carries it, so check `hasAudio: true` in the stream-start log first.
 - ✅ `mean_volume` well above `-91 dB`. A reel can carry a valid AAC track of pure silence — this is the check that tells the difference.
-- ✅ Visually: **DropShot bottom-right, the venue's logo directly beneath it**, smaller and semi-transparent. The top-right corner is empty. Tune with `HIGHLIGHT_REEL_CLIENT_LOGO_SCALE` (default `0.55` of the DropShot mark) and `HIGHLIGHT_REEL_CLIENT_LOGO_OPACITY` (default `0.65`).
+- ✅ Visually: **DropShot bottom-right (unchanged), the venue's logo bottom-left**, smaller and semi-transparent. The top-right corner is empty. Tune with `HIGHLIGHT_REEL_CLIENT_LOGO_SCALE` (default `0.55` of the DropShot mark) and `HIGHLIGHT_REEL_CLIENT_LOGO_OPACITY` (default `0.65`).
 
 ---
 

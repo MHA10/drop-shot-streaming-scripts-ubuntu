@@ -11,8 +11,8 @@ import { withLowPriority } from "../utils/lowPriority";
  *
  * ── IN SIMPLE WORDS ──
  * Stamps the two logos onto the highlight clip, keeps the court audio, and
- * writes the finished reel. Both marks stack in the bottom-right corner:
- * DropShot on top, the venue's logo smaller and faded beneath it.
+ * writes the finished reel. The marks sit in the two bottom corners: DropShot
+ * bottom-right as always, the venue's logo bottom-left, smaller and faded.
  *
  * ── WHY IT'S BUILT THIS WAY (change at your peril) ──
  * - It probes the clip's real dimensions and sizes logos from them, so the same
@@ -119,27 +119,18 @@ export class HighlightRendererService {
     const dsBoxW = Math.round(width * (portrait ? 0.4 : 0.26));
     const dsBoxH = Math.round(height * (portrait ? 0.18 : 0.13));
 
-    // The client mark is a secondary credit, not a second brand: it sits
-    // directly under the DropShot logo, smaller and semi-transparent, so the
-    // DropShot mark stays dominant. It used to be the same size as DropShot's
-    // and pinned to the TOP-right, where on a 9:16 reel it covered a serious
-    // share of the playing area.
+    // The client mark is a secondary credit, not a second brand: smaller and
+    // semi-transparent, so the DropShot mark stays dominant. It used to be the
+    // same size as DropShot's and pinned to the TOP-right, where on a vertical
+    // reel it covered a serious share of the playing area.
     const clientBoxW = Math.round(dsBoxW * this.clientLogoScale);
     const clientBoxH = Math.round(dsBoxH * this.clientLogoScale);
 
     const marginX = Math.round(width * 0.02);
     const marginY = Math.round(height * 0.02);
-    const stackGap = Math.round(height * 0.012);
 
     const hasDs = fs.existsSync(this.dsLogoPath);
     const hasClient = fs.existsSync(this.clientLogoPath);
-
-    // Both marks stack in the bottom-right corner, client beneath DropShot.
-    // DropShot is lifted by the client's FULL box height even though
-    // `force_original_aspect_ratio=decrease` may render it shorter — that
-    // only ever widens the gap, so the two can never collide. With no client
-    // logo present DropShot keeps the plain bottom-right corner it always had.
-    const dsOffsetY = marginY + (hasClient ? clientBoxH + stackGap : 0);
 
     const logos: Array<{
       file: string;
@@ -148,12 +139,16 @@ export class HighlightRendererService {
       pos: string;
       alpha?: number;
     }> = [];
+    // The two marks sit on the same bottom line, one in each corner: DropShot
+    // keeps the bottom-RIGHT it has always had, and the client takes the
+    // bottom-LEFT. Independent corners, so the client's size can be tuned
+    // freely without ever moving the DropShot mark.
     if (hasDs) {
       logos.push({
         file: this.dsLogoPath,
         boxW: dsBoxW,
         boxH: dsBoxH,
-        pos: `main_w-overlay_w-${marginX}:main_h-overlay_h-${dsOffsetY}`,
+        pos: `main_w-overlay_w-${marginX}:main_h-overlay_h-${marginY}`,
       });
     }
     if (hasClient) {
@@ -161,7 +156,7 @@ export class HighlightRendererService {
         file: this.clientLogoPath,
         boxW: clientBoxW,
         boxH: clientBoxH,
-        pos: `main_w-overlay_w-${marginX}:main_h-overlay_h-${marginY}`,
+        pos: `${marginX}:main_h-overlay_h-${marginY}`,
         alpha: this.clientLogoOpacity,
       });
     }

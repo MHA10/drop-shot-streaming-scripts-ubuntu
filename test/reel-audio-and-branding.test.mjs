@@ -6,9 +6,10 @@
 //    highlight-buffer output, the extractor's cut, and the renderer's overlay
 //    pass. Re-enabling any two of them still yields a silent reel, so each
 //    stage is asserted on its own.
-// 2. BRANDING. The venue's logo must sit UNDER the DropShot mark in the
-//    bottom-right, smaller and faded. It used to be full size in the top-right,
-//    where on a 9:16 reel it covered a chunk of the court.
+// 2. BRANDING. The venue's logo must sit in the bottom-LEFT corner, smaller
+//    and faded, with the DropShot mark left exactly where it has always been
+//    in the bottom-right. It used to be full size in the top-right, where on a
+//    vertical reel it covered a chunk of the court.
 //
 // Run:  npm run build && node --test test/reel-audio-and-branding.test.mjs
 import { test } from "node:test";
@@ -87,30 +88,41 @@ test("renderer maps video explicitly so the audio map can't displace it", () => 
   });
 });
 
-test("client logo sits below the DropShot logo, both bottom-right", () => {
+test("logos sit in opposite bottom corners: DropShot right, client left", () => {
   withLogos(({ renderer }) => {
     const filter = filterOf(renderer.buildRenderArgs("clip.mp4", W, H));
     const [dsPos, clientPos] = overlayPositions(filter);
-
-    // Both pinned to the right edge by the same margin.
     const marginX = Math.round(W * 0.02);
-    assert.ok(dsPos.startsWith(`main_w-overlay_w-${marginX}:`), dsPos);
-    assert.ok(clientPos.startsWith(`main_w-overlay_w-${marginX}:`), clientPos);
+    const marginY = Math.round(H * 0.02);
 
-    // Both measured up from the BOTTOM edge — neither is in the top corner
-    // any more. The old client position was a bare `:<margin>` from the top.
-    assert.ok(dsPos.includes("main_h-overlay_h-"), dsPos);
-    assert.ok(clientPos.includes("main_h-overlay_h-"), clientPos);
+    // DropShot: bottom-right, exactly the corner it has always occupied.
+    assert.equal(dsPos, `main_w-overlay_w-${marginX}:main_h-overlay_h-${marginY}`);
+    // Client: bottom-LEFT. A bare x margin means the left edge; `main_w-...`
+    // would put it back on the right.
+    assert.equal(clientPos, `${marginX}:main_h-overlay_h-${marginY}`);
+    assert.ok(!clientPos.startsWith("main_w"), "client must not be right-aligned");
 
-    // DropShot is lifted further off the bottom, so the client sits beneath it.
-    const dsUp = Number(dsPos.split("main_h-overlay_h-")[1]);
-    const clientUp = Number(clientPos.split("main_h-overlay_h-")[1]);
-    assert.ok(dsUp > clientUp, `DropShot (${dsUp}) must sit above client (${clientUp})`);
-
-    // The lift clears the client's whole box, so they can never overlap.
-    const clientBoxH = Math.round(Math.round(H * 0.18) * 0.55);
-    assert.ok(dsUp >= clientUp + clientBoxH, "gap must clear the client logo");
+    // Same bottom line, so the pair reads as one footer rather than two
+    // unrelated stamps.
+    assert.equal(
+      dsPos.split("main_h-overlay_h-")[1],
+      clientPos.split("main_h-overlay_h-")[1]
+    );
   });
+});
+
+test("the client logo never moves the DropShot logo", () => {
+  let withClient;
+  withLogos(({ renderer }) => {
+    withClient = overlayPositions(filterOf(renderer.buildRenderArgs("clip.mp4", W, H)))[0];
+  });
+  withLogos(
+    ({ renderer }) => {
+      const alone = overlayPositions(filterOf(renderer.buildRenderArgs("clip.mp4", W, H)))[0];
+      assert.equal(alone, withClient, "DropShot's corner must not depend on the client logo");
+    },
+    { client: false }
+  );
 });
 
 test("client logo is smaller than the DropShot logo and semi-transparent", () => {
@@ -148,17 +160,6 @@ test("a fully opaque client logo skips the alpha filter entirely", () => {
       assert.ok(!filter.includes("colorchannelmixer"), filter);
     },
     { scale: 0.55, opacity: 1 }
-  );
-});
-
-test("without a client logo, DropShot keeps the plain bottom-right corner", () => {
-  withLogos(
-    ({ renderer }) => {
-      const filter = filterOf(renderer.buildRenderArgs("clip.mp4", W, H));
-      const [dsPos] = overlayPositions(filter);
-      assert.equal(dsPos, `main_w-overlay_w-${Math.round(W * 0.02)}:main_h-overlay_h-${Math.round(H * 0.02)}`);
-    },
-    { client: false }
   );
 });
 
