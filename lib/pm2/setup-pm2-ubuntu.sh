@@ -36,6 +36,10 @@ readonly SERVICE_NAME_PREFIX="streamer"
 DEFAULT_GROUND_NAME="${DROPSHOT_GROUND_ID:-ground1}"
 DEFAULT_PACKAGE_NAME="streamer-node"
 DEFAULT_NODE_VERSION="22"
+# Node 20 is the floor, not a preference: @supabase/supabase-js opens its realtime
+# websocket with the runtime's global WebSocket, which Node 18 and older lack. Below
+# 20 the score overlay silently never updates - see MINIMUM_NODE_VERSION uses below.
+readonly MINIMUM_NODE_VERSION="20"
 
 #==============================================================================
 # Utility Functions
@@ -109,6 +113,11 @@ load_config() {
     GROUND_NAME="${GROUND_NAME:-$DEFAULT_GROUND_NAME}"
     PACKAGE_NAME="${PACKAGE_NAME:-$DEFAULT_PACKAGE_NAME}"
     NODE_VERSION="${NODE_VERSION:-$DEFAULT_NODE_VERSION}"
+    # A config file written by an older version of this script may still say 18.
+    if [[ "${NODE_VERSION%%.*}" -lt "$MINIMUM_NODE_VERSION" ]]; then
+        log "WARN" "NODE_VERSION=$NODE_VERSION is below $MINIMUM_NODE_VERSION; Supabase realtime (the score overlay) cannot connect on it. Using $DEFAULT_NODE_VERSION instead."
+        NODE_VERSION="$DEFAULT_NODE_VERSION"
+    fi
     KEYMETRICS_PUBLIC_KEY="${KEYMETRICS_PUBLIC_KEY:-}"
     KEYMETRICS_PRIVATE_KEY="${KEYMETRICS_PRIVATE_KEY:-}"
     MACHINE_NAME="${MACHINE_NAME:-${GROUND_NAME}-server}"
@@ -128,8 +137,9 @@ GROUND_TAG="ground=${GROUND_NAME}"
 # Package configuration
 PACKAGE_NAME="streamer-node"
 
-# Node.js version (18, 20, etc.)
-NODE_VERSION="18"
+# Node.js version - 20 or newer is required (Supabase realtime needs a global
+# WebSocket, absent before Node 21 in some builds and entirely absent on 18)
+NODE_VERSION="22"
 
 # Keymetrics configuration (optional)
 KEYMETRICS_PUBLIC_KEY=""
@@ -159,8 +169,12 @@ install_nodejs() {
         local current_version=$(node --version | sed 's/v//')
         log "INFO" "Node.js already installed: v$current_version"
         
-        # Check if version is acceptable
-        if [[ "${current_version%%.*}" -ge "$node_version" ]]; then
+        # Check if version is acceptable. Anything below MINIMUM_NODE_VERSION is
+        # rejected even if the config asked for it: on Node 18 the streamer runs and
+        # streams fine, but every Supabase realtime subscription times out after 10s,
+        # so the scorecard overlay silently never updates (Padel Central, 2026-09-25).
+        if [[ "${current_version%%.*}" -ge "$node_version" ]] && \
+           [[ "${current_version%%.*}" -ge "$MINIMUM_NODE_VERSION" ]]; then
             log "INFO" "Node.js version is sufficient."
             return 0
         else
@@ -248,6 +262,37 @@ if [[ -z "\${DROPSHOT_GROUND_ID:-}" ]]; then
     log_message "WARNING: DROPSHOT_GROUND_ID is not set or empty!"
 else
     log_message "CONFIRMED: Ground ID is set to '\$DROPSHOT_GROUND_ID'"
+fi
+
+# Prefer a Node >= 20 runtime. pm2 launches this script with the daemon's PATH,
+# which on older boxes still points at the system Node 18; @supabase/supabase-js
+# cannot open its realtime websocket there, so scores never reach the overlay
+# while everything else keeps working. Fall back to the newest nvm install.
+node_major() {
+    if command -v node >/dev/null 2>&1; then
+        node -v 2>/dev/null | sed 's/^v//; s/\..*//'
+    else
+        echo 0
+    fi
+}
+
+if [ "\$(node_major)" -lt 20 ]; then
+    for candidate in \$(ls -d "\${NVM_DIR:-\$HOME/.nvm}"/versions/node/v* 2>/dev/null | sort -V || true); do
+        candidate_major=\$(basename "\$candidate"); candidate_major=\${candidate_major#v}; candidate_major=\${candidate_major%%.*}
+        if [ -x "\$candidate/bin/node" ] && [ "\$candidate_major" -ge 20 ]; then
+            NEWER_NODE_BIN="\$candidate/bin"
+        fi
+    done
+    if [ -n "\${NEWER_NODE_BIN:-}" ]; then
+        export PATH="\$NEWER_NODE_BIN:\$PATH"
+        log_message "System Node was older than 20; using \$(node -v) from \$NEWER_NODE_BIN"
+    fi
+fi
+
+if [ "\$(node_major)" -lt 20 ]; then
+    log_message "WARNING: Node \$(node -v 2>/dev/null || echo 'not found') is below 20 - Supabase realtime will not connect, so live scores will not appear on the stream"
+else
+    log_message "Node runtime: \$(node -v)"
 fi
 
 # Load .env from repo root (two levels up from lib/pm2)
@@ -341,13 +386,34 @@ setup_log_rotation() {
         pm2 install pm2-logrotate || error_exit "Failed to install pm2-logrotate"
     fi
     
-    # Configure log rotation settings
-    pm2 set pm2-logrotate:max_days 3 || error_exit "Failed to set log retention days"
+    # Configure log rotation settings.
+    #
+    # pm2-logrotate 3.x has NO age-based deletion:
+    #   - `max_days` is not a setting it reads. This script used to set it to 3,
+    #     and it silently did nothing.
+    #   - `retain` counts rotated FILES, not days. With max_size 10M a noisy day
+    #     rotates many times, so a small retain pushes out older days early.
+    # So pm2-logrotate only ROTATES (daily, or at 10M). Age-based deletion is done
+    # by the cron job below, and retain is set high enough never to prune first.
+    pm2 set pm2-logrotate:retain 1000 || error_exit "Failed to set log retention count"
     pm2 set pm2-logrotate:compress true || error_exit "Failed to enable log compression"
     pm2 set pm2-logrotate:rotateInterval '0 0 * * *' || error_exit "Failed to set rotation interval"
     pm2 set pm2-logrotate:max_size 10M || error_exit "Failed to set max log size"
-    
-    log "INFO" "Log rotation configured: 3-day retention, daily rotation, compression enabled."
+    pm2 unset pm2-logrotate:max_days >/dev/null 2>&1 || true   # remove the old no-op setting
+
+    # Delete rotated logs older than LOG_RETENTION_DAYS (default 30) daily at 00:15,
+    # after pm2-logrotate's midnight rotation. Rewrites any previous DropShot entry
+    # so re-running the setup with a different retention updates it in place.
+    local retention_days="${LOG_RETENTION_DAYS:-30}"
+    local log_dir="$HOME/.pm2/logs"
+    local marker="# DropShot: delete rotated pm2 logs older than ${retention_days} days"
+    local cron_line="15 0 * * * find ${log_dir} -name '*__*.log*' -mtime +${retention_days} -delete"
+    local existing
+    existing="$(crontab -l 2>/dev/null | grep -vF '# DropShot: delete rotated pm2 logs' | grep -vF "${log_dir} -name" || true)"
+    printf '%s\n%s\n%s\n' "$existing" "$marker" "$cron_line" | sed '/^$/d' | crontab - \
+        || error_exit "Failed to install log cleanup cron"
+
+    log "INFO" "Log rotation configured: daily or 10M rotation, compression enabled, rotated logs deleted after ${retention_days} days (cron)."
 }
 
 #==============================================================================
