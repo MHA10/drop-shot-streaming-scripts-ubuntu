@@ -99,6 +99,8 @@ HIGHLIGHT_TRIGGER_FILE=/tmp/hl-trigger          # `touch` this to simulate a but
 HIGHLIGHT_BUFFER_DIR=/home/ds/hl-buffer         # absolute — see note below
 HIGHLIGHT_OUTPUT_DIR=/home/ds/hl-out            # absolute — where reels land
 # HIGHLIGHT_BALL_TRACKING_ENABLED=true          # enable only for Test C
+# HIGHLIGHT_REEL_CLIENT_LOGO_SCALE=1            # venue logo box, as a fraction of the DropShot mark's
+# HIGHLIGHT_REEL_CLIENT_LOGO_OPACITY=0.85       # venue logo alpha (1 = fully opaque)
 ```
 
 > **Paths.** On `dropshot-staging` the working dir is pinned to `$REPO`, so the defaults (`./highlight-buffer`, `./highlights`) resolve predictably *inside the repo* — fine, but they'll clutter the checkout. Absolute paths (as above) keep test artifacts out of the repo and are unambiguous on any runner. Either works; absolute is recommended.
@@ -192,6 +194,33 @@ pm2 logs $PROC | grep -iE "reframe|highlight"
 Expected:
 - ✅ `Ball reframe complete` then `Highlight captured` with `{ reframed: true }` → the reel is a vertical (4:5 by default, `HIGHLIGHT_REEL_ASPECT`) crop that follows the players.
 - ✅ If CV fails for any reason (`Ball reframe failed; using full frame`, `Ball reframer script missing ...`), you still get a full-frame reel with `reframed: false`. **A failed reframe must never lose the clip** — verify a file still lands.
+- ✅ `Reframed clip audio restored` — OpenCV writes video only, so the reframe step copies the original clip's audio back on. Without this line the reel is silent even though the buffer recorded sound.
+
+---
+
+## 8b. Check the reel has sound and the right branding
+
+```bash
+REEL=$(ls -t $HIGHLIGHT_OUTPUT_DIR/reel-*.mp4 | head -1)
+ffprobe -v error -show_entries stream=codec_type,codec_name -of csv=p=0 "$REEL"
+ffmpeg -i "$REEL" -af volumedetect -f null /dev/null 2>&1 | grep volume
+```
+
+Expected:
+- ✅ Two streams, one `video,h264` and one `audio,aac`. Only one line means the reel is silent — work backwards: does the buffer segment have audio (`ffprobe` a `.ts` in `HIGHLIGHT_BUFFER_DIR`)? Audio is only recorded when the camera actually carries it, so check `hasAudio: true` in the stream-start log first.
+- ✅ `mean_volume` well above `-91 dB`. A reel can carry a valid AAC track of pure silence — this is the check that tells the difference.
+- ✅ Visually: **DropShot bottom-right (unchanged), the venue's logo bottom-left**, slightly faded. The top-right corner is empty.
+
+  **The venue's logo gets a box, not a size.** Whatever artwork a venue sends is scaled to fit inside an invisible box that is no longer and no taller than the DropShot mark actually renders, with its aspect ratio preserved — so a long wordmark, a square badge and a tall crest all sit correctly without anyone editing code. Onboarding a new venue is dropping in a PNG.
+
+  Both marks share one baseline and one height cap, which is what makes the footer read as a pair rather than two unrelated stamps.
+
+  | Knob | Default | What it does |
+  |---|---|---|
+  | `HIGHLIGHT_REEL_CLIENT_LOGO_SCALE` | `1` | The venue's box as a fraction of the DropShot mark's. `1` = same box. Lower it only for artwork that wants to sit smaller than its box allows. |
+  | `HIGHLIGHT_REEL_CLIENT_LOGO_OPACITY` | `0.85` | Venue logo alpha. Raise toward `1` for artwork that reads faintly against a dark court. |
+
+  Both take effect on the next render — no rebuild, no republish.
 
 ---
 
@@ -203,6 +232,7 @@ Expected:
 | **Stall-detector false-fire** | `pm2 logs $PROC \| grep -iE "stall\|SIGKILL\|restart"` | The 2nd (buffer) output makes the stall detector think the stream froze and it kills/restarts ffmpeg in a loop | Known watch-item. A high-water-mark fix is ready — apply it and re-publish if this trips. |
 | **CPU headroom** | `pm2 monit` / `top` | CPU pinned ~100%, especially during a reframe | Keep ball tracking OFF; the CV pass is the heaviest step. |
 | **Disk bounded** | `du -sh /home/ds/hl-buffer` over time | Grows without bound | Retention isn't pruning — check `HIGHLIGHT_BUFFER_RETENTION_SEC` and dir permissions. |
+| **Buffer size with audio** | `du -sh /home/ds/hl-buffer` | Noticeably larger than before | Expected: segments now carry a 96k AAC track when the camera has audio. It is small next to the 800k video, but it is not nothing. |
 
 ---
 
@@ -225,6 +255,8 @@ Expected:
 | Trigger file created but nothing happens | App not watching / not restarted after adding the knob | Confirm `Highlight manual trigger file watch enabled` is in the logs; restart. |
 | `Highlight capture aborted: no active buffer for court` | Buffer empty at trigger time | Ensure `HIGHLIGHT_FORCE_PRESENT=true`; let the stream run ≥30s before triggering. |
 | `Highlight capture failed: extraction produced no clip` | Requested window not on disk (buffer too short / retention < window) | Wait for the buffer to fill; keep `HIGHLIGHT_BUFFER_RETENTION_SEC` ≥ the full window. |
+| Reel has no audio track at all | Camera has no audio (`hasAudio: false` at stream start), or the buffer segments predate this feature | Nothing to fix if the camera is silent. Otherwise restart the stream so fresh segments are written with audio. |
+| `Reframed clip kept without audio: mux failed` | The post-reframe remux failed | The reel is still produced, just silent. Check ffmpeg is on PATH and the reframed file isn't truncated. |
 | `Highlight render skipped: no logo files present` | Brand logo assets missing | Non-fatal — you still get an un-branded reel. Add logos if branding is required. |
 | `Ball reframer script missing; using full frame` | `dist/scripts/reframe_ball.py` not shipped | Confirm the published version was built with the updated `build` step; re-publish. |
 | `serialport module unavailable ...` | Native module not installed | Fine on staging (presence forced). Only matters once real ESP32 hardware is used. |
