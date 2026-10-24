@@ -265,12 +265,38 @@ fi
 read -p "Enter installation path [/opt/streamer-node]: " INSTALL_PATH
 INSTALL_PATH=${INSTALL_PATH:-/opt/streamer-node}
 
-# Install Node.js if not present
-if ! command -v node &> /dev/null; then
-    echo "Installing Node.js..."
-    curl -fsSL https://deb.nodesource.com/setup_18.x | sudo -E bash -
+# Install Node.js 22+ if missing or too old.
+#
+# Node 22 is a requirement, not a preference: @supabase/supabase-js needs a global
+# WebSocket, which does not exist before Node 21. Without it every realtime
+# subscription times out after 10s and the scorecard overlay is never redrawn.
+# Nothing crashes - the stream runs on with a blank scoreboard - so the only
+# symptom is a client complaint. Cost Padel Central a 5-hour stream on 23 Oct 2026.
+NODE_MAJOR_REQUIRED=22
+need_node=1
+if command -v node &> /dev/null; then
+    current_major=$(node -v | sed 's/^v//; s/\..*//')
+    if [ "${current_major:-0}" -ge "$NODE_MAJOR_REQUIRED" ]; then
+        need_node=0
+    else
+        echo "Node $(node -v) is older than ${NODE_MAJOR_REQUIRED}; upgrading."
+    fi
+fi
+if [ "$need_node" -eq 1 ]; then
+    echo "Installing Node.js ${NODE_MAJOR_REQUIRED}..."
+    curl -fsSL "https://deb.nodesource.com/setup_${NODE_MAJOR_REQUIRED}.x" | sudo -E bash -
     sudo apt-get install -y nodejs
 fi
+
+# Assert the property we actually depend on, not just the version number, and fail
+# loudly here rather than silently streaming with a dead scoreboard.
+node -e 'if (typeof WebSocket !== "function") process.exit(1)' || {
+    echo "Error: Node $(node -v) has no global WebSocket. Supabase realtime will"
+    echo "       never subscribe and the scoreboard overlay will stay blank."
+    echo "       Install Node ${NODE_MAJOR_REQUIRED}+ and re-run."
+    exit 1
+}
+echo "Node.js $(node -v) (global WebSocket present)"
 
 # Install FFmpeg if not present
 if ! command -v ffmpeg &> /dev/null; then
@@ -607,7 +633,7 @@ ls -la /usr/local/bin/streamer-node-env-setup.sh
 **Solution:**
 ```bash
 # Install Node.js
-curl -fsSL https://deb.nodesource.com/setup_18.x | sudo -E bash -
+curl -fsSL https://deb.nodesource.com/setup_22.x | sudo -E bash -
 sudo apt-get install -y nodejs
 
 # Verify installation

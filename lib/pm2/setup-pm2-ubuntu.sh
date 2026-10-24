@@ -152,6 +152,18 @@ update_system() {
     log "INFO" "System packages updated successfully."
 }
 
+# Node 22+ is a requirement, not a preference: @supabase/supabase-js needs a global
+# WebSocket, which does not exist before Node 21. Without it every realtime
+# subscription times out after 10s and the scorecard overlay is never redrawn.
+# Nothing crashes - the stream runs on showing a blank scoreboard - so the only
+# symptom is a client complaint. Asserting the capability is stricter than reading
+# the version number, and it also catches a box where an older node is first on PATH.
+assert_node_websocket() {
+    node -e 'if (typeof WebSocket !== "function") process.exit(1)' 2>/dev/null \
+        || error_exit "Node $(node --version) has no global WebSocket; Supabase realtime will never subscribe and the scoreboard overlay will stay blank. Need Node 22+."
+    log "INFO" "Global WebSocket present in $(node --version)."
+}
+
 install_nodejs() {
     local node_version="$1"
     
@@ -162,6 +174,7 @@ install_nodejs() {
         # Check if version is acceptable
         if [[ "${current_version%%.*}" -ge "$node_version" ]]; then
             log "INFO" "Node.js version is sufficient."
+            assert_node_websocket
             return 0
         else
             log "WARN" "Node.js version is too old. Installing newer version..."
@@ -181,6 +194,7 @@ install_nodejs() {
     local installed_version=$(node --version)
     log "INFO" "Node.js installed successfully: $installed_version"
     log "INFO" "npm version: $(npm --version)"
+    assert_node_websocket
 }
 
 install_pm2() {

@@ -306,7 +306,7 @@ sudo -v
 #### 2. Node.js Installation Fails
 ```bash
 # Manual Node.js installation
-curl -fsSL https://deb.nodesource.com/setup_18.x | sudo -E bash -
+curl -fsSL https://deb.nodesource.com/setup_22.x | sudo -E bash -
 sudo apt-get install -y nodejs
 
 # Verify installation
