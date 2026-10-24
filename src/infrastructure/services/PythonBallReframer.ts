@@ -132,6 +132,13 @@ export class PythonBallReframer implements BallReframer {
         fs.unlink(out, () => {}); // don't leave the bad file to be picked up
         return null;
       }
+      // OpenCV's VideoWriter has no concept of audio, so `out` is video-only
+      // no matter what the source carried. Copy the original clip's audio back
+      // on, or the reframe silently undoes the audio work done upstream — this
+      // is the one stage where enabling ball tracking would cost you the sound.
+      // Fail-soft: a failed mux keeps the silent reframe, which is still a
+      // usable reel.
+      await this.muxAudioFrom(clipPath, out, courtId);
       this.logger.info("Ball reframe complete", { courtId, out });
       return out;
     } catch (error) {
@@ -154,6 +161,92 @@ export class PythonBallReframer implements BallReframer {
     ];
     if (roi) args.push("--roi", roi);
     return args;
+  }
+
+  /**
+   * Copy the audio track from `source` onto the video in `target`, in place.
+   *
+   * Both streams are copied, not re-encoded, so this is a remux costing ~no
+   * CPU. Writes to a temp file and renames over `target` only on success, so
+   * a failure here can never corrupt the reframed clip the caller is about to
+   * return. Silently does nothing when `source` has no audio.
+   */
+  private async muxAudioFrom(
+    source: string,
+    target: string,
+    courtId: string
+  ): Promise<void> {
+    try {
+      if (!(await this.hasAudioStream(source))) return;
+      const tmp = `${target}.audio.mp4`;
+      const lp = withLowPriority("ffmpeg", [
+        "-y",
+        "-i", target,   // reframed video (no audio)
+        "-i", source,   // original clip (audio, possibly different length)
+        "-map", "0:v:0",
+        "-map", "1:a:0",
+        "-c", "copy",
+        // The reframe can land a frame or two short of the source; without
+        // -shortest the muxer pads to the longer audio and the reel ends on a
+        // frozen frame.
+        "-shortest",
+        "-movflags", "+faststart",
+        tmp,
+      ]);
+      const ok = await this.runFFmpeg(lp.command, lp.args);
+      if (!ok || !fs.existsSync(tmp)) {
+        fs.unlink(tmp, () => {});
+        this.logger.warn("Reframed clip kept without audio: mux failed", {
+          courtId,
+          target,
+        });
+        return;
+      }
+      fs.renameSync(tmp, target);
+      this.logger.info("Reframed clip audio restored", { courtId, target });
+    } catch (error) {
+      this.logger.warn("Reframed clip kept without audio: mux error", {
+        courtId,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+
+  // True when ffprobe finds at least one audio stream. False on any failure.
+  private hasAudioStream(file: string): Promise<boolean> {
+    return new Promise((resolve) => {
+      const proc = spawn("ffprobe", [
+        "-v", "error",
+        "-select_streams", "a",
+        "-show_entries", "stream=index",
+        "-of", "csv=p=0",
+        file,
+      ]);
+      let out = "";
+      proc.stdout?.on("data", (d) => (out += d.toString()));
+      proc.on("exit", (code) => resolve(code === 0 && out.trim().length > 0));
+      proc.on("error", () => resolve(false));
+    });
+  }
+
+  // Runs ffmpeg to completion; resolves true on exit 0. Never throws, and is
+  // bounded by the same timeout budget as the reframe itself.
+  private runFFmpeg(command: string, args: string[]): Promise<boolean> {
+    return new Promise((resolve) => {
+      const proc = spawn(command, args, { stdio: "ignore" });
+      const timeout = setTimeout(() => {
+        proc.kill("SIGKILL");
+        resolve(false);
+      }, this.timeoutMs);
+      proc.on("exit", (code) => {
+        clearTimeout(timeout);
+        resolve(code === 0);
+      });
+      proc.on("error", () => {
+        clearTimeout(timeout);
+        resolve(false);
+      });
+    });
   }
 
   /** "16:9" -> 1.777…; null when unparseable (caller then just runs the pass). */

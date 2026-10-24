@@ -202,7 +202,9 @@ class Application {
         const highlightRenderer = new HighlightRendererService(
           path.resolve("./public/ds.png"),
           path.resolve(config.get().images.clientPath),
-          this.logger
+          this.logger,
+          highlightConfig.clientLogoScale,
+          highlightConfig.clientLogoOpacity
         );
         const captureHighlightUseCase = new CaptureHighlightUseCase(
           this.highlightBufferRegistry,

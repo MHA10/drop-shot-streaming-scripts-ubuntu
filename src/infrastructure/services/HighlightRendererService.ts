@@ -10,20 +10,24 @@ import { withLowPriority } from "../utils/lowPriority";
  * one — logo sizes/positions are derived from the actual canvas dimensions.
  *
  * ── IN SIMPLE WORDS ──
- * Stamps the two logos onto the highlight clip and writes the finished reel.
- * Logos are sized relative to the video so they look right whether the clip is
- * wide or vertical.
+ * Stamps the two logos onto the highlight clip, keeps the court audio, and
+ * writes the finished reel. Both marks stack in the bottom-right corner:
+ * DropShot on top, the venue's logo smaller and faded beneath it.
  *
  * ── WHY IT'S BUILT THIS WAY (change at your peril) ──
  * - It probes the clip's real dimensions and sizes logos from them, so the same
  *   code brands a 1920x1080 full-frame clip and a 608x1080 reel correctly.
  * - Only logos that actually exist on disk are overlaid; a missing client logo
  *   yields a clip with just the DropShot mark rather than a hard failure.
+ * - Audio is mapped with "0:a?" and stream-copied: optional because a clip may
+ *   legitimately have none, copied because the extractor already made it AAC.
  * - temp-file + atomic rename; fail-soft (returns null, logged) so a render
  *   problem never loses the underlying clip — the caller keeps the source.
  *
  * ── DO NOT ──
  * - Do NOT assume both logos exist; check each.
+ * - Do NOT make the audio map mandatory ("0:a") — it turns a silent clip from
+ *   a reel with no sound into no reel at all.
  * - Do NOT assume success — callers must handle a null return (fall back to the
  *   un-branded source clip).
  */
@@ -35,7 +39,12 @@ export class HighlightRendererService {
   constructor(
     private readonly dsLogoPath: string,
     private readonly clientLogoPath: string,
-    private readonly logger: Logger
+    private readonly logger: Logger,
+    // Client mark size as a fraction of the DropShot mark, and its opacity.
+    // Defaults keep it clearly secondary; both are env-tunable per venue in
+    // case a client's artwork reads too faintly at these values.
+    private readonly clientLogoScale: number = 0.55,
+    private readonly clientLogoOpacity: number = 0.65
   ) {}
 
   /**
@@ -58,22 +67,8 @@ export class HighlightRendererService {
       }
       const { width, height } = dims;
 
-      // Logos present on disk (top-right = client, bottom-right = DropShot),
-      // matching the live-stream corners. Skip any that are missing.
-      const logos: Array<{ file: string; pos: string }> = [];
-      if (fs.existsSync(this.dsLogoPath)) {
-        logos.push({
-          file: this.dsLogoPath,
-          pos: `main_w-overlay_w-${Math.round(width * 0.02)}:main_h-overlay_h-${Math.round(height * 0.02)}`,
-        });
-      }
-      if (fs.existsSync(this.clientLogoPath)) {
-        logos.push({
-          file: this.clientLogoPath,
-          pos: `main_w-overlay_w-${Math.round(width * 0.02)}:${Math.round(height * 0.02)}`,
-        });
-      }
-      if (logos.length === 0) {
+      const args = this.buildRenderArgs(sourceClip, width, height);
+      if (!args) {
         this.logger.warn("Highlight render skipped: no logo files present", {
           courtId,
           dsLogoPath: this.dsLogoPath,
@@ -81,44 +76,6 @@ export class HighlightRendererService {
         });
         return null;
       }
-
-      // Logo bounding box relative to canvas so it reads well at any aspect.
-      // A portrait (reel) canvas is narrow, so the 16:9 fraction renders the
-      // logos too small — give portrait a larger share of the width. Landscape
-      // (the full-frame reel) keeps the original sizing, so that output is
-      // unchanged.
-      const portrait = height > width;
-      const boxW = Math.round(width * (portrait ? 0.4 : 0.26));
-      const boxH = Math.round(height * (portrait ? 0.18 : 0.13));
-
-      const args: string[] = ["-y", "-i", sourceClip];
-      logos.forEach((l) => args.push("-i", l.file));
-
-      const steps: string[] = [];
-      let cur = "0:v";
-      logos.forEach((l, i) => {
-        const input = i + 1; // logo inputs follow the source at index 0
-        steps.push(
-          `[${input}:v] scale=${boxW}:${boxH}:force_original_aspect_ratio=decrease [logo${i}];`
-        );
-        const next = i === logos.length - 1 ? "vout" : `v${i}`;
-        steps.push(`[${cur}][logo${i}] overlay=${l.pos} [${next}];`);
-        cur = next;
-      });
-      // Drop the trailing ';' on the final step.
-      const filter = steps.join(" ").replace(/;\s*$/, "");
-
-      args.push(
-        "-filter_complex", filter,
-        "-map", "[vout]",
-        "-c:v", "libx264",
-        "-preset", "veryfast",
-        // Web/social-safe output: broadly-compatible pixel format and a moved
-        // moov atom so the reel starts playing before it's fully downloaded.
-        "-pix_fmt", "yuv420p",
-        "-movflags", "+faststart",
-        "-an"
-      );
 
       // Low CPU priority so logo compositing can't starve the live ffmpeg.
       const lp = withLowPriority("ffmpeg", args);
@@ -128,7 +85,6 @@ export class HighlightRendererService {
         outPath,
         width,
         height,
-        logos: logos.length,
       });
       return outPath;
     } catch (error) {
@@ -138,6 +94,121 @@ export class HighlightRendererService {
       });
       return null;
     }
+  }
+
+  /**
+   * The full ffmpeg argument list for branding a clip of `width`x`height`, or
+   * null when neither logo file is on disk.
+   *
+   * Pure and public so the overlay geometry can be asserted in tests without
+   * running ffmpeg — the sizes and corners here are the reel's whole visual
+   * identity, and a silent regression in them is invisible until a client
+   * complains about the finished video.
+   */
+  public buildRenderArgs(
+    sourceClip: string,
+    width: number,
+    height: number
+  ): string[] | null {
+    // Logo bounding box relative to canvas so it reads well at any aspect.
+    // A portrait (reel) canvas is narrow, so the 16:9 fraction renders the
+    // logos too small — give portrait a larger share of the width. Landscape
+    // (the full-frame reel) keeps the original sizing, so that output is
+    // unchanged.
+    const portrait = height > width;
+    const dsBoxW = Math.round(width * (portrait ? 0.4 : 0.26));
+    const dsBoxH = Math.round(height * (portrait ? 0.18 : 0.13));
+
+    // The client mark is a secondary credit, not a second brand: it sits
+    // directly under the DropShot logo, smaller and semi-transparent, so the
+    // DropShot mark stays dominant. It used to be the same size as DropShot's
+    // and pinned to the TOP-right, where on a 9:16 reel it covered a serious
+    // share of the playing area.
+    const clientBoxW = Math.round(dsBoxW * this.clientLogoScale);
+    const clientBoxH = Math.round(dsBoxH * this.clientLogoScale);
+
+    const marginX = Math.round(width * 0.02);
+    const marginY = Math.round(height * 0.02);
+    const stackGap = Math.round(height * 0.012);
+
+    const hasDs = fs.existsSync(this.dsLogoPath);
+    const hasClient = fs.existsSync(this.clientLogoPath);
+
+    // Both marks stack in the bottom-right corner, client beneath DropShot.
+    // DropShot is lifted by the client's FULL box height even though
+    // `force_original_aspect_ratio=decrease` may render it shorter — that
+    // only ever widens the gap, so the two can never collide. With no client
+    // logo present DropShot keeps the plain bottom-right corner it always had.
+    const dsOffsetY = marginY + (hasClient ? clientBoxH + stackGap : 0);
+
+    const logos: Array<{
+      file: string;
+      boxW: number;
+      boxH: number;
+      pos: string;
+      alpha?: number;
+    }> = [];
+    if (hasDs) {
+      logos.push({
+        file: this.dsLogoPath,
+        boxW: dsBoxW,
+        boxH: dsBoxH,
+        pos: `main_w-overlay_w-${marginX}:main_h-overlay_h-${dsOffsetY}`,
+      });
+    }
+    if (hasClient) {
+      logos.push({
+        file: this.clientLogoPath,
+        boxW: clientBoxW,
+        boxH: clientBoxH,
+        pos: `main_w-overlay_w-${marginX}:main_h-overlay_h-${marginY}`,
+        alpha: this.clientLogoOpacity,
+      });
+    }
+    if (logos.length === 0) return null;
+
+    const args: string[] = ["-y", "-i", sourceClip];
+    logos.forEach((l) => args.push("-i", l.file));
+
+    const steps: string[] = [];
+    let cur = "0:v";
+    logos.forEach((l, i) => {
+      const input = i + 1; // logo inputs follow the source at index 0
+      // format=rgba before colorchannelmixer: a logo loaded from a flattened
+      // PNG has no alpha plane, and the mixer can only scale a channel that
+      // exists — without this the aa= term is a silent no-op.
+      const fade =
+        l.alpha !== undefined && l.alpha < 1
+          ? `,format=rgba,colorchannelmixer=aa=${l.alpha}`
+          : "";
+      steps.push(
+        `[${input}:v] scale=${l.boxW}:${l.boxH}:force_original_aspect_ratio=decrease${fade} [logo${i}];`
+      );
+      const next = i === logos.length - 1 ? "vout" : `v${i}`;
+      steps.push(`[${cur}][logo${i}] overlay=${l.pos} [${next}];`);
+      cur = next;
+    });
+    // Drop the trailing ';' on the final step.
+    const filter = steps.join(" ").replace(/;\s*$/, "");
+
+    args.push(
+      "-filter_complex", filter,
+      "-map", "[vout]",
+      // Carry the court audio into the finished reel. Optional map: a
+      // silent-camera box, or a clip cut from a pre-audio buffer, has no
+      // audio stream and must still render rather than fail. Stream-copied
+      // because it is already AAC from the extractor — no second encode.
+      "-map", "0:a?",
+      "-c:v", "libx264",
+      "-preset", "veryfast",
+      "-c:a", "copy",
+      // Web/social-safe output: broadly-compatible pixel format and a moved
+      // moov atom so the reel starts playing before it's fully downloaded.
+      "-pix_fmt", "yuv420p",
+      "-movflags", "+faststart"
+    );
+
+    return args;
   }
 
   private probeDimensions(

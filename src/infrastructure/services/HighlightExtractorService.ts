@@ -123,9 +123,17 @@ export class HighlightExtractorService {
         // output-side seek/duration → frame-accurate cut of the window
         "-ss", String(offsetSec),
         "-t", String(durationSec),
+        // Carry the buffer's audio through the cut. The "?" makes the audio
+        // map OPTIONAL, which is load-bearing in two cases: a camera with no
+        // audio (the buffer is written -an), and segments recorded before
+        // buffer audio existed. Without it ffmpeg fails outright on a
+        // video-only buffer and the highlight is lost.
+        "-map", "0:v:0",
+        "-map", "0:a?",
         "-c:v", "libx264",
         "-preset", "veryfast",
-        "-an",
+        "-c:a", "aac",
+        "-b:a", "128k",
       ]);
       await spawnToFile(command, args, dest, this.extractTimeoutMs);
 

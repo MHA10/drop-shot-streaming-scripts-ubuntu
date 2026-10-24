@@ -518,9 +518,9 @@ export class NodeFFmpegService implements FFmpegService {
     args.push("-f", "flv", rtmpUrl);
 
     // Second output: the highlight buffer branch. Deliberately cheap encode
-    // (low bitrate, ultrafast, no audio) since this is an intermediate
-    // artifact that gets reframed/re-encoded again during highlight
-    // processing — quality parity with the broadcast output isn't needed.
+    // (low bitrate, ultrafast) since this is an intermediate artifact that
+    // gets reframed/re-encoded again during highlight processing — quality
+    // parity with the broadcast output isn't needed.
     // "-c copy" isn't an option here: [hlbuf] is decoded/filtered video, not
     // an already-encoded bitstream, so it must be encoded to be written out.
     if (highlightBufferEnabled) {
@@ -532,12 +532,30 @@ export class NodeFFmpegService implements FFmpegService {
       // it. A per-run token in the name keeps runs from colliding while %s
       // still carries the segment's start time for the buffer manifest.
       const runToken = Date.now().toString(36);
+      args.push("-map", "[hlbuf]");
+      // Court audio into the buffer, so the finished reel has crowd noise and
+      // ball strike instead of silence. ONLY when the camera actually carries
+      // audio: with no audio the sole source is the anullsrc input added above,
+      // and recording silence just costs bitrate on every segment forever.
+      //
+      // This is the FIRST of three places audio used to be dropped (then the
+      // extractor, then the renderer). Re-enabling it downstream alone does
+      // nothing — there has to be audio in the buffer to carry.
+      if (hasAudio) {
+        args.push(
+          "-map", "0:a",
+          "-c:a", "aac",
+          "-b:a", "96k",
+          "-ar", "44100",
+          "-ac", "2"
+        );
+      } else {
+        args.push("-an");
+      }
       args.push(
-        "-map", "[hlbuf]",
         "-c:v", "libx264",
         "-preset", "ultrafast",
         "-b:v", "800k",
-        "-an",
         // Force a keyframe exactly every segmentSec. The segment muxer can only
         // cut at keyframes; without this, libx264's default GOP (~250 frames,
         // ~8-10s) governs the real segment length and -segment_time is
