@@ -99,8 +99,8 @@ HIGHLIGHT_TRIGGER_FILE=/tmp/hl-trigger          # `touch` this to simulate a but
 HIGHLIGHT_BUFFER_DIR=/home/ds/hl-buffer         # absolute — see note below
 HIGHLIGHT_OUTPUT_DIR=/home/ds/hl-out            # absolute — where reels land
 # HIGHLIGHT_BALL_TRACKING_ENABLED=true          # enable only for Test C
-# HIGHLIGHT_REEL_CLIENT_LOGO_SCALE=0.55         # venue logo size, as a fraction of the DropShot mark
-# HIGHLIGHT_REEL_CLIENT_LOGO_OPACITY=0.65       # venue logo alpha (1 = fully opaque)
+# HIGHLIGHT_REEL_CLIENT_LOGO_SCALE=1            # venue logo box, as a fraction of the DropShot mark's
+# HIGHLIGHT_REEL_CLIENT_LOGO_OPACITY=0.85       # venue logo alpha (1 = fully opaque)
 ```
 
 > **Paths.** On `dropshot-staging` the working dir is pinned to `$REPO`, so the defaults (`./highlight-buffer`, `./highlights`) resolve predictably *inside the repo* — fine, but they'll clutter the checkout. Absolute paths (as above) keep test artifacts out of the repo and are unambiguous on any runner. Either works; absolute is recommended.
@@ -209,7 +209,18 @@ ffmpeg -i "$REEL" -af volumedetect -f null /dev/null 2>&1 | grep volume
 Expected:
 - ✅ Two streams, one `video,h264` and one `audio,aac`. Only one line means the reel is silent — work backwards: does the buffer segment have audio (`ffprobe` a `.ts` in `HIGHLIGHT_BUFFER_DIR`)? Audio is only recorded when the camera actually carries it, so check `hasAudio: true` in the stream-start log first.
 - ✅ `mean_volume` well above `-91 dB`. A reel can carry a valid AAC track of pure silence — this is the check that tells the difference.
-- ✅ Visually: **DropShot bottom-right (unchanged), the venue's logo bottom-left**, smaller and semi-transparent. The top-right corner is empty. Tune with `HIGHLIGHT_REEL_CLIENT_LOGO_SCALE` (default `0.55` of the DropShot mark) and `HIGHLIGHT_REEL_CLIENT_LOGO_OPACITY` (default `0.65`).
+- ✅ Visually: **DropShot bottom-right (unchanged), the venue's logo bottom-left**, slightly faded. The top-right corner is empty.
+
+  **The venue's logo gets a box, not a size.** Whatever artwork a venue sends is scaled to fit inside an invisible box that is no longer and no taller than the DropShot mark actually renders, with its aspect ratio preserved — so a long wordmark, a square badge and a tall crest all sit correctly without anyone editing code. Onboarding a new venue is dropping in a PNG.
+
+  Both marks share one baseline and one height cap, which is what makes the footer read as a pair rather than two unrelated stamps.
+
+  | Knob | Default | What it does |
+  |---|---|---|
+  | `HIGHLIGHT_REEL_CLIENT_LOGO_SCALE` | `1` | The venue's box as a fraction of the DropShot mark's. `1` = same box. Lower it only for artwork that wants to sit smaller than its box allows. |
+  | `HIGHLIGHT_REEL_CLIENT_LOGO_OPACITY` | `0.85` | Venue logo alpha. Raise toward `1` for artwork that reads faintly against a dark court. |
+
+  Both take effect on the next render — no rebuild, no republish.
 
 ---
 

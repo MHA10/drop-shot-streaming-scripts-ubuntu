@@ -289,8 +289,11 @@ export class Config {
         // Deliberately secondary to the DropShot mark: a bit over half its
         // size, and translucent. Raise these only if a venue's artwork is too
         // faint to read at these values.
-        clientLogoScale: this.parseRatioEnv("HIGHLIGHT_REEL_CLIENT_LOGO_SCALE", 0.55),
-        clientLogoOpacity: this.parseRatioEnv("HIGHLIGHT_REEL_CLIENT_LOGO_OPACITY", 0.65),
+        // 1 = the client's logo gets the same invisible box as the DropShot
+        // mark: as long and as tall, never more. Lower it only for a venue
+        // whose artwork wants to sit smaller than its box allows.
+        clientLogoScale: this.parseRatioEnv("HIGHLIGHT_REEL_CLIENT_LOGO_SCALE", 1),
+        clientLogoOpacity: this.parseRatioEnv("HIGHLIGHT_REEL_CLIENT_LOGO_OPACITY", 0.85),
         uploadEnabled:
           this.getEnvVar("HIGHLIGHT_UPLOAD_ENABLED", "false") === "true",
         // Opt OUT (set "false") to keep local copies after upload.
