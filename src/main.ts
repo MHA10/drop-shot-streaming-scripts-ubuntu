@@ -237,7 +237,6 @@ class Application {
               highlightUploader,
               this.logger,
               highlightConfig.uploadRetrySec,
-              highlightConfig.uploadRetryMaxAgeHours,
               highlightConfig.deleteAfterUpload
             )
           : null;
@@ -288,12 +287,15 @@ class Application {
                 title: `DropShot highlight — ${court.courtId}`,
                 preferShort: true,
               };
+              // Queue BEFORE attempting, not after failing. If the process
+              // dies mid-transfer there is otherwise a finished reel on disk
+              // with nothing recording that it still owes an upload.
+              pendingReelUploads?.enqueue(uploadRequest);
               const videoId = await highlightUploader.upload(uploadRequest);
-              // No videoId means the reel did not arrive — most often the
-              // venue's uplink rather than anything wrong with the reel. Park
-              // it so it goes up by itself when the connection returns,
-              // instead of sitting on disk until someone notices.
-              if (!videoId) pendingReelUploads?.park(uploadRequest);
+              // Only a real videoId clears the queue. A failure leaves the
+              // entry in place and the retry loop takes it from here, for as
+              // long as it takes.
+              if (videoId) pendingReelUploads?.resolve(uploadRequest.filePath);
               // Reclaim the disk once YouTube has CONFIRMED the video. Gated on
               // a real videoId, never on "we tried": a failed upload keeps the
               // file so the reel still exists somewhere. Unlink failure is

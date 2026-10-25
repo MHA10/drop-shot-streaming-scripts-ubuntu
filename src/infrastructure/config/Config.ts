@@ -123,14 +123,10 @@ export interface AppConfig {
     // or disabled upload always keeps the file, so a reel is never lost with
     // nowhere to recover it from.
     deleteAfterUpload: boolean;
-    // A reel whose upload failed is parked and retried on this interval, so a
-    // venue's internet blip costs nothing once the link is back. Retries back
-    // off per reel; this is the floor, not the fixed period.
+    // A reel whose upload failed is retried on this fixed interval until it
+    // lands. There is deliberately no attempt limit and no age cap: a reel
+    // must never be left on a box with nothing coming for it.
     uploadRetrySec: number;
-    // How long to keep retrying one reel before giving up. On expiry the mp4
-    // is KEPT and the note renamed — stopping the retries never destroys a
-    // reel, it only stops the box talking to a backend that isn't answering.
-    uploadRetryMaxAgeHours: number;
   };
   esp32: {
     // Forward `type:"score"` packets read off the court ESP32 to the backend,
@@ -307,16 +303,12 @@ export class Config {
         // Opt OUT (set "false") to keep local copies after upload.
         deleteAfterUpload:
           this.getEnvVar("HIGHLIGHT_DELETE_AFTER_UPLOAD", "true") !== "false",
-        // 120s floor, doubling per failure. Long enough that a box which is
-        // genuinely offline isn't re-POSTing a 6 MB file every few seconds,
-        // short enough that a brief blip costs one retry.
+        // Every 10 minutes, indefinitely. Slow enough that an offline box is
+        // not re-POSTing a 6 MB file at a venue's uplink, fast enough that a
+        // recovered connection clears the backlog without anyone noticing.
         uploadRetrySec: Math.max(
           30,
-          this.parseIntEnv("HIGHLIGHT_UPLOAD_RETRY_SEC", 120)
-        ),
-        uploadRetryMaxAgeHours: Math.max(
-          1,
-          this.parseIntEnv("HIGHLIGHT_UPLOAD_RETRY_MAX_AGE_HOURS", 24)
+          this.parseIntEnv("HIGHLIGHT_UPLOAD_RETRY_SEC", 600)
         ),
       },
       esp32: {

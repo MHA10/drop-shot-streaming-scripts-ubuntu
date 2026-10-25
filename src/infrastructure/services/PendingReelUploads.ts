@@ -4,62 +4,71 @@ import { Logger } from "../../application/interfaces/Logger";
 import { ReelUploadRequest } from "./YouTubeUploadService";
 
 /**
- * Retries reel uploads that failed, until the venue's internet comes back.
+ * Keeps retrying a reel's upload until it lands. There is no giving up.
  *
  * ── IN SIMPLE WORDS ──
- * When a reel can't be uploaded the file stays on disk, but nothing ever picks
- * it up again — so a 30-second internet blip costs a highlight permanently and
- * leaves a 6 MB file behind forever. This parks a small note beside the reel
- * and re-tries it on a timer. The moment the connection is back the reel goes
- * up on its own, and the note and the file are cleaned up.
+ * A reel is queued the moment it exists, before the first upload is even
+ * attempted, and the queue entry is only removed once YouTube confirms the
+ * video. If the upload fails — a venue's internet blip, a backend hiccup, the
+ * box being rebooted mid-transfer — the reel is retried every few minutes,
+ * forever, until it goes up. No reel is ever left sitting on a box with
+ * nothing coming for it.
  *
- * Observed at Hello Padel, 25 Oct 2026: heartbeat, SSE and reel upload all
- * failed together in one ~30s window (the box's uplink, not the backend — the
- * other venue saw nothing). The pipeline had done everything right; only the
- * network leg failed, and the reel was stranded.
+ * Observed at Hello Padel, 25 Oct 2026: heartbeat, SSE and the reel upload all
+ * failed together in one ~30s window (that box's uplink — the other venue
+ * logged nothing). The pipeline had reframed, restored audio and rendered
+ * correctly; only the network leg failed, and the reel was stranded.
  *
  * ── BUSINESS RULES ──
- * - A pending upload SURVIVES A RESTART. The note is a file beside the reel,
- *   not memory, because the usual way a venue's connection recovers is
- *   overnight — long after the process that failed has been restarted.
- * - Retries back off. A box that is offline for an hour must not spend that
- *   hour re-POSTing a 6 MB file; each failure doubles the wait, capped.
- * - One at a time. A backlog of reels must never saturate the venue's uplink
- *   while a live stream is pushing to YouTube over the same connection.
- * - Giving up keeps the reel. After maxAgeHours the note is renamed, not
- *   deleted, and the mp4 is left alone — an operator can still find and upload
- *   it by hand. Nothing here ever destroys footage.
+ * - A reel is QUEUED BEFORE the first upload attempt, not after a failure.
+ *   Queueing on failure leaves a window — process killed mid-transfer — where
+ *   a finished reel exists on disk with nothing recording that it still owes
+ *   an upload. Enqueue first and that window closes.
+ * - A pending upload SURVIVES A RESTART. The queue entry is a file beside the
+ *   reel, not memory, because the usual way a venue's connection recovers is
+ *   overnight, long after the process that failed has been restarted.
+ * - RETRIES NEVER STOP. There is deliberately no attempt limit and no age cap:
+ *   a box that has been offline for a day must still upload its reels when the
+ *   line comes back, and an operator must never have to hunt for footage that
+ *   quietly gave up.
+ * - One at a time, on a fixed interval. A backlog must not saturate the venue's
+ *   uplink while a live stream is pushing to YouTube over the same connection.
  *
  * ── WHY IT'S BUILT THIS WAY (change at your peril) ──
- * - The note holds the court's STREAM KEY, because the backend needs it to
+ * - The entry holds the court's STREAM KEY, because the backend needs it to
  *   resolve the video's privacy and it cannot be recovered later: by the time
- *   the retry runs, that booking is usually over and the key is gone from
- *   memory. The file is written 0600 for that reason, and removed as soon as
+ *   a retry runs, that booking is usually over and the key is gone from
+ *   memory. The file is written 0600 for that reason and removed as soon as
  *   the upload succeeds. It is never logged — see YouTubeUploadService's
  *   "DO NOT" list, which this inherits.
  * - Success is keyed on a real videoId, never on "we tried", exactly as the
  *   first-attempt path is. Anything else deletes footage that never arrived.
- * - A note whose mp4 has vanished is dropped rather than retried forever; the
- *   reel may have been collected by hand, and there is nothing left to send.
+ * - A FIXED interval, not a doubling backoff. Backoff was the first design and
+ *   it is wrong here: the longer a box is offline, the longer it would then
+ *   wait after recovery, which is precisely backwards for the case this exists
+ *   to serve.
+ * - A reel with no queue entry is reported, not ignored. It cannot be uploaded
+ *   (the stream key is unrecoverable), so the only honest thing is to make it
+ *   visible rather than let it sit silently forever.
  *
  * ── DO NOT ──
- * - Do NOT log the stream key or the note's full contents.
+ * - Do NOT add an attempt limit or an age cap. That is the bug this replaced.
+ * - Do NOT log the stream key or an entry's full contents.
  * - Do NOT run retries in parallel, and do NOT remove the in-flight guard: the
  *   timer can fire again while a slow 6 MB upload is still going, and the
  *   backend would get the same reel twice.
- * - Do NOT delete the mp4 on a failed or abandoned upload. The file is the
- *   only remaining copy.
+ * - Do NOT delete the mp4 on a failed upload. The file is the only copy.
  */
 
-/** What a parked upload needs to be retried later, as stored on disk. */
-interface PendingNote {
+/** What a queued upload needs to be retried later, as stored on disk. */
+interface QueueEntry {
   filePath: string;
   courtId: string;
   streamKey: string;
   title: string;
   description?: string;
   preferShort?: boolean;
-  firstFailedAtMs: number;
+  queuedAtMs: number;
   lastAttemptAtMs: number;
   attempts: number;
 }
@@ -69,8 +78,7 @@ export interface ReelUploader {
   upload(req: ReelUploadRequest): Promise<string | null>;
 }
 
-export const NOTE_SUFFIX = ".upload.json";
-export const ABANDONED_SUFFIX = ".upload.abandoned.json";
+export const QUEUE_SUFFIX = ".upload.json";
 
 export class PendingReelUploads {
   private timer: NodeJS.Timeout | null = null;
@@ -83,45 +91,49 @@ export class PendingReelUploads {
     private readonly uploader: ReelUploader,
     private readonly logger: Logger,
     private readonly retrySec: number,
-    private readonly maxAgeHours: number,
     private readonly deleteAfterUpload: boolean,
     private readonly now: () => number = Date.now
   ) {}
 
   /**
-   * Park a failed upload so it is retried later. Called on the first-attempt
-   * failure path; safe to call for a reel that already has a note (the note is
-   * rewritten, preserving the original failure time so the age cap still runs
-   * from when the trouble started).
+   * Record that this reel owes an upload. Called BEFORE the first attempt, so
+   * a reel is never on disk without something recording that it still has to
+   * go up — including when the process dies mid-transfer.
+   *
+   * Re-queueing an already-queued reel keeps its original queue time, so the
+   * "stranded for" figure in the logs stays honest.
    */
-  public park(req: ReelUploadRequest): void {
-    const notePath = req.filePath + NOTE_SUFFIX;
+  public enqueue(req: ReelUploadRequest): void {
+    const entryPath = req.filePath + QUEUE_SUFFIX;
     try {
-      const existing = this.readNote(notePath);
-      const note: PendingNote = {
+      const existing = this.readEntry(entryPath);
+      const entry: QueueEntry = {
         filePath: req.filePath,
         courtId: req.courtId,
         streamKey: req.streamKey,
         title: req.title,
         description: req.description,
         preferShort: req.preferShort,
-        firstFailedAtMs: existing?.firstFailedAtMs ?? this.now(),
+        queuedAtMs: existing?.queuedAtMs ?? this.now(),
         lastAttemptAtMs: this.now(),
-        attempts: (existing?.attempts ?? 0) + 1,
+        attempts: existing?.attempts ?? 0,
       };
       // 0600: this holds the court's stream key (see the class note).
-      fs.writeFileSync(notePath, JSON.stringify(note), { mode: 0o600 });
-      this.logger.info("Reel upload parked for retry", {
-        courtId: req.courtId,
-        filePath: req.filePath,
-        attempts: note.attempts,
-      });
+      fs.writeFileSync(entryPath, JSON.stringify(entry), { mode: 0o600 });
     } catch (error) {
-      this.logger.warn("Could not park reel upload for retry", {
+      this.logger.warn("Could not queue reel upload for retry", {
         courtId: req.courtId,
         error: error instanceof Error ? error.message : String(error),
       });
     }
+  }
+
+  /**
+   * Drop the queue entry for a reel that uploaded successfully on its first
+   * attempt. The caller handles deleting the mp4 in that path.
+   */
+  public resolve(filePath: string): void {
+    this.remove(filePath + QUEUE_SUFFIX);
   }
 
   /**
@@ -133,7 +145,6 @@ export class PendingReelUploads {
     this.logger.info("Pending reel upload retries enabled", {
       outputDir: this.outputDir,
       retrySec: this.retrySec,
-      maxAgeHours: this.maxAgeHours,
     });
     void this.drain();
     this.timer = setInterval(() => void this.drain(), this.retrySec * 1000);
@@ -149,16 +160,18 @@ export class PendingReelUploads {
   }
 
   /**
-   * One pass: retry every note that is due. Serial by design — see DO NOT.
-   * Public so a test can drive it without timers.
+   * One pass: retry every queued reel that is due, then report any reel with
+   * no queue entry at all. Serial by design — see DO NOT. Public so a test can
+   * drive it without timers.
    */
   public async drain(): Promise<void> {
     if (this.draining) return;
     this.draining = true;
     try {
-      for (const notePath of this.listNotes()) {
-        await this.retryOne(notePath);
+      for (const entryPath of this.listEntries()) {
+        await this.retryOne(entryPath);
       }
+      this.reportOrphans();
     } catch (error) {
       this.logger.warn("Pending reel upload sweep failed", {
         error: error instanceof Error ? error.message : String(error),
@@ -168,89 +181,81 @@ export class PendingReelUploads {
     }
   }
 
-  private async retryOne(notePath: string): Promise<void> {
-    const note = this.readNote(notePath);
-    if (!note) {
+  private async retryOne(entryPath: string): Promise<void> {
+    const entry = this.readEntry(entryPath);
+    if (!entry) {
       // Unreadable or truncated (e.g. killed mid-write). Nothing can be done
-      // with it and leaving it means parsing it forever.
-      this.remove(notePath);
+      // with it, and keeping it means re-parsing it on every sweep forever.
+      // The mp4 itself is untouched and will be reported as an orphan.
+      this.remove(entryPath);
       return;
     }
 
     // The reel itself is the point; without it there is nothing to send.
-    if (!fs.existsSync(note.filePath)) {
-      this.logger.info("Pending reel no longer on disk; dropping retry", {
-        courtId: note.courtId,
-        filePath: note.filePath,
+    if (!fs.existsSync(entry.filePath)) {
+      this.logger.info("Queued reel no longer on disk; dropping it", {
+        courtId: entry.courtId,
+        filePath: entry.filePath,
       });
-      this.remove(notePath);
+      this.remove(entryPath);
       return;
     }
 
-    const ageMs = this.now() - note.firstFailedAtMs;
-    if (ageMs > this.maxAgeHours * 3_600_000) {
-      // Keep the mp4 and keep a record; just stop trying. Renamed rather than
-      // deleted so it is still findable by an operator.
-      try {
-        fs.renameSync(notePath, note.filePath + ABANDONED_SUFFIX);
-      } catch {
-        /* best effort */
-      }
-      this.logger.warn(
-        "Giving up on a reel upload; the file is kept on disk for manual recovery",
-        {
-          courtId: note.courtId,
-          filePath: note.filePath,
-          attempts: note.attempts,
-          ageHours: Math.round(ageMs / 3_600_000),
-        }
-      );
-      return;
-    }
-
-    if (this.now() < this.nextAttemptAtMs(note)) return; // backing off
+    // Fixed interval, forever. See WHY — a doubling backoff would make a long
+    // outage take longest to recover from, which is backwards.
+    if (this.now() < entry.lastAttemptAtMs + this.retrySec * 1000) return;
 
     const videoId = await this.uploader.upload({
-      filePath: note.filePath,
-      courtId: note.courtId,
-      streamKey: note.streamKey,
-      title: note.title,
-      description: note.description,
-      preferShort: note.preferShort,
+      filePath: entry.filePath,
+      courtId: entry.courtId,
+      streamKey: entry.streamKey,
+      title: entry.title,
+      description: entry.description,
+      preferShort: entry.preferShort,
     });
 
     if (!videoId) {
-      // Still down. Record the attempt so the backoff widens.
-      note.attempts += 1;
-      note.lastAttemptAtMs = this.now();
+      entry.attempts += 1;
+      entry.lastAttemptAtMs = this.now();
       try {
-        fs.writeFileSync(notePath, JSON.stringify(note), { mode: 0o600 });
+        fs.writeFileSync(entryPath, JSON.stringify(entry), { mode: 0o600 });
       } catch {
-        /* next sweep will try again regardless */
+        /* next sweep tries again regardless */
+      }
+      // Say so periodically rather than on every attempt: a box that has been
+      // offline overnight should leave a readable log, not 200 identical
+      // warnings. Every 10th attempt is roughly hourly at the default interval.
+      if (entry.attempts % 10 === 0) {
+        this.logger.warn("Reel still waiting to upload", {
+          courtId: entry.courtId,
+          filePath: entry.filePath,
+          attempts: entry.attempts,
+          waitingForSec: Math.round((this.now() - entry.queuedAtMs) / 1000),
+        });
       }
       return;
     }
 
     this.logger.info("Pending reel uploaded after retry", {
-      courtId: note.courtId,
-      filePath: note.filePath,
+      courtId: entry.courtId,
+      filePath: entry.filePath,
       videoId,
-      attempts: note.attempts + 1,
-      strandedForSec: Math.round((this.now() - note.firstFailedAtMs) / 1000),
+      attempts: entry.attempts + 1,
+      waitingForSec: Math.round((this.now() - entry.queuedAtMs) / 1000),
     });
-    this.remove(notePath);
+    this.remove(entryPath);
     if (this.deleteAfterUpload) {
       try {
-        fs.unlinkSync(note.filePath);
+        fs.unlinkSync(entry.filePath);
         this.logger.info("Local reel deleted after upload", {
-          courtId: note.courtId,
-          filePath: note.filePath,
+          courtId: entry.courtId,
+          filePath: entry.filePath,
           videoId,
         });
       } catch (error) {
         this.logger.warn("Could not delete reel after upload", {
-          courtId: note.courtId,
-          filePath: note.filePath,
+          courtId: entry.courtId,
+          filePath: entry.filePath,
           error: error instanceof Error ? error.message : String(error),
         });
       }
@@ -258,33 +263,43 @@ export class PendingReelUploads {
   }
 
   /**
-   * When this note may next be tried: the retry interval doubled per attempt,
-   * capped at 30 minutes. An offline venue must not spend the outage pushing a
-   * 6 MB file over and over.
+   * Reels with no queue entry. These predate the queue, or lost their entry to
+   * a truncated write. They cannot be uploaded automatically — the stream key
+   * is not recoverable once the booking has ended — so the only honest
+   * handling is to name them rather than let them sit unexplained.
    */
-  private nextAttemptAtMs(note: PendingNote): number {
-    const base = this.retrySec * 1000;
-    const backoff = Math.min(base * 2 ** Math.max(0, note.attempts - 1), 1_800_000);
-    return note.lastAttemptAtMs + backoff;
+  private reportOrphans(): void {
+    const orphans: string[] = [];
+    for (const dir of this.courtDirs()) {
+      let files: string[];
+      try {
+        files = fs.readdirSync(dir);
+      } catch {
+        continue;
+      }
+      const queued = new Set(
+        files.filter((f) => f.endsWith(QUEUE_SUFFIX)).map((f) => f.slice(0, -QUEUE_SUFFIX.length))
+      );
+      for (const file of files) {
+        if (file.endsWith(".mp4") && !queued.has(file)) {
+          orphans.push(path.join(dir, file));
+        }
+      }
+    }
+    if (orphans.length === 0) return;
+    this.logger.warn(
+      "Reels on disk with no pending upload; they cannot be uploaded automatically (the court's stream key is gone) and need deleting or uploading by hand",
+      { count: orphans.length, files: orphans.slice(0, 10) }
+    );
   }
 
-  /** Every pending note under the output dir, oldest failure first. */
-  private listNotes(): string[] {
+  /** Every queue entry under the output dir, oldest first by name. */
+  private listEntries(): string[] {
     const found: string[] = [];
-    let courts: fs.Dirent[];
-    try {
-      courts = fs.readdirSync(this.outputDir, { withFileTypes: true });
-    } catch {
-      return found; // output dir not created yet — nothing has been captured
-    }
-    for (const entry of courts) {
-      if (!entry.isDirectory()) continue;
-      const dir = path.join(this.outputDir, entry.name);
+    for (const dir of this.courtDirs()) {
       try {
         for (const file of fs.readdirSync(dir)) {
-          // endsWith, not includes: ABANDONED_SUFFIX also ends in .json and
-          // must never be picked back up.
-          if (file.endsWith(NOTE_SUFFIX)) found.push(path.join(dir, file));
+          if (file.endsWith(QUEUE_SUFFIX)) found.push(path.join(dir, file));
         }
       } catch {
         /* unreadable court dir; skip it */
@@ -293,19 +308,30 @@ export class PendingReelUploads {
     return found.sort();
   }
 
-  private readNote(notePath: string): PendingNote | null {
+  private courtDirs(): string[] {
     try {
-      const parsed = JSON.parse(fs.readFileSync(notePath, "utf8"));
+      return fs
+        .readdirSync(this.outputDir, { withFileTypes: true })
+        .filter((e) => e.isDirectory())
+        .map((e) => path.join(this.outputDir, e.name));
+    } catch {
+      return []; // output dir not created yet — nothing has been captured
+    }
+  }
+
+  private readEntry(entryPath: string): QueueEntry | null {
+    try {
+      const parsed = JSON.parse(fs.readFileSync(entryPath, "utf8"));
       if (!parsed?.filePath || !parsed?.courtId) return null;
-      return parsed as PendingNote;
+      return parsed as QueueEntry;
     } catch {
       return null;
     }
   }
 
-  private remove(notePath: string): void {
+  private remove(entryPath: string): void {
     try {
-      fs.unlinkSync(notePath);
+      fs.unlinkSync(entryPath);
     } catch {
       /* already gone */
     }
