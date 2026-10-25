@@ -106,6 +106,12 @@ export interface AppConfig {
       courtRoiByCourt: Record<string, string>;
     };
     reelAspect: string;
+    // Branding of the venue's logo on the reel. It sits under the DropShot
+    // mark in the bottom-right corner; these control how much smaller and how
+    // much fainter it is. Scale is a fraction of the DropShot logo's box,
+    // opacity is an alpha multiplier. Both clamp to 0-1.
+    clientLogoScale: number;
+    clientLogoOpacity: number;
     // When true (and STREAMING_API_KEY is set), a finished reel is uploaded to
     // YouTube via the backend's resumable upload-session flow. Default OFF: the
     // reel is always written to disk regardless; upload is an additive step
@@ -280,6 +286,14 @@ export class Config {
         // less aggressively for feed posts, "16:9" keeps the full landscape
         // frame (and then skips the reframe entirely — nothing to crop).
         reelAspect: this.getEnvVar("HIGHLIGHT_REEL_ASPECT", "9:16"),
+        // Deliberately secondary to the DropShot mark: a bit over half its
+        // size, and translucent. Raise these only if a venue's artwork is too
+        // faint to read at these values.
+        // 1 = the client's logo gets the same invisible box as the DropShot
+        // mark: as long and as tall, never more. Lower it only for a venue
+        // whose artwork wants to sit smaller than its box allows.
+        clientLogoScale: this.parseRatioEnv("HIGHLIGHT_REEL_CLIENT_LOGO_SCALE", 1),
+        clientLogoOpacity: this.parseRatioEnv("HIGHLIGHT_REEL_CLIENT_LOGO_OPACITY", 0.85),
         uploadEnabled:
           this.getEnvVar("HIGHLIGHT_UPLOAD_ENABLED", "false") === "true",
         // Opt OUT (set "false") to keep local copies after upload.
@@ -297,6 +311,14 @@ export class Config {
   // Parse a positive integer env var, falling back when missing/invalid. Guards
   // against NaN and non-positive values (a negative would otherwise pass through
   // and, e.g., let an ad duration clamp to a zero-length clip).
+  // A 0-1 ratio from the environment. Anything unparseable or out of range
+  // falls back rather than reaching ffmpeg, where a negative scale or an alpha
+  // above 1 is a filtergraph error that would kill the whole render.
+  private parseRatioEnv(key: string, fallback: number): number {
+    const value = parseFloat(this.getEnvVar(key, String(fallback)));
+    return Number.isFinite(value) && value > 0 && value <= 1 ? value : fallback;
+  }
+
   private parseIntEnv(key: string, fallback: number): number {
     const value = parseInt(this.getEnvVar(key, String(fallback)), 10);
     return Number.isFinite(value) && value > 0 ? value : fallback;
