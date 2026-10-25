@@ -23,6 +23,7 @@ import { HighlightRendererService } from "./infrastructure/services/HighlightRen
 import { NullBallReframer } from "./infrastructure/services/NullBallReframer";
 import { PythonBallReframer } from "./infrastructure/services/PythonBallReframer";
 import { YouTubeUploadService } from "./infrastructure/services/YouTubeUploadService";
+import { PendingReelUploads } from "./infrastructure/services/PendingReelUploads";
 import { CaptureHighlightUseCase } from "./application/use-cases/CaptureHighlightUseCase";
 import { redactSecrets } from "./infrastructure/utils/redact";
 
@@ -225,6 +226,22 @@ class Application {
                 this.logger
               )
             : null;
+        // Reels whose upload failed are parked beside the mp4 and retried
+        // until the venue's link is back. Starting it also sweeps the output
+        // dir, which is what collects reels stranded by a PREVIOUS run — the
+        // usual way a bad connection recovers is overnight, long after the
+        // process that failed has been restarted.
+        const pendingReelUploads = highlightUploader
+          ? new PendingReelUploads(
+              highlightConfig.outputDir,
+              highlightUploader,
+              this.logger,
+              highlightConfig.uploadRetrySec,
+              highlightConfig.uploadRetryMaxAgeHours,
+              highlightConfig.deleteAfterUpload
+            )
+          : null;
+        pendingReelUploads?.start();
         // Route a highlight to the court the press actually came from.
         //
         // COURT FILTERING IS LOAD-BEARING, not a nicety: every unit ships with
@@ -264,13 +281,19 @@ class Application {
             // (the uploader is fully fail-soft). streamKey is required by the
             // backend to resolve the video's privacy.
             if (result && highlightUploader) {
-              const videoId = await highlightUploader.upload({
+              const uploadRequest = {
                 filePath: result.finalPath,
                 courtId: court.courtId,
                 streamKey: court.streamKey,
                 title: `DropShot highlight — ${court.courtId}`,
                 preferShort: true,
-              });
+              };
+              const videoId = await highlightUploader.upload(uploadRequest);
+              // No videoId means the reel did not arrive — most often the
+              // venue's uplink rather than anything wrong with the reel. Park
+              // it so it goes up by itself when the connection returns,
+              // instead of sitting on disk until someone notices.
+              if (!videoId) pendingReelUploads?.park(uploadRequest);
               // Reclaim the disk once YouTube has CONFIRMED the video. Gated on
               // a real videoId, never on "we tried": a failed upload keeps the
               // file so the reel still exists somewhere. Unlink failure is
