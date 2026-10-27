@@ -166,6 +166,118 @@ Located at: `~/Documents/drop-shot-streaming-scripts-ubuntu/.env`
 
 ---
 
+## Highlight Reels — Setup Requirements
+
+Highlights are **off by default** and need more than a flag. A box can look
+completely healthy — streaming fine, scorecard fine — while highlights are
+silently dead. Everything below was found switching Hello Padel on
+(2026-10-25); each item was an actual failure, not a hypothetical.
+
+### Three things that are NOT environment variables
+
+These are the ones that waste an afternoon, because the streamer keeps running
+and the logs look normal.
+
+| Requirement | Symptom when missing | Check |
+|---|---|---|
+| **`python3-opencv` installed** | Reels render full-frame, never reframed. The court boundary you configured does nothing. Fails soft, so the reel still appears. | `python3 -c "import cv2"` |
+| **Nothing else holding the ESP32 serial port** | `open /dev/ttyACM0 failed: Resource temporarily unavailable, Cannot lock port`, retrying forever. **The physical button never works.** | `fuser -v /dev/ttyACM0` |
+| **`STREAMING_API_KEY` set** | `Reel upload skipped (not configured)`. Reel sits on disk and never reaches YouTube. | `grep STREAMING_API_KEY .env` |
+
+**On the serial port:** it takes exactly one reader. At Hello Padel a separate
+`dropshot-score` pm2 process owned `/dev/ttyACM0`, so the streamer could never
+open it. Stopping that process fixed it immediately. If a box runs a separate
+score service, decide which one owns the device — they cannot share it.
+
+### Environment variables
+
+Required to record and cut at all:
+
+| Variable | Example | Notes |
+|---|---|---|
+| `HIGHLIGHT_ENABLED` | `true` | Master switch. |
+| `HIGHLIGHT_BUFFER_DIR` | `/home/<user>/hl-buffer` | **Use an absolute path.** The app's cwd is `lib/pm2`, so a relative path lands somewhere surprising. Must be on the same filesystem as the output dir — the extractor hardlinks segments to stop the retention sweeper deleting them mid-read. |
+| `HIGHLIGHT_OUTPUT_DIR` | `/home/<user>/hl-out` | Absolute, same filesystem as above. |
+
+Needed for the reel to be framed on the court:
+
+| Variable | Example | Notes |
+|---|---|---|
+| `HIGHLIGHT_BALL_TRACKING_ENABLED` | `true` | Needs `python3-opencv`. Without the boundary below it tracks the whole frame. |
+| `HIGHLIGHT_COURT_ROI` | `0.42,0.10;0.59,0.12;…` | Default boundary for every court on the box. |
+| `HIGHLIGHT_COURT_ROI_BY_COURT` | `{"<courtId>":"x,y;…"}` | Per-court override. **Required on a multi-court box** — two cameras never see the same shape. Single-quote it in `.env`, which bash sources. |
+| `HIGHLIGHT_REEL_ASPECT` | `4:5` | `9:16` for YouTube Shorts; Shorts crops `4:5` on both sides. |
+
+Upload:
+
+| Variable | Example | Notes |
+|---|---|---|
+| `HIGHLIGHT_UPLOAD_ENABLED` | `true` | Not sufficient on its own — see `STREAMING_API_KEY` above. |
+| `HIGHLIGHT_DELETE_AFTER_UPLOAD` | `true` | Default. The local reel is removed once uploaded, so an empty output dir is normal on a healthy box. |
+
+Testing without the hardware button:
+
+| Variable | Example | Notes |
+|---|---|---|
+| `HIGHLIGHT_FORCE_PRESENT` | `true` | Forces "device present" so the buffer records. **Remove once the ESP32 is confirmed working** — in production, presence should be real, or the box records a buffer forever with no hardware to trigger it. |
+| `HIGHLIGHT_TRIGGER_FILE` | `/tmp/hl-trigger` | `touch` it and the app behaves exactly as if the button was pressed. Read **only at startup** — set it before restarting. |
+
+### Calculating the court boundary
+
+The boundary is a normalized polygon of the playing surface, `x,y;x,y;…` as
+fractions of frame width/height. The tracker ignores anyone outside it, which
+is what stops a passer-by dragging the reel's crop off the court.
+
+**Do not read the corners off by eye.** These cameras are wide-angle, the court
+edges curve, and a hand-read corner is easily 3-5% out — which quietly re-admits
+the people the boundary exists to exclude.
+
+```bash
+# 1. With the court streaming, take a frame from its own buffer (this is the
+#    exact frame geometry the tracker sees).
+SEG=$(ls -t $HIGHLIGHT_BUFFER_DIR/<courtId>/*.ts | head -2 | tail -1)
+ffmpeg -y -i "$SEG" -frames:v 1 court.png
+
+# 2. Detect the surface. Needs python3-opencv.
+python3 -P scripts/detect_court_roi.py court.png
+```
+
+It prints the ROI string and writes `court-roi.png` with the polygon drawn on
+top. **Always look at that overlay** before pasting the value in — the detector
+keys on the surface colour, and a venue with unusual flooring or heavy shade
+can need the HSV bands in the script widened.
+
+Repeat per court and combine into `HIGHLIGHT_COURT_ROI_BY_COURT`.
+
+### Verifying a box end to end
+
+```bash
+# Config parsed? Any bad ROI JSON is reported here and then ignored.
+pm2 logs <app> --lines 200 --nostream | grep -E "CONFIG\]|trigger file watch|serial port opened"
+
+# Buffer actually recording? One directory per live court.
+ls -d $HIGHLIGHT_BUFFER_DIR/*/
+
+# Fire a highlight and follow it to the reel.
+bash lib/highlight-trigger.sh
+```
+
+Expected log sequence: `Highlight signal received` → `Highlight capture
+starting` → `Highlight clip extracted` → `Highlight reel rendered` → `Reel
+uploaded`. Anything that stops early names its own reason.
+
+A reel is roughly 20 seconds from trigger to rendered on a 4-core box.
+
+### Known-good values
+
+| Venue | Court | ROI |
+|---|---|---|
+| Hello Padel | `1ffe7135-b170-49f4-a433-6218d88c07d0` | `0.367,0.200;0.432,0.164;0.569,0.207;0.795,0.933;0.774,0.999;0.115,0.974` |
+| Hello Padel | `a7139753-436c-4a37-8b54-292606e1eba4` | `0.419,0.193;0.477,0.142;0.608,0.187;0.873,0.882;0.883,0.999;0.172,0.999;0.163,0.933` |
+| Padel Central | (box default) | `0.427,0.100;0.593,0.124;0.824,0.921;0.782,0.998;0.257,0.998;0.165,0.837` |
+
+---
+
 ## PM2 Quick Reference
 
 | Command | Description |
