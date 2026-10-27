@@ -123,6 +123,10 @@ export interface AppConfig {
     // or disabled upload always keeps the file, so a reel is never lost with
     // nowhere to recover it from.
     deleteAfterUpload: boolean;
+    // A reel whose upload failed is retried on this fixed interval until it
+    // lands. There is deliberately no attempt limit and no age cap: a reel
+    // must never be left on a box with nothing coming for it.
+    uploadRetrySec: number;
   };
   esp32: {
     // Forward `type:"score"` packets read off the court ESP32 to the backend,
@@ -299,6 +303,13 @@ export class Config {
         // Opt OUT (set "false") to keep local copies after upload.
         deleteAfterUpload:
           this.getEnvVar("HIGHLIGHT_DELETE_AFTER_UPLOAD", "true") !== "false",
+        // Every 10 minutes, indefinitely. Slow enough that an offline box is
+        // not re-POSTing a 6 MB file at a venue's uplink, fast enough that a
+        // recovered connection clears the backlog without anyone noticing.
+        uploadRetrySec: Math.max(
+          30,
+          this.parseIntEnv("HIGHLIGHT_UPLOAD_RETRY_SEC", 600)
+        ),
       },
       esp32: {
         scoreForwardingEnabled:
