@@ -74,6 +74,13 @@ The `DROPSHOT_GROUND_ID` environment variable is automatically passed to the str
 
 ## 📋 Prerequisites
 
+> **Node.js 20 or newer is required.** `@supabase/supabase-js` opens its realtime
+> websocket using the runtime's global `WebSocket`, which Node 18 does not have.
+> On Node 18 the streamer starts, streams and logs normally, but every score
+> subscription ends in `TIMED_OUT` after 10s and the scorecard overlay is never
+> redrawn — a silent failure with no error anywhere. Diagnosed at Padel Central on
+> 2026-09-25, where the box had been provisioned with `NODE_VERSION="18"`.
+
 - **Operating System**: Ubuntu Linux (18.04 LTS or newer)
 - **User Privileges**: Regular user account with sudo privileges
 - **Network Access**: Internet connection for downloading packages
@@ -133,8 +140,8 @@ GROUND_TAG="ground=${DROPSHOT_GROUND_ID:-ground1}"
 # Package configuration
 PACKAGE_NAME="streamer-node"
 
-# Node.js version (18, 20, etc.)
-NODE_VERSION="18"
+# Node.js version - 20 or newer required (see note below)
+NODE_VERSION="22"
 
 # Keymetrics configuration (optional)
 KEYMETRICS_PUBLIC_KEY="your_public_key_here"
@@ -294,6 +301,30 @@ pm2 startup
 
 ### Common Issues
 
+#### Scores never appear on the stream
+
+Symptom: the stream is fine, `dropshot-score` logs `[SUPABASE] ... ✓`, and nothing
+errors — but the scorecard shows a stale image or nothing at all.
+
+```bash
+# 1. Is the streamer even talking to Supabase? (needs the env, see below)
+pm2 logs <streamer> | grep -iE 'Supabase (client initialized|is disabled)'
+
+# 2. Did the per-court subscription succeed? It is only attempted while a stream
+#    is live and the booking has the scorecard activated.
+pm2 logs <streamer> | grep -iE 'Subscribing to Supabase|SUBSCRIBED|TIMED_OUT'
+
+# 3. Is the overlay image being redrawn?
+ls -l lib/pm2/public/overlays/
+```
+
+| What you see | Cause |
+|---|---|
+| `Supabase is disabled` | The process has no `SUPABASE_*` env. The runner loads the repo-root `.env`; a runner generated before that feature does not. |
+| `TIMED_OUT` then retries | Node older than 20 — see Prerequisites. |
+| `SUBSCRIBED` but no `UPDATE event received` | The table is not publishing changes: enable Replication for `score_board` in the Supabase dashboard. |
+| Overlay file exists but never changes | Same as the row above; ffmpeg loops whatever PNG is on disk. |
+
 #### 1. Permission Denied
 ```bash
 # Fix script permissions
@@ -378,6 +409,29 @@ pm2 link <public_key> <private_key> <machine_name>
 **Note:** PM2 works perfectly without Keymetrics. The monitoring service is optional.
 
 ### Log Rotation Testing & Verification
+
+#### Retention policy — 30 days
+
+Rotated logs are kept for **30 days**. That limit is enforced by a **cron job**,
+not by pm2-logrotate, because pm2-logrotate 3.x cannot delete by age:
+
+- `pm2-logrotate:retain` counts rotated **files**, not days. With `max_size 10M`
+  a noisy day rotates many times and can push out older days early, so it is set
+  to `1000` — high enough that the file count never prunes before the age limit.
+- `pm2-logrotate:max_days` is **not a setting pm2-logrotate reads**. Earlier
+  versions of `setup-pm2-ubuntu.sh` set it to `3`; it had no effect. Remove it on
+  existing boxes with `pm2 unset pm2-logrotate:max_days`.
+- `setup-pm2-ubuntu.sh` installs the cron below. Override the window with
+  `LOG_RETENTION_DAYS=<n>` when running the setup.
+
+```bash
+15 0 * * * find ~/.pm2/logs -name '*__*.log*' -mtime +30 -delete
+```
+
+```bash
+crontab -l                                            # confirm it is installed
+find ~/.pm2/logs -name '*__*.log*' -mtime +30         # preview what it would delete
+```
 
 #### Check Log Rotation Configuration
 ```bash
@@ -529,8 +583,8 @@ GROUND_TAG="ground=groundA"
 # Package configuration
 PACKAGE_NAME="streamer-node"
 
-# Node.js version (18, 20, etc.)
-NODE_VERSION="18"
+# Node.js version - 20 or newer required (see note below)
+NODE_VERSION="22"
 
 # Keymetrics configuration (optional)
 KEYMETRICS_PUBLIC_KEY="your_public_key_here"
@@ -565,8 +619,8 @@ GROUND_TAG="ground=groundA"
 # Package configuration
 PACKAGE_NAME="streamer-node"
 
-# Node.js version (18, 20, etc.)
-NODE_VERSION="18"
+# Node.js version - 20 or newer required (see note below)
+NODE_VERSION="22"
 
 # Keymetrics configuration (optional)
 KEYMETRICS_PUBLIC_KEY="your_public_key_here"
@@ -586,8 +640,8 @@ GROUND_TAG="ground=premium"
 # Package configuration
 PACKAGE_NAME="streamer-node"
 
-# Node.js version (18, 20, etc.)
-NODE_VERSION="18"
+# Node.js version - 20 or newer required (see note below)
+NODE_VERSION="22"
 
 # Keymetrics configuration (optional)
 KEYMETRICS_PUBLIC_KEY="your_public_key_here"
@@ -612,8 +666,8 @@ premium-ground:192.168.1.12:ubuntu:premium:streamer-node-premium:20:pub_key:priv
 # Package configuration
 PACKAGE_NAME="streamer-node"
 
-# Node.js version (18, 20, etc.)
-NODE_VERSION="18"
+# Node.js version - 20 or newer required (see note below)
+NODE_VERSION="22"
 
 # Keymetrics configuration (optional)
 KEYMETRICS_PUBLIC_KEY="your_public_key_here"
@@ -635,8 +689,8 @@ PM2_MAX_MEMORY_RESTART="500M"
 # Package configuration
 PACKAGE_NAME="streamer-node"
 
-# Node.js version (18, 20, etc.)
-NODE_VERSION="18"
+# Node.js version - 20 or newer required (see note below)
+NODE_VERSION="22"
 
 # Keymetrics configuration (optional)
 KEYMETRICS_PUBLIC_KEY="your_public_key_here"

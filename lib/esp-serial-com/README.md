@@ -58,6 +58,12 @@ The streamer's own `SerialHighlightListener` speaks the same protocol and is the
 production consumer. This harness exists for desk/on-site diagnosis only — it is
 not a service, has an interactive REPL, and is not started by PM2.
 
+On a box running the PM2 score forwarder (`score-to-supabase.js`, usually
+`dropshot-score`), that process owns the serial port, so this harness cannot
+open it. You don't need to stop the forwarder to check health: it prints the
+same `heartbeat` / `log` / `button` packets to its log (writing only `score` to
+Supabase), so use `pm2 logs dropshot-score`. Set `HEALTH_LOGS=0` to silence them.
+
 It vendors `serialport` v13 in its own `package.json` while the streamer pins
 v12. That's fine: the surface both use (`SerialPort.list`, the constructor,
 `.pipe`, `ReadlineParser`) is unchanged between the two versions.

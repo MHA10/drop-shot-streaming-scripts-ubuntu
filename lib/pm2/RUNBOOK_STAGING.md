@@ -247,10 +247,16 @@ pm2 flush
 ```bash
 pm2 install pm2-logrotate
 
-# Optional: keep logs for 3 days, rotate at 10 MB
-pm2 set pm2-logrotate:retain 3
+# Rotate daily or at 10 MB, compressed.
 pm2 set pm2-logrotate:max_size 10M
+pm2 set pm2-logrotate:rotateInterval '0 0 * * *'
 pm2 set pm2-logrotate:compress true
+pm2 set pm2-logrotate:retain 1000   # a FILE count, not days - see below
+
+# Keep 30 days of history. pm2-logrotate cannot delete by age: `retain` counts
+# rotated files (a noisy day rotates many times at 10 MB), and `max_days` is not
+# a setting it reads. Delete rotated logs older than 30 days with cron instead:
+(crontab -l 2>/dev/null; echo "15 0 * * * find $HOME/.pm2/logs -name '*__*.log*' -mtime +30 -delete") | crontab -
 ```
 
 ---
