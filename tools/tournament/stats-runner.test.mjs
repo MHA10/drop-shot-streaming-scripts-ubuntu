@@ -156,6 +156,11 @@ test('works through a match while the box is free, freezes when a court goes liv
     assert.ok(procState(bystander.pid) !== '' && !/Z/.test(procState(bystander.pid)), 'a process that only mentions the paths was killed');
     await until(() => hist().includes(`${jobId} STARTED`), 10_000, 'job started');
     await until(() => read(path.join(root, 'stats-out', jobId, 'seen.txt')).includes('duration'), 5000, 'job read its video list');
+    // next to the stats: the match as the log saw it, to recreate it on staging later (API-FLOW.md)
+    const mrec = JSON.parse(read(path.join(root, 'stats-out', jobId, 'match.json')));
+    assert.equal(mrec.match?.red_team, 'A & B');
+    assert.equal(mrec.court, 'court1');
+    assert.ok(Array.isArray(mrec.scoreboard_events));
     const seen = read(path.join(root, 'stats-out', jobId, 'seen.txt'));
     assert.match(seen, /court1-\d{8}-\d{6}\.mkv'\ninpoint 10\.00\nduration 50\.00\nfile '.*court1-\d{8}-\d{6}\.mkv'\noutpoint 50\.00\nduration 50\.00\nduration 100/, seen);
     // the list as written must have a length ffprobe can read (ffmpeg 6 on the box needs the duration lines)

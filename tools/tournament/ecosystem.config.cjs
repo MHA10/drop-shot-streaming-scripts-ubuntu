@@ -66,7 +66,8 @@ module.exports = {
       script: `${DIR}/stats-runner.mjs`,
       cwd: DIR,
       args: ['--root', DIR, '--env-file', `${DIR}/cameras.env`,
-        '--camera', 'court1=CAM_URL_COURT1', '--camera', 'court2=CAM_URL_COURT2'],
+        '--camera', 'court1=CAM_URL_COURT1', '--camera', 'court2=CAM_URL_COURT2',
+        '--ground-env', `${HOME}/Documents/drop-shot-streaming-scripts-ubuntu/.env`],
       autorestart: true,
       restart_delay: 5000,
       kill_timeout: 8000, // time to stop the running job (it carries on from its last step later)

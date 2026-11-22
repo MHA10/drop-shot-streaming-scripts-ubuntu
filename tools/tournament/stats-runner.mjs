@@ -311,7 +311,8 @@ function writeAtomic(file, body) {
 }
 
 const USAGE = `usage: stats-runner.mjs --root DIR [--env-file cameras.env --camera court1=CAM_URL_COURT1 ...]
-  --courts stats/courts.json   (per court: poly, court, size)
+  --courts stats/courts.json   (per court: poly, court, size, court_id)
+  [--ground-env .env]          (DROPSHOT_GROUND_ID: the venue's id for the backend upload)
   [--python stats-venv/bin/python] [--job-script stats/run_job.py] [--models stats/models]
   [--ignore /hlscam/] [--free-for-s 300] [--check-ms 10000] [--for S]`;
 
@@ -324,6 +325,7 @@ function parseArgs(argv) {
     else if (k === '--env-file') a.envFile = v();
     else if (k === '--camera') a.cameras.push(v());
     else if (k === '--courts') a.courts = v();
+    else if (k === '--ground-env') a.groundEnv = v();
     else if (k === '--python') a.python = v();
     else if (k === '--job-script') a.jobScript = v();
     else if (k === '--models') a.models = v();
@@ -410,6 +412,11 @@ async function main() {
     if (url) { for (const s of loginsOf(url)) addSecret(s); hints.set(label, liveHintFor(url)); }
   }
   const courts = Object.fromEntries(Object.entries(readJson(a.courts) ?? {}).filter(([k]) => !k.startsWith('_')));
+  let groundId = null;
+  try { groundId = a.groundEnv ? (readEnvFile(a.groundEnv, ['DROPSHOT_GROUND_ID']).DROPSHOT_GROUND_ID ?? null) : null; } catch (err) {
+    // only needed for a later upload: never a reason to stop the stats (review 2026-11-22)
+    history(`could not read ${a.groundEnv} (${err.code ?? err.message}); saved payloads will have no ground id`);
+  }
   const ionice = haveIonice();
   const ownMarks = [a.out];
   const ignore = a.ignore.length ? a.ignore : ['/hlscam/'];
@@ -507,7 +514,27 @@ async function main() {
       id: j.id, kind: j.kind, court_name: j.court, n: j.n, teams: j.teams, title: j.title, checks: j.checks,
       ws: j.ws, we: j.we, start: isoLocal(j.ws), end: isoLocal(j.we), duration_s: Math.round(held),
       key: `ds-${j.id}`, poly: geo.poly, court: geo.court, size: geo.size, fps: geo.fps ?? 5, part_min: 10, device: 'cpu',
+      court_id: geo.court_id ?? null, ground_id: groundId,
     }, null, 1)}\n`);
+    // Everything the backend flow needs besides the stats, kept next to them: the match as the
+    // match log saw it and every scoreboard change in its time, so the match can be recreated on
+    // staging for a full test (teams, score by score) and sent to production later without the
+    // match log (API-FLOW.md).
+    try {
+      const events = [];
+      const evFile = path.join(a.matchesDir, 'events.jsonl');
+      if (fs.existsSync(evFile)) {
+        for (const line of fs.readFileSync(evFile, 'utf8').split('\n')) {
+          if (!line.trim()) continue;
+          let e;
+          try { e = JSON.parse(line); } catch { continue; }
+          if (e.ms >= j.ws - 10 * 60_000 && e.ms <= j.we + 5 * 60_000 && (e.court === j.court || !e.court)) events.push(e);
+        }
+      }
+      const match = (readJson(path.join(a.matchesDir, 'matches.json')) ?? []).find((m) => m.court === j.court && m.n === j.n && j.kind === 'match') ?? null;
+      fs.writeFileSync(path.join(d, 'match.json'), `${JSON.stringify({ kind: j.kind, court: j.court, court_id: geo.court_id ?? null, ground_id: groundId,
+        window: { start: isoLocal(j.ws), end: isoLocal(j.we), startMs: j.ws, endMs: j.we }, match, scoreboard_events: events }, null, 1)}\n`);
+    } catch (err) { history(`${j.id}: could not save its match record (${err.message}); stats go on`); }
     return true;
   };
 

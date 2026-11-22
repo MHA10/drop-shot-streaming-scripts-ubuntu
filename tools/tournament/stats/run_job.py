@@ -54,9 +54,11 @@ STEPS = [
     ("tags", 2, [PY, "-I", f"{HERE}/tag_people.py", WHO, VIDEO, MED, f"--poly={J['poly']}", "--no-text",
                  "--min-min", "0.33"]),
     ("suggest", 2, [PY, "-I", f"{HERE}/suggest_groups.py", WHO, f"--court={J['court']}", "--across=strict"]),
-    ("page", 2, [PY, "-I", f"{HERE}/build_people_page.py", os.path.join(WHO, "people.json"),
+    ("page", 1, [PY, "-I", f"{HERE}/build_people_page.py", os.path.join(WHO, "people.json"),
                  f"{HERE}/people-template.html", os.path.join(job, "whos-who.html"), "--title", J["title"],
                  "--key", J["key"]]),
+    # the 4 slots in the backend's exact shape, saved in <job>/api/ to send later (API-FLOW.md)
+    ("payload", 1, [PY, "-I", f"{HERE}/make_payload.py", job]),
 ]
 
 
@@ -98,6 +100,12 @@ for name, share, cmd in STEPS:
         # if this program dies mid-step, the step must not run on unmanaged (review 2026-11-22)
         if proc.poll() is None:
             proc.kill()
+    if rc != 0 and name == "payload":
+        # the page is done; a payload problem must not fail the match (review 2026-11-22)
+        say(f"step payload FAILED (exit {rc}): the page is fine; re-run make_payload.py on this job later")
+        print("PAYLOAD-FAILED", flush=True)
+        before += share
+        continue
     if rc != 0:
         say(f"step {name} FAILED (exit {rc}) after {time.time() - t0:.0f} s")
         print(f"FAILED {name} exit {rc}", flush=True)
