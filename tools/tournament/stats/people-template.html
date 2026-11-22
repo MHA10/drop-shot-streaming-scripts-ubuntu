@@ -1,0 +1,503 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Who's Who Check</title>
+<style>
+:root {
+  --bg: #f6f7f9; --card: #ffffff; --ink: #1b2430; --muted: #5d6b7a; --line: #dde2e8;
+  --accent: #2357c6; --chip: #eef2f7; --sel: #e6eefc; --warn: #c27803; --warn-bg: #fbf0dc;
+  --off: #a3acb7; --bar: #2357c6; --bar2: #0f8a68;
+  --heat0: #eef2f7; --heat1: #f6d38b; --heat2: #e8743b; --heat3: #b3261e;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #11151b; --card: #1a2029; --ink: #e6ebf1; --muted: #9aa7b6; --line: #2c3542;
+    --accent: #7ea6f5; --chip: #232b36; --sel: #1d2a45; --warn: #f0aa3c; --warn-bg: #3a2c12;
+    --off: #5b6573; --bar: #7ea6f5; --bar2: #3cc59b;
+    --heat0: #232b36; --heat1: #8a6a2a; --heat2: #d0662e; --heat3: #f04a3c;
+  }
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--ink);
+  font: 15px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; }
+.wrap { max-width: 1100px; margin: 0 auto; padding: 0 16px 80px; }
+h1 { font-size: 24px; line-height: 1.25; margin: 28px 0 8px; }
+h2 { font-size: 18px; margin: 0 0 6px; }
+p { margin: 0 0 10px; }
+.muted { color: var(--muted); }
+.intro { max-width: 760px; }
+.tips { display: grid; grid-template-columns: repeat(auto-fit, minmax(230px, 1fr)); gap: 10px; margin: 14px 0 6px; }
+.tip { background: var(--card); border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; font-size: 14px; }
+.tip b { display: block; margin-bottom: 2px; }
+
+.bar { position: sticky; top: 0; z-index: 5; background: color-mix(in srgb, var(--bg) 92%, transparent);
+  backdrop-filter: blur(6px); border-bottom: 1px solid var(--line); margin: 18px -16px 0; padding: 10px 16px;
+  display: flex; flex-wrap: wrap; gap: 10px; align-items: center; }
+.bar .count { font-weight: 600; margin-right: auto; }
+button.btn { font: inherit; font-size: 14px; border: 1px solid var(--line); background: var(--card); color: var(--ink);
+  border-radius: 8px; padding: 6px 12px; cursor: pointer; }
+button.btn.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+button.btn:disabled { opacity: .45; cursor: default; }
+label.toggle { font-size: 14px; display: inline-flex; gap: 6px; align-items: center; cursor: pointer; }
+
+.panel { background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 16px; margin-top: 16px; }
+.tl { overflow-x: auto; }
+.tl svg { display: block; min-width: 640px; width: 100%; height: auto; }
+.tl text { font: 11px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; fill: var(--muted); }
+.tl .row:hover rect.bg { fill: var(--chip); }
+.legend { display: flex; flex-wrap: wrap; gap: 14px; font-size: 13px; color: var(--muted); margin-top: 6px; }
+
+.grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(330px, 1fr)); gap: 14px; margin-top: 16px; }
+#units > .grid { margin-top: 16px; }
+.sgroup { border: 2px dashed var(--accent); border-radius: 14px; padding: 12px; margin-top: 18px;
+  background: color-mix(in srgb, var(--accent) 5%, transparent); }
+.sgroup .grid { margin-top: 10px; }
+.sg-head { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.sg-head b { font-size: 15px; }
+.sg-head .why { color: var(--muted); font-size: 13px; flex-basis: 100%; }
+.sg-head .btns { margin-left: auto; display: flex; gap: 6px; flex-wrap: wrap; }
+.sg-head button { font-size: 13px; padding: 4px 10px; }
+select.order { font: inherit; font-size: 14px; padding: 5px 8px; border: 1px solid var(--line); border-radius: 8px;
+  background: var(--card); color: var(--ink); }
+.card { background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 12px; min-width: 0;
+  scroll-margin-top: 70px; }
+.card.selected { background: var(--sel); border-color: var(--accent); }
+.card.off { opacity: .55; }
+.card-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.card-head .num { font-weight: 700; font-size: 17px; }
+.card-head .meta { color: var(--muted); font-size: 13px; }
+.card-head label { margin-left: auto; font-size: 14px; display: flex; gap: 5px; align-items: center; cursor: pointer; }
+.tag { font-size: 12px; border-radius: 5px; padding: 1px 6px; background: var(--chip); color: var(--muted); }
+.tag.warn { background: var(--warn-bg); color: var(--warn); }
+.chips { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 6px; }
+.chip { font-size: 12px; border-radius: 999px; padding: 1px 9px; background: var(--chip); border: 1px solid var(--line); }
+.chip.mine { border-color: var(--accent); }
+.chip.hint { background: var(--warn-bg); color: var(--warn); border-color: transparent; }
+.flag { margin-top: 8px; padding: 8px 10px; border-radius: 8px; background: var(--warn-bg); color: var(--ink); font-size: 13px; border-left: 3px solid var(--warn); }
+.flag b { color: var(--warn); }
+.flag a { color: var(--warn); font-weight: 600; }
+.flag-pics { margin: 6px 0; }
+.flag-row { display: flex; align-items: center; gap: 2px; margin: 3px 0; }
+.flag-row span { font-size: 11px; color: var(--muted); width: 30px; flex: none; }
+.flag-row em { font-style: normal; color: var(--warn); margin: 0 4px; }
+.flag-row img { height: 58px; width: 29px; object-fit: cover; border-radius: 3px; background: #000; cursor: zoom-in; }
+.flag-done { margin-top: 8px; font-size: 12px; color: var(--muted); }
+input.find { font: inherit; font-size: 14px; padding: 5px 10px; border: 1px solid var(--line); border-radius: 8px;
+  background: var(--card); color: var(--ink); min-width: 0; width: 190px; }
+.pics { display: grid; grid-template-columns: repeat(8, minmax(0, 1fr)); gap: 3px; margin: 8px 0; }
+.pics img { width: 100%; aspect-ratio: 1 / 2; display: block; border-radius: 4px; background: #000; object-fit: cover; }
+.pics figure { margin: 0; }
+.pics figcaption { font-size: 10px; color: var(--muted); text-align: center; font-variant-numeric: tabular-nums; }
+.pics figcaption a, .card-head a.watch { color: var(--accent); text-decoration: none; }
+.card-head a.watch { font-size: 13px; }
+.body { display: grid; grid-template-columns: minmax(0, 1fr) 92px; gap: 10px; align-items: start; }
+table.st { border-collapse: collapse; font-size: 13px; width: 100%; }
+table.st td { padding: 2px 4px 2px 0; border-bottom: 1px solid var(--line); }
+table.st td.v { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; font-weight: 600; }
+.heat { display: grid; grid-template-columns: repeat(10, 1fr); gap: 1px; width: 92px; border: 2px solid var(--muted);
+  border-top: 3px solid var(--ink); }
+.heat i { aspect-ratio: 1; display: block; }
+.heat-cap { font-size: 11px; color: var(--muted); text-align: center; line-height: 1.25; margin-top: 3px; }
+.actions { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+.actions button { font-size: 13px; padding: 4px 9px; }
+.actions button.on { background: var(--warn-bg); border-color: var(--warn); color: var(--warn); }
+.merged-note { font-size: 13px; color: var(--muted); margin-top: 6px; }
+.merged-note button { font-size: 12px; padding: 1px 7px; margin-left: 4px; }
+textarea.out { width: 100%; min-height: 160px; font: 12px ui-monospace, Menlo, monospace; margin-top: 8px; display: none;
+  background: var(--card); color: var(--ink); border: 1px solid var(--line); border-radius: 8px; padding: 8px; }
+.short-note { margin-top: 18px; }
+
+#zoom { position: fixed; inset: 0; background: rgba(0,0,0,.82); display: none; align-items: center; justify-content: center;
+  z-index: 20; cursor: zoom-out; }
+#zoom img { height: min(80vh, 640px); width: auto; image-rendering: auto; border-radius: 6px; }
+
+@media (max-width: 520px) {
+  .grid { grid-template-columns: minmax(0, 1fr); }
+  .pics { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1 id="title">Who's who</h1>
+  <p class="intro" id="src"></p>
+  <p class="intro muted" id="sub"></p>
+  <div class="tips">
+    <div class="tip"><b>Each card is one person number</b>The computer gave a number to everyone it could tell apart by what they wear. One player can have several numbers. That's expected.</div>
+    <div class="tip"><b>Same person on two cards?</b>Tick both cards, then press <i>Same person</i>. Their stats add up straight away.</div>
+    <div class="tip"><b>Dashed boxes are suggestions</b>Cards the computer thinks are probably the same player are shown together. Check the pictures: if they're all one person press <i>Same person: all</i>; if not, tick just the ones that are, or press <i>Not the same / done</i>.</div>
+    <div class="tip"><b>Most players have 2+ cards</b>Usually one for each half of the court: from the far half the camera sees a small player from the front, from the near half a bigger one from the back, and the computer plays safe. A player who sits out 5+ minutes also gets a new card. When the teams change ends, the computer spots a player's two cards taking turns on court and boxes them together.</div>
+    <div class="tip"><b>Plays the left / right side</b>The side of their own half a player stands on, as padel players name it (seen from behind them). Partners split left and right and keep their side all match, so the computer never boxes a left-side card with a right-side one.</div>
+    <div class="tip"><b>Two people on one card?</b>Press <i>Two people in here</i>. That is the mistake that matters most, so please flag every one you see. The computer marks cards that stayed on one half while the players changed ends, with pictures from just before and after: type <i>flagged</i> in find to see them.</div>
+    <div class="tip"><b>Not a player?</b>A referee, a ball collector or someone waiting: press <i>Not a player</i>.</div>
+    <div class="tip"><b>Tags</b>Each card is described in words (shirt, shorts, cap, a name or number on the shirt). Type in <i>find</i> to filter, for example "red" or "SALEH". Fix or add tags with <i>Edit tags</i>; kit numbers usually need adding by hand for now.</div>
+  </div>
+
+  <div class="bar">
+    <span class="count" id="count"></span>
+    <input class="find" id="find" type="search" placeholder="find by tag, e.g. red" aria-label="Find by tag">
+    <select class="order" id="order" aria-label="Order of the cards">
+      <option value="groups">Order: likely same player together</option>
+      <option value="time">Order: by time</option>
+    </select>
+    <label class="toggle"><input type="checkbox" id="showShort"> show short appearances</label>
+    <button class="btn primary" id="mergeBtn" disabled>Same person</button>
+    <button class="btn" id="clearSel" disabled>Clear ticks</button>
+    <button class="btn" id="undoBtn" disabled title="Take back your last change">Undo last</button>
+    <button class="btn" id="resetBtn" title="Clear all your marks on this page">Start over</button>
+    <button class="btn" id="copyBtn">Copy answers</button>
+  </div>
+  <textarea class="out" id="out" readonly></textarea>
+
+  <div class="panel">
+    <h2>Who was on court when</h2>
+    <p class="muted" style="font-size:14px">One row per number, with time along the bottom. Click a row to jump to its card.</p>
+    <div class="tl" id="tl"></div>
+    <div class="legend"><span>Rows show numbers on court for at least the "short" limit. Merged numbers show on one row.</span></div>
+  </div>
+
+  <div id="units"></div>
+  <p class="muted short-note" id="shortNote"></p>
+</div>
+<div id="zoom"><img alt=""></div>
+
+<script>
+const D = /*DATA*/null;
+const KEY = D.key;
+const SHORT_S = D.short_s;
+const FPS = D.fps;
+let st = { merges: [], two: {}, off: {}, tags: {}, done: {}, one: {} };
+try { st = Object.assign(st, JSON.parse(localStorage.getItem(KEY) || '{}') || {}); } catch (e) { /* no storage: keep in memory */ }
+function save() { try { localStorage.setItem(KEY, JSON.stringify(st)); } catch (e) { /* private window */ } }
+// Undo: a copy of the answers is kept before every change (last 200), saved with them, so
+// "Undo last" still works after the page is closed and opened again.
+const HKEY = KEY + '-undo';
+let hist = [];
+try { hist = JSON.parse(localStorage.getItem(HKEY) || '[]') || []; } catch (e) { hist = []; }
+function snap() {
+  hist.push(JSON.stringify(st));
+  if (hist.length > 200) hist.shift();
+  try { localStorage.setItem(HKEY, JSON.stringify(hist)); } catch (e) { /* keep in memory */ }
+}
+const fresh = () => ({ merges: [], two: {}, off: {}, tags: {}, done: {}, one: {} });
+const sel = new Set();
+
+const hm = s => { s = Math.floor(s); const h = Math.floor(s / 3600), m = Math.floor(s % 3600 / 60);
+  return h + ':' + String(m).padStart(2, '0'); };
+const yt = s => `https://www.youtube.com/watch?v=${encodeURIComponent(D.video)}&t=${Math.max(0, Math.floor(s))}s`;
+const esc = x => String(x).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+const hms = s => hm(Math.floor(s)) + ':' + String(Math.floor(s) % 60).padStart(2, '0');
+const mins = s => s >= 3600 ? (s / 3600).toFixed(1) + ' h' : Math.round(s / 60) + ' min';
+
+// a number merged into another points at it; follow to the one that's left
+function groups() {
+  const parent = {};
+  D.persons.forEach(p => parent[p.id] = p.id);
+  const find = x => { while (parent[x] !== x) x = parent[x]; return x; };
+  st.merges.forEach(ids => { const r = Math.min(...ids.map(find)); ids.forEach(i => parent[find(i)] = r); });
+  const g = {};
+  D.persons.forEach(p => { const r = find(p.id); (g[r] = g[r] || []).push(p); });
+  return g;
+}
+
+function combine(members) {
+  const t = { on_s: 0, seen: 0, far: 0, dist_m: 0, lat_m: 0, sprints: 0, top_ms: 0, net_s: 0, back_s: 0, stat_s: 0,
+    n: 0, sx: 0, sy: 0, left: 0, cells: new Array(100).fill(0), spans: [], mean_w: 0 };
+  members.forEach(p => p.pieces.forEach(k => {
+    const q = D.pieces[k];
+    t.on_s += q.on_s;
+    t.seen += q.seen || 0; t.far += q.far || 0;
+    t.spans.push([q.start / FPS, q.end / FPS]);
+    if (q.dist_m === undefined) return;
+    t.stat_s += q.on_s;
+    t.dist_m += q.dist_m; t.lat_m += q.lat_m; t.sprints += q.sprints;
+    t.top_ms = Math.max(t.top_ms, q.top_ms);
+    t.mean_w += q.mean_ms * q.on_s;
+    t.net_s += q.net_s; t.back_s += q.back_s;
+    t.n += q.n; t.sx += q.sx; t.sy += q.sy; t.left += q.left;
+    for (const c in q.cells) t.cells[+c] += q.cells[c];
+  }));
+  return t;
+}
+
+function tagsOf(rootId, members) {
+  if (st.tags[rootId]) return { list: st.tags[rootId], mine: true };
+  const seen = [];
+  members.forEach(p => (p.tags || []).forEach(t => { if (!seen.includes(t)) seen.push(t); }));
+  return { list: seen, mine: false };
+}
+
+function heat(cells) {
+  const mx = Math.max(1, ...cells);
+  // own half seen from behind the player: net at the top (thick line), back glass at the bottom
+  return cells.map(v => {
+    const r = v / mx;
+    const c = v === 0 ? 'var(--heat0)' : r < .25 ? 'var(--heat1)' : r < .6 ? 'var(--heat2)' : 'var(--heat3)';
+    return `<i style="background:${c}"></i>`;
+  }).join('');
+}
+
+function card(rootId, members) {
+  const t = combine(members);
+  const pics = members.flatMap(p => p.pictures).sort((a, b) => a[1] - b[1]);
+  const step = Math.max(1, pics.length / 8);
+  const shown = [];
+  for (let i = 0; i < pics.length && shown.length < 8; i += step) shown.push(pics[Math.floor(i)]);
+  const first = Math.min(...t.spans.map(s => s[0])), last = Math.max(...t.spans.map(s => s[1]));
+  const ids = members.map(p => p.id).sort((a, b) => a - b);
+  const net = t.stat_s ? 100 * t.net_s / t.stat_s : 0, back = t.stat_s ? 100 * t.back_s / t.stat_s : 0;
+  const cover = t.cells.filter(v => v > 0).length;
+  const leftPct = t.n ? 100 * t.left / t.n : 50;
+  const side = leftPct >= 65 ? 'left' : leftPct <= 35 ? 'right' : 'both sides';
+  const two = st.two[rootId], off = st.off[rootId], one = st.one[rootId];
+  // from suggest_groups.py: stayed on one half through a change of ends (two people, or not a player)
+  const fl = members.flatMap(p => p.flags || []).sort((a, b) => a.t - b.t);
+  const flagOpen = fl.length > 0 && !two && !off && !one;
+  const fpic = p => `<img src="${D.img[p[0]]}" alt="P${rootId} at ${hms(p[1] / FPS)}" title="${hms(p[1] / FPS)}" data-zoom="1">`;
+  const flagHtml = !fl.length ? '' : flagOpen ? `<div class="flag"><b>Computer check: maybe two people, or not a player.</b>
+      This card stayed on the ${[...new Set(fl.map(x => x.half))].join(' / ')} half through the change of ends at
+      ${fl.map(x => D.video ? `<a href="${yt(x.t - 30)}" target="_blank" rel="noopener">${hm(x.t)}</a>` : hm(x.t)).join(', ')},
+      while the players swapped halves. Just before → just after each one:
+      <div class="flag-pics">${fl.map(x => `<div class="flag-row"><span>${hm(x.t)}</span>${x.before.map(fpic).join('')}<em>→</em>${x.after.map(fpic).join('')}</div>`).join('')}</div>
+      Then press <i>Two people in here</i> or <i>Not a player</i>, or <button class="btn" data-one="${rootId}">It's one player</button></div>`
+    : one ? `<div class="flag-done">You said one player: the computer's two-people check is overruled. <button class="btn" data-one="${rootId}">undo</button></div>` : '';
+  const short = t.on_s < SHORT_S;
+  const tg = tagsOf(rootId, members);
+  // ~10 m a minute is walking about between points; players cover several times that
+  const still = t.stat_s >= 60 && t.dist_m / (t.stat_s / 60) < 10;
+  const farPct = t.seen ? 100 * t.far / t.seen : 0;
+  const end = farPct <= 10 ? 'near half' : farPct >= 90 ? 'far half' : `both halves (far ${Math.round(farPct)}%)`;
+  const el = document.createElement('div');
+  el.className = 'card' + (sel.has(rootId) ? ' selected' : '') + (off ? ' off' : '');
+  el.id = 'p' + rootId;
+  el.dataset.short = short ? '1' : '';
+  el.innerHTML = `
+    <div class="card-head">
+      <span class="num">P${rootId}</span>
+      <span class="meta">${mins(t.on_s)} on court · ${end}${t.stat_s ? ' · plays ' + (side === 'both sides' ? 'both sides' : 'the ' + side + ' side') : ''} · seen ${hms(first)}–${hms(last)}</span>
+      ${D.video ? `<a class="watch" href="${yt(first)}" target="_blank" rel="noopener">watch ▸</a>` : ''}
+      ${two ? '<span class="tag warn">two people</span>' : ''}${off ? '<span class="tag">not a player</span>' : ''}
+      <label><input type="checkbox" ${sel.has(rootId) ? 'checked' : ''} data-sel="${rootId}"> tick</label>
+    </div>
+    <div class="chips">${tg.list.map(x => `<span class="chip${tg.mine ? ' mine' : ''}">${esc(x)}</span>`).join('')}${still && !off ? '<span class="chip hint">hardly moved: maybe not a player</span>' : ''}${!tg.list.length ? '<span class="muted" style="font-size:12px">no tags yet</span>' : ''}</div>
+    ${flagHtml}
+    <div class="pics">${shown.map(p => `<figure><img loading="lazy" src="${D.img[p[0]]}" alt="P${rootId} at ${hms(p[1] / FPS)}" data-zoom="1"><figcaption>${D.video ? `<a href="${yt(p[1] / FPS)}" target="_blank" rel="noopener" title="Open the video at ${hms(p[1] / FPS)}">${hm(p[1] / FPS)}</a>` : hm(p[1] / FPS)}</figcaption></figure>`).join('')}</div>
+    <div class="body">
+      <table class="st">
+        <tr><td>Distance run</td><td class="v">${t.stat_s ? (t.dist_m / 1000).toFixed(2) + ' km' : '–'}</td></tr>
+        <tr><td>Sprints (4 m+ in a second)</td><td class="v">${t.stat_s ? t.sprints : '–'}</td></tr>
+        <tr><td>Top speed</td><td class="v">${t.stat_s ? (t.top_ms * 3.6).toFixed(0) + ' km/h' : '–'}</td></tr>
+        <tr><td>Time near the net</td><td class="v">${t.stat_s ? net.toFixed(0) + '%' : '–'}</td></tr>
+        <tr><td>Time at the back glass</td><td class="v">${t.stat_s ? back.toFixed(0) + '%' : '–'}</td></tr>
+        <tr><td>Own half covered</td><td class="v">${t.stat_s ? cover + '%' : '–'}</td></tr>
+        <tr><td>Side of the court</td><td class="v">${t.stat_s ? side : '–'}</td></tr>
+      </table>
+      <div><div class="heat" title="Where this person stood on their own half">${heat(t.cells)}</div>
+        <div class="heat-cap">net ↑<br>their own half</div></div>
+    </div>
+    <div class="actions">
+      <button class="btn ${two ? 'on' : ''}" data-two="${rootId}">Two people in here</button>
+      <button class="btn ${off ? 'on' : ''}" data-off="${rootId}">Not a player</button>
+      <button class="btn" data-tags="${rootId}">Edit tags</button>
+    </div>
+    ${ids.length > 1 ? `<div class="merged-note">Made from ${ids.map(i => 'P' + i).join(' + ')}
+      <button class="btn" data-undo="${rootId}">split back</button></div>` : ''}`;
+  el.dataset.find = tg.list.join(' ').toLowerCase() + ' p' + rootId + (flagOpen ? ' flagged' : '');
+  return { el, t, short, first, flagOpen, flagged: fl.length > 0 };
+}
+
+function timeline(rows) {
+  const W = 1000, L = 52, R = 10, RH = 13, top = 8, n = rows.length, Hh = top + n * RH + 24;
+  const x = s => L + (W - L - R) * s / D.end;
+  let svg = `<svg viewBox="0 0 ${W} ${Hh}" role="img" aria-label="When each person number was on court">`;
+  for (let h = 0; h <= D.end / 3600; h++) {
+    const xx = x(h * 3600);
+    svg += `<line x1="${xx}" x2="${xx}" y1="${top}" y2="${top + n * RH}" stroke="var(--line)"/>` +
+      `<text x="${xx}" y="${top + n * RH + 16}" text-anchor="middle">${h}:00</text>`;
+  }
+  rows.forEach((r, i) => {
+    const y = top + i * RH;
+    svg += `<g class="row" data-go="${r.id}" style="cursor:pointer"><rect class="bg" x="0" y="${y}" width="${W}" height="${RH}" fill="transparent"/>` +
+      `<text x="${L - 6}" y="${y + RH - 3}" text-anchor="end">P${r.id}</text>`;
+    r.t.spans.forEach(([a, b]) => {
+      svg += `<rect x="${x(a)}" y="${y + 2}" width="${Math.max(1, x(b) - x(a))}" height="${RH - 4}" fill="${r.off ? 'var(--off)' : i % 2 ? 'var(--bar2)' : 'var(--bar)'}"/>`;
+    });
+    svg += '</g>';
+  });
+  return svg + '</svg>';
+}
+
+// which suggested group a number belongs to (from suggest_groups.py)
+const SG = {};
+(D.suggest || []).forEach((grp, gi) => grp.ids.forEach(id => { SG[id] = gi; }));
+// "Not the same / done" is saved under the box's cards, not its position: re-made suggestions
+// come out in a different order, and a saved position would close the wrong box.
+const GK = gi => D.suggest[gi].ids.join('-');
+function groupOf(members) {
+  for (const p of members) if (SG[p.id] !== undefined && !st.done[GK(SG[p.id])]) return SG[p.id];
+  return undefined;
+}
+function suggestWhy(gi) {
+  const links = D.suggest[gi].links;
+  const turns = links.filter(l => l[4] && l[4].turns);
+  const ends = links.some(l => /changed ends/.test(l[3]));
+  let s = 'Picked because they look alike' + (ends && !turns.length ? ', and one stops on one half as the other starts on the other half (a change of ends).' : '.');
+  turns.forEach(l => {
+    const n = l[4].turns.length;
+    s += ` P${l[0]} and P${l[1]} took turns ${n === 1 ? 'once' : n + ' times'} (${l[4].turns.map(hm).join(', ')}): one stopped on one half and the other started on the other half, as players do when the teams change ends. Both play the ${l[4].side} side.`;
+  });
+  return s + ' Never on court at the same moment.';
+}
+
+function render() {
+  const g = groups();
+  const showShort = document.getElementById('showShort').checked;
+  const byGroups = document.getElementById('order').value === 'groups';
+  const units = document.getElementById('units');
+  units.innerHTML = '';
+  const cards = Object.entries(g).map(([r, m]) => ({ id: +r, ...card(+r, m), off: st.off[r], gi: groupOf(m) }));
+  cards.sort((a, b) => a.first - b.first);
+  let shortN = 0;
+  const q = document.getElementById('find').value.trim().toLowerCase();
+  const shown = cards.filter(c => {
+    if (c.short && !showShort && !c.flagged) { shortN++; return false; }   // a computer flag always shows, answered or not
+    return !(q && !q.split(/\s+/).every(w => c.el.dataset.find.includes(w)));
+  });
+  // a unit = one suggested group (2+ cards showing) or one card; in time order of their first card
+  const byGi = {};
+  if (byGroups) shown.forEach(c => { if (c.gi !== undefined) (byGi[c.gi] = byGi[c.gi] || []).push(c); });
+  const list = [];
+  const placed = new Set();
+  shown.forEach(c => {
+    if (placed.has(c.id)) return;
+    const grp = byGroups && c.gi !== undefined && byGi[c.gi].length > 1 ? byGi[c.gi] : null;
+    if (grp) { grp.forEach(x => placed.add(x.id)); list.push({ gi: c.gi, cards: grp }); }
+    else { placed.add(c.id); list.push({ cards: [c] }); }
+  });
+  let loose = null;
+  list.forEach(u => {
+    if (u.gi === undefined) {
+      if (!loose) { loose = document.createElement('div'); loose.className = 'grid'; units.appendChild(loose); }
+      loose.appendChild(u.cards[0].el);
+      return;
+    }
+    loose = null;
+    const box = document.createElement('section');
+    box.className = 'sgroup';
+    box.innerHTML = `<div class="sg-head"><b>Probably the same player?</b> <span class="muted">${u.cards.map(c => 'P' + c.id).join(' · ')}</span>
+      <span class="btns"><button class="btn primary" data-mergeall="${u.gi}">Same person: all ${u.cards.length}</button>
+      <button class="btn" data-done="${u.gi}">Not the same / done</button></span>
+      <span class="why">${suggestWhy(u.gi)}</span></div>`;
+    const inner = document.createElement('div');
+    inner.className = 'grid';
+    u.cards.forEach(c => inner.appendChild(c.el));
+    box.appendChild(inner);
+    units.appendChild(box);
+  });
+  const long = cards.filter(c => !c.short);
+  document.getElementById('tl').innerHTML = timeline(long);
+  document.getElementById('count').textContent =
+    `${long.length} numbers on court ${Math.round(SHORT_S / 60)}+ min · ${st.merges.length} merges · ` +
+    `${Object.keys(st.two).length} flagged two people · ${cards.filter(c => c.flagOpen).length} for you to check (computer flags: type "flagged" in find)`;
+  document.getElementById('shortNote').textContent = (showShort ? '' :
+    `${shortN} short appearances (under ${Math.round(SHORT_S / 60)} min on court) are hidden. Tick "show short appearances" to see them. `) +
+    `${D.tiny_n} scraps under ${D.tiny_s} s (${D.tiny_min} of ${D.total_min} on-court minutes, mostly moments when two people cross) are not on this page.`;
+  document.getElementById('mergeBtn').disabled = sel.size < 2;
+  document.getElementById('clearSel').disabled = sel.size === 0;
+  const u = document.getElementById('undoBtn');
+  u.disabled = hist.length === 0;
+  u.textContent = hist.length ? `Undo last (${hist.length})` : 'Undo last';
+}
+
+document.addEventListener('click', e => {
+  const t = e.target;
+  if (t.dataset.sel) { const id = +t.dataset.sel; t.checked ? sel.add(id) : sel.delete(id);
+    t.closest('.card').classList.toggle('selected', t.checked);
+    document.getElementById('mergeBtn').disabled = sel.size < 2;
+    document.getElementById('clearSel').disabled = sel.size === 0; return; }
+  if (t.dataset.one) { const id = t.dataset.one; snap(); st.one[id] ? delete st.one[id] : st.one[id] = 1; save(); render(); return; }
+  if (t.dataset.two) { const id = t.dataset.two; snap(); st.two[id] ? delete st.two[id] : st.two[id] = 1; save(); render(); return; }
+  if (t.dataset.off) { const id = t.dataset.off; snap(); st.off[id] ? delete st.off[id] : st.off[id] = 1; save(); render(); return; }
+  if (t.dataset.undo) { const id = +t.dataset.undo;
+    snap(); st.merges = st.merges.filter(m => !m.includes(id) && Math.min(...m) !== id); save(); render(); return; }
+  if (t.dataset.tags) { const id = t.dataset.tags;
+    const cur = tagsOf(+id, groups()[id]).list.join(', ');
+    const v = prompt(`Tags for P${id}, separated by commas (for example: red shirt, navy shorts, #7)`, cur);
+    if (v === null) return;
+    const list = v.split(',').map(x => x.trim()).filter(Boolean);
+    if (list.join(', ') === cur) return;
+    snap(); st.tags[id] = list; save(); render(); return; }
+  if (t.dataset.mergeall !== undefined) { const gi = +t.dataset.mergeall;
+    const roots = Object.entries(groups()).filter(([r, m]) => groupOf(m) === gi).map(([r]) => +r);
+    if (roots.length > 1 && tryMerge(roots)) render();
+    return; }
+  if (t.dataset.done !== undefined) { snap(); st.done[GK(+t.dataset.done)] = 1; save(); render(); return; }
+  if (t.dataset.zoom) { const z = document.getElementById('zoom'); z.querySelector('img').src = t.src; z.style.display = 'flex'; return; }
+  const go = t.closest && t.closest('[data-go]');
+  if (go) { const c = document.getElementById('p' + go.dataset.go); if (c) c.scrollIntoView({ behavior: 'smooth' }); }
+});
+document.getElementById('zoom').addEventListener('click', e => e.currentTarget.style.display = 'none');
+document.getElementById('showShort').addEventListener('change', render);
+document.getElementById('order').addEventListener('change', render);
+document.getElementById('find').addEventListener('input', render);
+function tryMerge(ids) {
+  const g = groups();
+  // two numbers on court at the same moment cannot be one person
+  const spans = ids.map(r => combine(g[r]).spans);
+  for (let i = 0; i < ids.length; i++) for (let j = i + 1; j < ids.length; j++)
+    for (const [a, b] of spans[i]) for (const [c, d] of spans[j]) if (a < d && c < b) {
+      alert(`P${ids[i]} and P${ids[j]} were on court at the same time (${hms(Math.max(a, c))}), so they can't be one person.`);
+      return false;
+    }
+  snap(); st.merges.push(ids); save(); return true;
+}
+document.getElementById('mergeBtn').addEventListener('click', () => {
+  if (sel.size < 2) return;
+  if (tryMerge([...sel])) { sel.clear(); render(); }
+});
+document.getElementById('clearSel').addEventListener('click', () => { sel.clear(); render(); });
+document.getElementById('undoBtn').addEventListener('click', () => {
+  if (!hist.length) return;
+  st = Object.assign(fresh(), JSON.parse(hist.pop()));
+  try { localStorage.setItem(HKEY, JSON.stringify(hist)); } catch (e) { /* keep in memory */ }
+  sel.clear(); save(); render();
+});
+document.getElementById('resetBtn').addEventListener('click', () => {
+  const n = st.merges.length + Object.keys(st.two).length + Object.keys(st.off).length + Object.keys(st.one).length +
+    Object.keys(st.tags).length + Object.keys(st.done).length;
+  if (!n) return;
+  if (!confirm(`Clear all ${n} of your marks on this page (merges, flags, tags, closed boxes)? "Undo last" can still bring them back.`)) return;
+  snap(); st = fresh(); sel.clear(); save(); render();
+});
+document.getElementById('copyBtn').addEventListener('click', async e => {
+  const g = groups();
+  const lines = [`${D.title}`, `Answers from the who's-who page`, ''];
+  st.merges.forEach(m => lines.push('same person: ' + m.map(i => 'P' + i).join(' + ')));
+  Object.keys(st.two).forEach(i => lines.push(`two people in: P${i}`));
+  Object.keys(st.one).forEach(i => lines.push(`computer flag wrong, one player: P${i}`));
+  Object.keys(st.off).forEach(i => lines.push(`not a player: P${i}`));
+  Object.entries(st.tags).forEach(([i, l]) => lines.push(`tags for P${i}: ${l.join(', ')}`));
+  Object.keys(st.done).forEach(k => { if ((D.suggest || []).some(g => g.ids.join('-') === k)) lines.push(`suggestion not all the same / done: ${k.split('-').map(i => 'P' + i).join(' + ')}`); });
+  if (lines.length === 3) lines.push('(no changes)');
+  lines.push('', 'json: ' + JSON.stringify(st));
+  const text = lines.join('\n').trimEnd();
+  const btn = e.currentTarget;
+  try { await navigator.clipboard.writeText(text); btn.textContent = 'Copied ✓'; setTimeout(() => btn.textContent = 'Copy answers', 1800); }
+  catch (err) { const o = document.getElementById('out'); o.style.display = 'block'; o.value = text; o.select(); }
+});
+
+document.getElementById('title').textContent = D.title;
+if (D.video) {
+  const src = document.getElementById('src');
+  src.innerHTML = `Video: <a href="https://www.youtube.com/watch?v=${encodeURIComponent(D.video)}" target="_blank" rel="noopener">youtube.com/watch?v=${esc(D.video)}</a> (${hms(D.end)} long). All times and pictures on this page are from this video only.`;
+}
+document.title = "Who's Who Check";
+document.getElementById('sub').textContent =
+  `${hm(D.end)} of video, people found ${FPS} times a second. ${D.persons.length} numbers on this page. ` +
+  `Times are from the start of the recording (h:mm:ss); click any time to open the video there. Near half = the camera's side of the net (below the net in the picture); far half = beyond the net. Stats are for each number's whole time on court. They are rough: distance and speed are measured 5 times a second, so they read a little low.`;
+render();
+</script>
+</body>
+</html>
