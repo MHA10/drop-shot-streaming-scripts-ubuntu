@@ -20,8 +20,14 @@
 // is true, so an internet drop mid-match does not stop the local recording.
 // Off switch (the live stream and reels keep going):
 //   pm2 stop ds-recorder ds-match-log ds-stats
+//   and to keep them off after a reboot too: touch ~/dropshot-tournament/NO-AUTOSTART
+//   (or remove the @reboot line from the crontab, below)
 // No `pm2 save` on purpose: it would also rewrite how the box restores Hassan's
-// processes after a reboot. After a reboot, start these two again by hand.
+// processes after a reboot. Instead the box user's crontab runs start-after-boot.sh at
+// boot (2 minutes later, after pm2's own restore), which starts any of these three that
+// isn't in pm2 and leaves running ones alone:
+//   @reboot /home/hello-padel/dropshot-tournament/start-after-boot.sh >> /home/hello-padel/dropshot-tournament/boot-start.log 2>&1
+// (added 2026-11-23 after a power cut left them off for 3.5 hours)
 //
 // Courts (checked 2026-11-21 in the streamer's own logs and Supabase notes):
 //   court1 = a7139753-436c-4a37-8b54-292606e1eba4 ("production court")   camera 192.168.0.112
