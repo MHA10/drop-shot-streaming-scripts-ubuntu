@@ -51,7 +51,9 @@ for k, p in enumerate(P["parts"]):
         ln.append(int(n))
 frame, box = np.array(frame), np.array(box)
 assert len(frame) == len(piece_of)
-blobs = [np.memmap(os.path.join(p, "crops.bin"), np.uint8, "r") for p in P["parts"]]
+# a 10-minute piece with nobody on court has an empty picture file, which np.memmap can't open (box, 2026-11-24)
+blobs = [np.memmap(os.path.join(p, "crops.bin"), np.uint8, "r") if os.path.getsize(os.path.join(p, "crops.bin")) > 0
+         else np.zeros(0, np.uint8) for p in P["parts"]]
 
 med = cv2.imread(a.median_png)
 H, W = med.shape[:2]

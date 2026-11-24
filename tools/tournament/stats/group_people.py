@@ -90,6 +90,8 @@ look_c, look_m, look_ok = np.concatenate(look_c), np.concatenate(look_m), np.con
 N = len(frame)
 last_frame = max(float(open(os.path.join(p, "DONE")).read().split()[1]) for p in parts) * FPS
 print(f"{len(parts)} parts, {N} sightings", flush=True)
+if N == 0:
+    sys.exit("nobody was seen on court in this whole stretch of video: nothing to group")  # clear reason, not a traceback
 
 # feet on the court, in metres (X across 0-10, Y along 0-20, net at 10)
 fx, fy = (box[:, 0] + box[:, 2]) / 2, box[:, 3]

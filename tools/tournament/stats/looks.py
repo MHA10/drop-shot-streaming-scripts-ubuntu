@@ -106,7 +106,9 @@ for p in sorted(glob.glob(os.path.join(a.people_dir, "part_*"))):
         continue
     rows = list(csv.DictReader(open(os.path.join(p, "dets.csv"))))
     idx = np.fromfile(os.path.join(p, "crops.idx"), np.int64).reshape(-1, 2)
-    blob = np.memmap(os.path.join(p, "crops.bin"), np.uint8, "r")
+    # a 10-minute piece with nobody on court has an empty picture file, which np.memmap can't open (box, 2026-11-24)
+    cb = os.path.join(p, "crops.bin")
+    blob = np.memmap(cb, np.uint8, "r") if os.path.getsize(cb) > 0 else np.zeros(0, np.uint8)
     n = len(rows)
     colour = np.zeros((n, 84), np.float16)
     model = np.zeros((n, 1024), np.float16)
@@ -131,4 +133,4 @@ for p in sorted(glob.glob(os.path.join(a.people_dir, "part_*"))):
     tmp = out[:-4] + ".tmp.npz"
     np.savez(tmp, colour=colour, model=model, ok=ok)
     os.replace(tmp, out)
-    print(f"{os.path.basename(p)}: {n} sightings, {ok.mean() * 100:.0f}% measurable", flush=True)
+    print(f"{os.path.basename(p)}: {n} sightings, {(ok.mean() * 100 if n else 0):.0f}% measurable", flush=True)

@@ -33,7 +33,9 @@ tag_file = os.path.join(os.path.dirname(a.people_json), "tags.json")
 TAGS = json.load(open(tag_file)) if os.path.exists(tag_file) else {}
 flag_file = os.path.join(os.path.dirname(a.people_json), "flags.json")
 FLAGS = json.load(open(flag_file)) if os.path.exists(flag_file) else {}
-blobs = [np.memmap(os.path.join(p, "crops.bin"), np.uint8, "r") for p in P["parts"]]
+# a 10-minute piece with nobody on court has an empty picture file, which np.memmap can't open (box, 2026-11-24)
+blobs = [np.memmap(os.path.join(p, "crops.bin"), np.uint8, "r") if os.path.getsize(os.path.join(p, "crops.bin")) > 0
+         else np.zeros(0, np.uint8) for p in P["parts"]]
 img = []
 persons = []
 # Scraps under 20 s (mostly the moment two people cross) are left off the
