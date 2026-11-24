@@ -1,0 +1,5 @@
+{
+ "_about": "Hello Padel court outlines for the stats steps, in pixels of the camera picture scaled to 1920x852 (cameras give 4256x1888). poly = where a player's feet can be; court = left sideline slope,offset, right sideline slope,offset (x = slope*y + offset), far edge y, bottom of the picture y, net y. Fitted by eye on camera stills 2026-11-22 20:01 and drawn back on them to check. court_id = the backend's court id (same as the match log's).",
+ "court1": {"size": "1920x852", "poly": "829,142;1193,142;1706,852;280,852", "court": "-0.773,954,0.7225,1075,150,852,290", "court_id": "a7139753-436c-4a37-8b54-292606e1eba4"},
+ "court2": {"size": "1920x852", "poly": "726,152;1094,152;1580,852;210,852", "court": "-0.737,852.9,0.6936,974.0,160,852,295", "court_id": "1ffe7135-b170-49f4-a433-6218d88c07d0"}
+}
